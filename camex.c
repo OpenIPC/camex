@@ -2234,10 +2234,7 @@ static int validate_config(camex_config_t *config)
             log_message(LOG_ERR, "Auto mode is only available for client mode");
             return -1;
         }
-        if (config->port <= 0) {
-            log_message(LOG_ERR, "Server port must be specified");
-            return -1;
-        }
+        /* Port may come from the config file — checked later in camex_init. */
         break;
     default:
         log_message(LOG_ERR, "Unsupported mode");
@@ -2843,6 +2840,12 @@ int camex_init(camex_config_t *config)
             if (current_config.mtu == 1500 && g->mtu > 0) {
                 current_config.mtu = g->mtu;
             }
+        }
+
+        /* Validate port after merging config file values */
+        if (current_config.port <= 0) {
+            log_message(LOG_ERR, "Server port must be specified (use -p or port= in [server] section)");
+            return -1;
         }
     }
 
