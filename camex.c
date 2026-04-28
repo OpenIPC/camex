@@ -1886,7 +1886,11 @@ static int client_handle_udp_packet(const uint8_t *buffer, size_t len)
             message[plain_len] = '\0';
             rc = parse_config_message(message, &current_config);
             if (rc == 0) {
+                char lip[16], lmask[16];
                 client_state.config_received = 1U;
+                if (parse_local_cidr(current_config.local_cidr, lip, sizeof(lip), lmask, sizeof(lmask)) == 0) {
+                    snprintf(current_config.local_ip, sizeof(current_config.local_ip), "%s", lip);
+                }
                 log_message(LOG_INFO,
                             "Received config from server:"
                             " CIDR=%s GW=%s MTU=%d routes=%u",
@@ -1919,7 +1923,11 @@ static int client_handle_udp_packet(const uint8_t *buffer, size_t len)
         message[len] = '\0';
         rc = parse_config_message(message, &current_config);
         if (rc == 0) {
+            char lip[16], lmask[16];
             client_state.config_received = 1U;
+            if (parse_local_cidr(current_config.local_cidr, lip, sizeof(lip), lmask, sizeof(lmask)) == 0) {
+                snprintf(current_config.local_ip, sizeof(current_config.local_ip), "%s", lip);
+            }
             log_message(LOG_INFO,
                         "Received config from server:"
                         " CIDR=%s GW=%s MTU=%d routes=%u",
