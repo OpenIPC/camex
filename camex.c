@@ -93,6 +93,7 @@ typedef struct {
     time_t last_register;
     time_t last_recv;   /* timestamp of last packet received from server */
     uint8_t registered;
+    uint8_t config_received; /* set after first CONFIG; cleared on reconnect to re-request */
     uint8_t send_nonce_prefix[4];
 } client_state_t;
 
@@ -1885,6 +1886,7 @@ static int client_handle_udp_packet(const uint8_t *buffer, size_t len)
             message[plain_len] = '\0';
             rc = parse_config_message(message, &current_config);
             if (rc == 0) {
+                client_state.config_received = 1U;
                 log_message(LOG_INFO,
                             "Received config from server:"
                             " CIDR=%s GW=%s MTU=%d routes=%u",
@@ -1917,6 +1919,7 @@ static int client_handle_udp_packet(const uint8_t *buffer, size_t len)
         message[len] = '\0';
         rc = parse_config_message(message, &current_config);
         if (rc == 0) {
+            client_state.config_received = 1U;
             log_message(LOG_INFO,
                         "Received config from server:"
                         " CIDR=%s GW=%s MTU=%d routes=%u",
@@ -2026,6 +2029,7 @@ static void client_reconnect(void)
 
     client_state.registered = 0;
     client_state.last_register = 0;
+    client_state.config_received = 0; /* will re-request CONFIG from server */
     client_state.last_recv = g_now; /* socket is up — seed the silence timer */
     client_reconnect_at = 0;
 
@@ -2498,11 +2502,13 @@ static int build_register_message(camex_config_t *config, char *buffer, size_t s
         return -1;
     }
 
-    if (config->auto_config) {
+    if (config->auto_config && !client_state.config_received) {
+        /* First registration or after reconnect: request full config from server. */
         if (append_control_field(buffer, size, &offset, " MODE=AUTO CLIENT_ID=%s", config->client_id) != 0) {
             return -1;
         }
     } else {
+        /* Already configured (or manual mode): plain keepalive, server won't re-send CONFIG. */
         if (append_control_field(buffer, size, &offset, " MODE=MANUAL LOCAL_IP=%s", config->local_ip) != 0) {
             return -1;
         }
