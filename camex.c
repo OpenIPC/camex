@@ -1657,6 +1657,10 @@ static int server_forward_packet(const uint8_t *packet, size_t len, uint32_t src
 
     dst = server_find_by_ip(dst_ip_be);
     if (dst == NULL) {
+        /* Packet destined for the server itself — deliver via local TUN */
+        if (tun_fd >= 0) {
+            return tun_write_packet(packet, len);
+        }
         return -1;
     }
 
@@ -2801,10 +2805,36 @@ int camex_init(camex_config_t *config)
         return -1;
     }
 
-    snprintf(endpoint, sizeof(endpoint), "%s:%d", current_config.bind_ip[0] != '\0' ? current_config.bind_ip : "0.0.0.0", current_config.port);
+    snprintf(endpoint, sizeof(endpoint), "%s:%d",
+             current_config.bind_ip[0] != '\0' ? current_config.bind_ip : "0.0.0.0",
+             current_config.port);
+
+    /* Create TUN interface if the server has a local CIDR configured */
+    if (current_config.local_cidr[0] != '\0') {
+        if (parse_local_cidr(current_config.local_cidr, local_ip, sizeof(local_ip),
+                             local_netmask, sizeof(local_netmask)) != 0) {
+            close(udp_socket);
+            udp_socket = -1;
+            return -1;
+        }
+
+        if (tun_create_device(local_ip, local_netmask, current_config.mtu) != 0) {
+            close(udp_socket);
+            udp_socket = -1;
+            return -1;
+        }
+    }
+
     log_message(LOG_INFO, "Tunnel initialized");
     log_message(LOG_INFO, "  Mode: %s", mode_to_string(current_config.mode));
     log_message(LOG_INFO, "  Listen endpoint: %s", endpoint);
+    if (current_config.local_cidr[0] != '\0') {
+        log_message(LOG_INFO, "  Local CIDR: %s", current_config.local_cidr);
+        log_message(LOG_INFO, "  Local IP: %s", local_ip);
+        log_message(LOG_INFO, "  Local netmask: %s", local_netmask);
+        log_message(LOG_INFO, "  Tunnel device: %s (backend: %s)", tun_name,
+                    (current_config.tun_dev[0] != '\0') ? current_config.tun_dev : "auto-detect");
+    }
     log_message(LOG_INFO, "  MTU: %d", current_config.mtu);
     log_message(LOG_INFO, "  Encryption: %s", current_config.encrypt ? "enabled" : "disabled");
     return 0;
@@ -2857,6 +2887,19 @@ static void handle_udp_packet(void)
     }
 }
 
+/* Forward a packet read from the local TUN to the appropriate UDP client. */
+static int server_handle_tun_packet(const uint8_t *buffer, size_t len)
+{
+    uint32_t src_ip_be = 0;
+    uint32_t dst_ip_be = 0;
+
+    if (ipv4_parse_endpoints(buffer, len, &src_ip_be, &dst_ip_be) != 0) {
+        return -1;
+    }
+
+    return server_forward_packet(buffer, len, src_ip_be, dst_ip_be);
+}
+
 static void handle_tun_packet(void)
 {
     static uint8_t buffer[TUN_PACKET_MAX];
@@ -2865,7 +2908,13 @@ static void handle_tun_packet(void)
     while (1) {
         len = tun_read_packet(buffer, sizeof(buffer));
         if (len > 0) {
-            if (client_handle_tun_packet(buffer, (size_t)len) != 0) {
+            int rc;
+            if (server_mode) {
+                rc = server_handle_tun_packet(buffer, (size_t)len);
+            } else {
+                rc = client_handle_tun_packet(buffer, (size_t)len);
+            }
+            if (rc != 0) {
                 log_message(LOG_WARNING, "Dropped packet from tunnel device");
             }
             continue;
@@ -2907,13 +2956,26 @@ void camex_run(void)
             g_now = time(NULL);
             FD_ZERO(&readset);
             FD_SET(udp_socket, &readset);
+            if (tun_fd >= 0) {
+                FD_SET(tun_fd, &readset);
+            }
+
+            maxfd = udp_socket;
+            if (tun_fd > maxfd) {
+                maxfd = tun_fd;
+            }
 
             tv.tv_sec = 1;
             tv.tv_usec = 0;
 
-            ready = select(udp_socket + 1, &readset, NULL, NULL, &tv);
-            if (ready > 0 && FD_ISSET(udp_socket, &readset)) {
-                handle_udp_packet();
+            ready = select(maxfd + 1, &readset, NULL, NULL, &tv);
+            if (ready > 0) {
+                if (FD_ISSET(udp_socket, &readset)) {
+                    handle_udp_packet();
+                }
+                if (tun_fd >= 0 && FD_ISSET(tun_fd, &readset)) {
+                    handle_tun_packet();
+                }
             } else if (ready < 0 && errno != EINTR) {
                 print_errno_message(LOG_ERR, "select");
             }
