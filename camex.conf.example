@@ -3,11 +3,27 @@
 #
 # camex.conf.example — example server-side parameter database
 #
+# [server]     — server runtime parameters (override CLI defaults).
+#                CLI arguments always take priority over these values.
+# [defaults]   — default profile applied to every client unless overridden.
+# [client ID]  — per-client profile; ID = MAC address or any unique string.
+#
 # Per-client sections override [defaults].
 # The optional "psk" field sets a per-client pre-shared key (passphrase).
-# Clients without a "psk" entry authenticate using the global --psk / -p option.
+# Clients without a "psk" entry authenticate using the global psk.
 # Having both a global PSK and per-client PSKs is supported simultaneously.
 #
+
+[server]
+# port=5800
+# bind_ip=0.0.0.0
+# local_cidr=10.0.0.1/24
+# mtu=1500
+# encrypt=yes
+# psk=global-server-passphrase
+# tun_dev=camex0
+# bind_dev=eth0
+# pid_file=/var/run/camex.pid
 
 [defaults]
 local_cidr=10.0.0.1/24

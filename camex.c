@@ -111,9 +111,24 @@ typedef struct {
     uint8_t active;
 } camex_server_profile_t;
 
+/* Server-level parameters from the [server] section of camex.conf */
+typedef struct {
+    char bind_ip[16];
+    char local_cidr[32];
+    char tun_dev[256];
+    char bind_dev[IFNAMSIZ];
+    char pid_file[256];
+    char psk[64];
+    int  port;
+    int  mtu;
+    uint8_t encrypt;
+    uint8_t encrypt_set;  /* 1 = encrypt was explicitly set in config file */
+} camex_server_globals_t;
+
 typedef struct {
     camex_profile_t defaults;
     camex_server_profile_t clients[CAMEX_MAX_CLIENTS];
+    camex_server_globals_t globals;
     uint8_t loaded;
 } camex_server_db_t;
 
@@ -742,7 +757,8 @@ static int server_db_load_file(const char *path)
     enum {
         SECTION_NONE = 0,
         SECTION_DEFAULTS,
-        SECTION_CLIENT
+        SECTION_CLIENT,
+        SECTION_SERVER
     } section = SECTION_NONE;
 
     server_db_reset();
@@ -782,6 +798,13 @@ static int server_db_load_file(const char *path)
             content = line + 1;
             trim_whitespace(content);
 
+            if (strcasecmp(content, "server") == 0) {
+                section = SECTION_SERVER;
+                current = NULL;
+                client = NULL;
+                continue;
+            }
+
             if (strcasecmp(content, "defaults") == 0) {
                 section = SECTION_DEFAULTS;
                 current = &server_db.defaults;
@@ -816,12 +839,7 @@ static int server_db_load_file(const char *path)
             return -1;
         }
 
-        if (current == NULL) {
-            log_message(LOG_ERR, "Config value outside of a section: %s", line);
-            fclose(fp);
-            return -1;
-        }
-
+        /* Key=value parsing */
         equals = strchr(line, '=');
         if (equals == NULL) {
             log_message(LOG_ERR, "Invalid config line: %s", line);
@@ -836,6 +854,54 @@ static int server_db_load_file(const char *path)
 
         if (*content == '\0' || *(equals + 1) == '\0') {
             log_message(LOG_ERR, "Invalid config line: %s=%s", content, equals + 1);
+            fclose(fp);
+            return -1;
+        }
+
+        if (section == SECTION_SERVER) {
+            camex_server_globals_t *g = &server_db.globals;
+            const char *val = equals + 1;
+            int rc = 0;
+
+            if (strcmp(content, "port") == 0) {
+                rc = parse_port(val, &g->port);
+            } else if (strcmp(content, "bind_ip") == 0) {
+                rc = copy_option(g->bind_ip, sizeof(g->bind_ip), val, "bind IP");
+            } else if (strcmp(content, "local_cidr") == 0) {
+                rc = copy_option(g->local_cidr, sizeof(g->local_cidr), val, "local CIDR");
+            } else if (strcmp(content, "mtu") == 0) {
+                rc = parse_mtu(val, &g->mtu);
+            } else if (strcmp(content, "encrypt") == 0) {
+                if (strcasecmp(val, "yes") == 0 || strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0) {
+                    g->encrypt = 1U;
+                } else if (strcasecmp(val, "no") == 0 || strcasecmp(val, "false") == 0 || strcmp(val, "0") == 0) {
+                    g->encrypt = 0U;
+                } else {
+                    log_message(LOG_ERR, "Invalid value for encrypt: %s", val);
+                    rc = -1;
+                }
+                g->encrypt_set = 1U;
+            } else if (strcmp(content, "psk") == 0) {
+                rc = copy_option(g->psk, sizeof(g->psk), val, "PSK");
+            } else if (strcmp(content, "tun_dev") == 0) {
+                rc = copy_option(g->tun_dev, sizeof(g->tun_dev), val, "TUN device");
+            } else if (strcmp(content, "bind_dev") == 0) {
+                rc = copy_option(g->bind_dev, sizeof(g->bind_dev), val, "bind device");
+            } else if (strcmp(content, "pid_file") == 0) {
+                rc = copy_option(g->pid_file, sizeof(g->pid_file), val, "PID file");
+            } else {
+                log_message(LOG_WARNING, "Ignoring unknown [server] key: %s", content);
+            }
+
+            if (rc != 0) {
+                fclose(fp);
+                return -1;
+            }
+            continue;
+        }
+
+        if (current == NULL) {
+            log_message(LOG_ERR, "Config value outside of a section: %s", line);
             fclose(fp);
             return -1;
         }
@@ -2713,6 +2779,49 @@ int camex_init(camex_config_t *config)
         log_message(LOG_WARNING, "Failed to generate nonce prefix; using zeros");
     }
 
+    /*
+     * For server mode: load config file first so that [server] globals
+     * (port, encrypt, psk, local_cidr, etc.) are available before crypto_init.
+     * CLI arguments take priority — only fill fields that are still unset.
+     */
+    if (server_mode) {
+        if (server_db_load_file(current_config.config_path) != 0) {
+            return -1;
+        }
+
+        {
+            const camex_server_globals_t *g = &server_db.globals;
+
+            if (current_config.port == 0 && g->port > 0) {
+                current_config.port = g->port;
+            }
+            if (current_config.bind_ip[0] == '\0' && g->bind_ip[0] != '\0') {
+                snprintf(current_config.bind_ip, sizeof(current_config.bind_ip), "%s", g->bind_ip);
+            }
+            if (current_config.local_cidr[0] == '\0' && g->local_cidr[0] != '\0') {
+                snprintf(current_config.local_cidr, sizeof(current_config.local_cidr), "%s", g->local_cidr);
+            }
+            if (current_config.tun_dev[0] == '\0' && g->tun_dev[0] != '\0') {
+                snprintf(current_config.tun_dev, sizeof(current_config.tun_dev), "%s", g->tun_dev);
+            }
+            if (current_config.bind_dev[0] == '\0' && g->bind_dev[0] != '\0') {
+                snprintf(current_config.bind_dev, sizeof(current_config.bind_dev), "%s", g->bind_dev);
+            }
+            if (current_config.pid_file[0] == '\0' && g->pid_file[0] != '\0') {
+                snprintf(current_config.pid_file, sizeof(current_config.pid_file), "%s", g->pid_file);
+            }
+            if (current_config.psk[0] == '\0' && g->psk[0] != '\0') {
+                snprintf(current_config.psk, sizeof(current_config.psk), "%s", g->psk);
+            }
+            if (!current_config.encrypt && g->encrypt_set) {
+                current_config.encrypt = g->encrypt;
+            }
+            if (current_config.mtu == 1500 && g->mtu > 0) {
+                current_config.mtu = g->mtu;
+            }
+        }
+    }
+
     if (current_config.encrypt) {
         if (crypto_init(current_config.psk) != 0) {
             return -1;
@@ -2795,10 +2904,7 @@ int camex_init(camex_config_t *config)
         return 0;
     }
 
-    if (server_db_load_file(current_config.config_path) != 0) {
-        return -1;
-    }
-
+    /* server_db is already loaded above; just build keystore and continue */
     server_build_keystore();
 
     if (server_socket_create(current_config.bind_ip, current_config.port) != 0) {
