@@ -1466,6 +1466,23 @@ static server_client_t *server_find_by_ip(uint32_t ip_be)
     return NULL;
 }
 
+static server_client_t *server_find_by_client_id(const char *client_id)
+{
+    size_t i;
+
+    if (client_id == NULL || *client_id == '\0') {
+        return NULL;
+    }
+
+    for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
+        if (server_clients[i].active && strcasecmp(server_clients[i].client_id, client_id) == 0) {
+            return &server_clients[i];
+        }
+    }
+
+    return NULL;
+}
+
 static server_client_t *server_find_by_addr(const struct sockaddr_in *addr)
 {
     size_t i;
@@ -1647,10 +1664,30 @@ static int server_handle_plain_register(const uint8_t *buffer, size_t len, const
     }
 
     if (auto_request) {
-        entry = server_upsert_client(0U, from);
-        if (entry == NULL) {
-            log_message(LOG_WARNING, "No free slots for client %s", client_id);
-            return -1;
+        /*
+         * Look up existing slot by client_id first so that a reconnecting
+         * client (same ID, different UDP endpoint) reuses the same slot and
+         * the old endpoint is immediately superseded without waiting for the
+         * expiry timer.
+         */
+        entry = server_find_by_client_id(client_id);
+        if (entry != NULL) {
+            if (!sockaddr_equal(&entry->addr, from)) {
+                char old_peer[64], new_peer[64];
+                sockaddr_to_string(&entry->addr, old_peer, sizeof(old_peer));
+                sockaddr_to_string(from, new_peer, sizeof(new_peer));
+                log_message(LOG_INFO, "Client %s reconnected: %s -> %s", client_id, old_peer, new_peer);
+            }
+            entry->addr = *from;
+            entry->last_seen = g_now;
+        } else {
+            entry = server_alloc_client();
+            if (entry == NULL) {
+                log_message(LOG_WARNING, "No free slots for client %s", client_id);
+                return -1;
+            }
+            entry->addr = *from;
+            entry->last_seen = g_now;
         }
         snprintf(entry->client_id, sizeof(entry->client_id), "%s", client_id);
         server_reset_replay(entry);
