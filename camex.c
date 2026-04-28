@@ -2902,9 +2902,6 @@ int camex_init(camex_config_t *config)
         log_message(LOG_INFO, "  Mode: %s", mode_to_string(current_config.mode));
         log_message(LOG_INFO, "  Server: %s:%d", current_config.server_host, current_config.port);
         log_message(LOG_INFO, "  Local CIDR: %s", current_config.local_cidr);
-        log_message(LOG_INFO, "  Local IP: %s", local_ip);
-        log_message(LOG_INFO, "  Local netmask: %s", local_netmask);
-        log_message(LOG_INFO, "  Gateway IP: %s", current_config.gateway_ip);
         log_message(LOG_INFO, "  Tunnel device: %s (backend: %s)", tun_name,
                     (current_config.tun_dev[0] != '\0') ? current_config.tun_dev : "auto-detect");
         log_message(LOG_INFO, "  MTU: %d", current_config.mtu);
@@ -2944,8 +2941,6 @@ int camex_init(camex_config_t *config)
     log_message(LOG_INFO, "  Listen endpoint: %s", endpoint);
     if (current_config.local_cidr[0] != '\0') {
         log_message(LOG_INFO, "  Local CIDR: %s", current_config.local_cidr);
-        log_message(LOG_INFO, "  Local IP: %s", local_ip);
-        log_message(LOG_INFO, "  Local netmask: %s", local_netmask);
         log_message(LOG_INFO, "  Tunnel device: %s (backend: %s)", tun_name,
                     (current_config.tun_dev[0] != '\0') ? current_config.tun_dev : "auto-detect");
     }
