@@ -1794,6 +1794,7 @@ static int client_handle_udp_packet(const uint8_t *buffer, size_t len)
 
         if (type == CAMEX_PACKET_CONFIG && current_config.auto_config) {
             char message[CAMEX_CONTROL_MAX];
+            int rc;
 
             if (replay_check(&client_state.recv_seq_max, &client_state.recv_window, seq) != 0) {
                 return -1;
@@ -1803,7 +1804,17 @@ static int client_handle_udp_packet(const uint8_t *buffer, size_t len)
             }
             memcpy(message, plain, plain_len);
             message[plain_len] = '\0';
-            return parse_config_message(message, &current_config);
+            rc = parse_config_message(message, &current_config);
+            if (rc == 0) {
+                log_message(LOG_INFO,
+                            "Received config from server:"
+                            " CIDR=%s GW=%s MTU=%d routes=%u",
+                            current_config.local_cidr,
+                            current_config.gateway_ip,
+                            current_config.mtu,
+                            (unsigned)current_config.route_count);
+            }
+            return rc;
         }
 
         if (type != CAMEX_PACKET_DATA) {
@@ -1818,15 +1829,27 @@ static int client_handle_udp_packet(const uint8_t *buffer, size_t len)
         len = plain_len;
     } else if (current_config.auto_config && len >= 4U && memcmp(buffer, CAMEX_MAGIC, 4) == 0) {
         char message[CAMEX_CONTROL_MAX];
+        int rc;
 
         if (len >= sizeof(message)) {
             return -1;
         }
         memcpy(message, buffer, len);
         message[len] = '\0';
-        return parse_config_message(message, &current_config);
+        rc = parse_config_message(message, &current_config);
+        if (rc == 0) {
+            log_message(LOG_INFO,
+                        "Received config from server:"
+                        " CIDR=%s GW=%s MTU=%d routes=%u",
+                        current_config.local_cidr,
+                        current_config.gateway_ip,
+                        current_config.mtu,
+                        (unsigned)current_config.route_count);
+        }
+        return rc;
     }
 
+    log_message(LOG_DEBUG, "RX data from server: %zu bytes", len);
     return tun_write_packet(buffer, len);
 }
 
