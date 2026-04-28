@@ -289,7 +289,6 @@ static int crypto_encrypt_packet(uint8_t type, uint64_t seq, const uint8_t nonce
     }
 
     memcpy(nonce, nonce_prefix, 4);
-    memset(nonce + 4, 0, 4);
     write_be64(nonce + 4, seq);
 
     memcpy(packet, CAMEX_MAGIC, 4);
@@ -1751,6 +1750,7 @@ static int server_handle_packet(const uint8_t *buffer, size_t len, const struct 
     uint32_t src_ip_be = 0;
     uint32_t dst_ip_be = 0;
     server_client_t *src;
+    server_client_t *decrypt_src = NULL; /* entry whose key decrypted this packet */
     const uint8_t *used_key = NULL;
 
     if (buffer == NULL || from == NULL || len == 0U) {
@@ -1767,6 +1767,7 @@ static int server_handle_packet(const uint8_t *buffer, size_t len, const struct 
              */
             if (crypto_decrypt_packet(buffer, len, &type, plain, sizeof(plain), &plain_len, &seq, src->psk_key) == 0) {
                 used_key = src->psk_key;
+                decrypt_src = src;
             }
         }
 
@@ -1776,6 +1777,7 @@ static int server_handle_packet(const uint8_t *buffer, size_t len, const struct 
             if (used_key == NULL) {
                 return -1;
             }
+            decrypt_src = server_find_by_addr(from); /* may be NULL for brand-new clients */
         }
 
         if (type == CAMEX_PACKET_REGISTER) {
@@ -1808,7 +1810,14 @@ static int server_handle_packet(const uint8_t *buffer, size_t len, const struct 
     }
 
     if (current_config.encrypt) {
-        if (replay_check(&src->recv_seq_max, &src->recv_window, seq) != 0) {
+        /*
+         * Replay check MUST use the entry whose key decrypted the packet.
+         * server_upsert_client() above may have returned a different slot
+         * (looked up by src IP from the packet body, which is attacker-controlled).
+         * Using 'src' here instead of 'decrypt_src' would allow replay attacks.
+         */
+        server_client_t *check_entry = (decrypt_src != NULL) ? decrypt_src : src;
+        if (replay_check(&check_entry->recv_seq_max, &check_entry->recv_window, seq) != 0) {
             return -1;
         }
     }
@@ -2011,12 +2020,13 @@ static void client_reconnect(void)
         log_message(LOG_WARNING, "Reconnect failed; will retry in %ds",
                     CAMEX_RECONNECT_INTERVAL);
         client_reconnect_at = g_now + CAMEX_RECONNECT_INTERVAL;
+        client_state.last_recv = 0; /* keep at 0 until we actually reach the server */
         return;
     }
 
     client_state.registered = 0;
     client_state.last_register = 0;
-    client_state.last_recv = g_now;
+    client_state.last_recv = g_now; /* socket is up — seed the silence timer */
     client_reconnect_at = 0;
 
     if (client_send_register() != 0) {
@@ -3182,7 +3192,11 @@ int main(int argc, char *argv[])
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);
     openlog("camex", LOG_PID, LOG_DAEMON);
-    mlockall(MCL_CURRENT | MCL_FUTURE);
+    if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+        log_message(LOG_ERR,
+                    "SECURITY WARNING: mlockall failed (%s) — sensitive key material may be swapped to disk",
+                    strerror(errno));
+    }
     prctl(PR_SET_DUMPABLE, 0);
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);

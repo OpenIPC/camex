@@ -26,7 +26,9 @@
 # pid_file=/var/run/camex.pid
 
 [defaults]
-local_cidr=10.0.0.1/24
+# WARNING: every client must have a unique local_cidr — override it in [client] sections.
+# Values here apply to any client that does not have its own explicit profile.
+local_cidr=10.0.0.100/24
 gateway_ip=10.0.0.1
 mtu=1500
 route_cidr=192.168.100.0/24
