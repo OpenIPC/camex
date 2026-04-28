@@ -1,0 +1,13 @@
+# Userspace daemon binary
+camexd
+
+# Kernel module build artefacts
+kmod/*.o
+kmod/*.ko
+kmod/*.mod
+kmod/*.mod.c
+kmod/*.mod.o
+kmod/.*.cmd
+kmod/Module.symvers
+kmod/modules.order
+kmod/.tmp_versions/
