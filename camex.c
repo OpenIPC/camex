@@ -1872,12 +1872,15 @@ static int server_handle_packet(const uint8_t *buffer, size_t len, const struct 
         len = plain_len;
     }
 
-    if (!current_config.encrypt && len >= 4U && memcmp(buffer, CAMEX_MAGIC, 4) == 0 && server_handle_plain_register(buffer, len, from, NULL) == 0) {
+    if (!current_config.encrypt && len >= 4U && memcmp(buffer, CAMEX_MAGIC, 4) == 0) {
+        /* Control packet: handle and always return 0 — never fall through to IP parser */
+        server_handle_plain_register(buffer, len, from, NULL);
         return 0;
     }
 
     if (ipv4_parse_endpoints(buffer, len, &src_ip_be, &dst_ip_be) != 0) {
-        return -1;
+        /* Silently discard non-IPv4 traffic (IPv6 ND/RS, ARP, etc.) injected by the kernel */
+        return 0;
     }
 
     src = server_upsert_client(src_ip_be, from);
@@ -3115,8 +3118,9 @@ static int server_handle_tun_packet(const uint8_t *buffer, size_t len)
     uint32_t src_ip_be = 0;
     uint32_t dst_ip_be = 0;
 
+    /* Silently discard non-IPv4 (IPv6 ND/RS, etc.) from the local TUN device */
     if (ipv4_parse_endpoints(buffer, len, &src_ip_be, &dst_ip_be) != 0) {
-        return -1;
+        return 0;
     }
 
     return server_forward_packet(buffer, len, src_ip_be, dst_ip_be);
