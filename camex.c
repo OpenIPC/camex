@@ -50,8 +50,8 @@
 #define CAMEX_HDR_LEN 27U
 #define CAMEX_REGISTER_INTERVAL  30
 #define CAMEX_CLIENT_TIMEOUT    120
-#define CAMEX_SERVER_TIMEOUT     90  /* seconds of silence before reconnecting */
-#define CAMEX_RECONNECT_INTERVAL 10  /* seconds between reconnect attempts */
+#define CAMEX_SERVER_TIMEOUT     20  /* seconds of silence before reconnecting */
+#define CAMEX_RECONNECT_INTERVAL  5  /* seconds between reconnect attempts */
 #define CAMEX_MAX_CLIENTS 256
 #define CAMEX_CLIENT_TOKEN_LEN 64
 #define CAMEX_CONTROL_MAX 1024U
@@ -132,6 +132,7 @@ static uint8_t server_mode = 0;
 static volatile sig_atomic_t reload_config = 0;
 static time_t g_now = 0;
 static time_t client_reconnect_at = 0; /* schedule next reconnect attempt */
+static uint8_t client_link_up = 0;     /* 1 = server connection is considered up */
 static camex_keystore_entry_t server_keystore[CAMEX_MAX_CLIENTS + 1];
 static size_t server_keystore_count = 0U;
 
@@ -1928,8 +1929,13 @@ static void client_reconnect(void)
 
     if (client_send_register() != 0) {
         log_message(LOG_WARNING, "Failed to send register after reconnect");
-    } else if (current_config.auto_config) {
-        log_message(LOG_INFO, "Auto-config mode: waiting for server config response");
+    } else {
+        log_message(LOG_NOTICE, "Connection to server %s:%d restored",
+                    current_config.server_host, current_config.port);
+        client_link_up = 1U;
+        if (current_config.auto_config) {
+            log_message(LOG_INFO, "Auto-config mode: waiting for server config response");
+        }
     }
 }
 
@@ -1947,9 +1953,11 @@ static void client_tick(void)
     /* Detect server silence */
     if (client_state.last_recv > 0 &&
         difftime(g_now, client_state.last_recv) >= (double)CAMEX_SERVER_TIMEOUT) {
-        log_message(LOG_WARNING,
-                    "No data from server for %ds; reconnecting",
+        log_message(LOG_ERR,
+                    "Connection lost: no data from server %s:%d for %ds",
+                    current_config.server_host, current_config.port,
                     CAMEX_SERVER_TIMEOUT);
+        client_link_up = 0U;
         client_state.last_recv = 0; /* prevent repeated trigger before reconnect */
         client_reconnect();
         return;
@@ -2743,6 +2751,9 @@ int camex_init(camex_config_t *config)
             log_message(LOG_WARNING, "Initial client registration failed");
         }
 
+        client_link_up = 1U;
+        log_message(LOG_NOTICE, "Connection to server %s:%d established",
+                    current_config.server_host, current_config.port);
         log_message(LOG_INFO, "Tunnel initialized");
         log_message(LOG_INFO, "  Mode: %s", mode_to_string(current_config.mode));
         log_message(LOG_INFO, "  Server: %s:%d", current_config.server_host, current_config.port);
