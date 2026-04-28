@@ -48,7 +48,7 @@
 #define CAMEX_PACKET_DATA 2U
 #define CAMEX_PACKET_CONFIG 3U
 #define CAMEX_HDR_LEN 27U
-#define CAMEX_REGISTER_INTERVAL  30
+#define CAMEX_REGISTER_INTERVAL  10
 #define CAMEX_CLIENT_TIMEOUT    120
 #define CAMEX_SERVER_TIMEOUT     20  /* seconds of silence before reconnecting */
 #define CAMEX_RECONNECT_INTERVAL  5  /* seconds between reconnect attempts */
@@ -1919,7 +1919,6 @@ static int client_handle_udp_packet(const uint8_t *buffer, size_t len)
         return rc;
     }
 
-    log_message(LOG_DEBUG, "RX data from server: %zu bytes", len);
     return tun_write_packet(buffer, len);
 }
 
@@ -2043,8 +2042,13 @@ static void client_tick(void)
         return;
     }
 
-    /* Detect server silence */
-    if (client_state.last_recv > 0 &&
+    /* Detect server silence.
+     * In auto_config mode the server responds to every REGISTER with CONFIG,
+     * so silence means the server is unreachable — trigger reconnect.
+     * In manual mode the server never sends unsolicited data; rely on
+     * REGISTER send errors to detect a broken path instead. */
+    if (current_config.auto_config &&
+        client_state.last_recv > 0 &&
         difftime(g_now, client_state.last_recv) >= (double)CAMEX_SERVER_TIMEOUT) {
         log_message(LOG_ERR,
                     "Connection lost: no data from server %s:%d for %ds",
@@ -2059,7 +2063,11 @@ static void client_tick(void)
     if (!client_state.registered ||
         difftime(g_now, client_state.last_register) >= (double)CAMEX_REGISTER_INTERVAL) {
         if (client_send_register() != 0) {
-            log_message(LOG_WARNING, "Failed to refresh client registration");
+            log_message(LOG_ERR, "Failed to send REGISTER to server %s:%d — forcing reconnect",
+                        current_config.server_host, current_config.port);
+            close(udp_socket);
+            udp_socket = -1;
+            client_reconnect_at = 0;
         }
     }
 }
