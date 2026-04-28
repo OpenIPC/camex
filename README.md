@@ -1,6 +1,7 @@
-# camex
+# Camex
 
 Minimal dependency-free Linux UDP/TUN tunnel for embedded targets.
+
 Ships as a userspace daemon and an optional standalone kernel module.
 
 ## Architecture
@@ -184,11 +185,11 @@ Userspace                          Kernel
                                    ┌─────────────────────────────────┐
   write(fd, ipv4_pkt)  ──────────► │  copy_from_user()               │
                                    │  netif_rx(skb)                  │
-                                   │       │                          │
-                                   │       ▼                          │
+                                   │       │                         │
+                                   │       ▼                         │
                                    │  IP stack / routing             │
-                                   │       │                          │
-                                   │       ▼                          │
+                                   │       │                         │
+                                   │       ▼                         │
                                    │  camex_net_xmit()               │
                                    │  enqueue → rx_queue             │
                                    │  wake_up(rx_wait)               │

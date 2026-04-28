@@ -1,0 +1,28 @@
+#
+# Copyright (c) OpenIPC  https://openipc.org  MIT License
+#
+# camex.conf.example — example server-side parameter database
+#
+# Per-client sections override [defaults].
+# The optional "psk" field sets a per-client pre-shared key (passphrase).
+# Clients without a "psk" entry authenticate using the global --psk / -p option.
+# Having both a global PSK and per-client PSKs is supported simultaneously.
+#
+
+[defaults]
+local_cidr=10.0.0.1/24
+gateway_ip=10.0.0.1
+mtu=1500
+route_cidr=192.168.100.0/24
+route_cidr=192.168.101.0/24
+
+[client 0203A104B5AE]
+local_cidr=10.0.0.2/24
+gateway_ip=10.0.0.1
+route_cidr=192.168.200.0/24
+# psk=per-client-secret-for-this-device
+
+[client ABCDEF123456]
+local_cidr=10.0.0.3/24
+gateway_ip=10.0.0.1
+psk=unique-passphrase-for-ABCDEF123456
