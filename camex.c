@@ -48,8 +48,10 @@
 #define CAMEX_PACKET_DATA 2U
 #define CAMEX_PACKET_CONFIG 3U
 #define CAMEX_HDR_LEN 27U
-#define CAMEX_REGISTER_INTERVAL 30
-#define CAMEX_CLIENT_TIMEOUT 120
+#define CAMEX_REGISTER_INTERVAL  30
+#define CAMEX_CLIENT_TIMEOUT    120
+#define CAMEX_SERVER_TIMEOUT     90  /* seconds of silence before reconnecting */
+#define CAMEX_RECONNECT_INTERVAL 10  /* seconds between reconnect attempts */
 #define CAMEX_MAX_CLIENTS 256
 #define CAMEX_CLIENT_TOKEN_LEN 64
 #define CAMEX_CONTROL_MAX 1024U
@@ -89,6 +91,7 @@ typedef struct {
     uint64_t recv_seq_max;
     uint64_t recv_window;
     time_t last_register;
+    time_t last_recv;   /* timestamp of last packet received from server */
     uint8_t registered;
     uint8_t send_nonce_prefix[4];
 } client_state_t;
@@ -128,6 +131,7 @@ static uint8_t client_mode = 0;
 static uint8_t server_mode = 0;
 static volatile sig_atomic_t reload_config = 0;
 static time_t g_now = 0;
+static time_t client_reconnect_at = 0; /* schedule next reconnect attempt */
 static camex_keystore_entry_t server_keystore[CAMEX_MAX_CLIENTS + 1];
 static size_t server_keystore_count = 0U;
 
@@ -140,6 +144,7 @@ static int build_config_message(const char *client_id, const camex_profile_t *pr
 static int parse_config_message(char *message, camex_config_t *config);
 static int set_fd_nonblocking(int fd);
 static int tune_udp_socket(int fd);
+static int client_socket_create(const char *host, int port);
 
 static void log_message(int priority, const char *fmt, ...)
 {
@@ -1895,9 +1900,63 @@ static int client_handle_tun_packet(const uint8_t *buffer, size_t len)
     return send_udp_payload(udp_socket, NULL, buffer, len);
 }
 
+/*
+ * Re-resolve DNS, recreate UDP socket and re-send REGISTER.
+ * Works for both manual and auto-config modes.
+ */
+static void client_reconnect(void)
+{
+    if (udp_socket >= 0) {
+        close(udp_socket);
+        udp_socket = -1;
+    }
+
+    log_message(LOG_INFO, "Reconnecting to server %s:%d...",
+                current_config.server_host, current_config.port);
+
+    if (client_socket_create(current_config.server_host, current_config.port) != 0) {
+        log_message(LOG_WARNING, "Reconnect failed; will retry in %ds",
+                    CAMEX_RECONNECT_INTERVAL);
+        client_reconnect_at = g_now + CAMEX_RECONNECT_INTERVAL;
+        return;
+    }
+
+    client_state.registered = 0;
+    client_state.last_register = 0;
+    client_state.last_recv = g_now;
+    client_reconnect_at = 0;
+
+    if (client_send_register() != 0) {
+        log_message(LOG_WARNING, "Failed to send register after reconnect");
+    } else if (current_config.auto_config) {
+        log_message(LOG_INFO, "Auto-config mode: waiting for server config response");
+    }
+}
+
 static void client_tick(void)
 {
-    if (!client_state.registered || difftime(g_now, client_state.last_register) >= (double)CAMEX_REGISTER_INTERVAL) {
+    /* Handle pending reconnect: socket gone or previous attempt failed */
+    if (udp_socket < 0 || client_reconnect_at > 0) {
+        if (client_reconnect_at == 0 ||
+            difftime(g_now, client_reconnect_at) >= 0.0) {
+            client_reconnect();
+        }
+        return;
+    }
+
+    /* Detect server silence */
+    if (client_state.last_recv > 0 &&
+        difftime(g_now, client_state.last_recv) >= (double)CAMEX_SERVER_TIMEOUT) {
+        log_message(LOG_WARNING,
+                    "No data from server for %ds; reconnecting",
+                    CAMEX_SERVER_TIMEOUT);
+        client_state.last_recv = 0; /* prevent repeated trigger before reconnect */
+        client_reconnect();
+        return;
+    }
+
+    if (!client_state.registered ||
+        difftime(g_now, client_state.last_register) >= (double)CAMEX_REGISTER_INTERVAL) {
         if (client_send_register() != 0) {
             log_message(LOG_WARNING, "Failed to refresh client registration");
         }
@@ -2654,6 +2713,9 @@ int camex_init(camex_config_t *config)
             }
         }
 
+        /* Seed the server-silence timer so we don't reconnect immediately */
+        client_state.last_recv = time(NULL);
+
         if (current_config.auto_config) {
             if (client_send_register() != 0) {
                 log_message(LOG_WARNING, "Initial auto registration failed");
@@ -2746,6 +2808,7 @@ static void handle_udp_packet(void)
     while (1) {
         len = recv(udp_socket, buffer, sizeof(buffer), 0);
         if (len > 0) {
+            client_state.last_recv = g_now; /* server is alive */
             if (client_handle_udp_packet(buffer, (size_t)len) != 0) {
                 log_message(LOG_WARNING, "Dropped packet from server");
             }
@@ -2837,6 +2900,14 @@ void camex_run(void)
     log_message(LOG_INFO, "Client started. Press Ctrl+C to stop.");
     while (running) {
         g_now = time(NULL);
+
+        /* Socket may be temporarily unavailable during reconnect */
+        if (udp_socket < 0) {
+            usleep(1000000);
+            client_tick();
+            continue;
+        }
+
         FD_ZERO(&readset);
         FD_SET(udp_socket, &readset);
         if (tun_fd >= 0) {
