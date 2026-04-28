@@ -2243,9 +2243,9 @@ static void print_usage(const char *progname)
     printf("  # Server\n");
     printf("  %s --mode server --port 7000 --config /etc/camex/camex.conf --encrypt --psk secret\n\n", progname);
     printf("  # Client (auto-config)\n");
-    printf("  %s --mode client --auto --name 0203A104B5AE --server-host vpn.example.org --port 7000 --encrypt --psk secret\n\n", progname);
+    printf("  %s --mode client --auto --name 0203A104B5AE --server-host cloud.openipc.org --port 7000 --encrypt --psk secret\n\n", progname);
     printf("  # Client (manual)\n");
-    printf("  %s --mode client --local-cidr 10.0.0.2/24 --gateway-ip 10.0.0.1 --server-host vpn.example.org --port 7000\n", progname);
+    printf("  %s --mode client --local-cidr 10.0.0.2/24 --gateway-ip 10.0.0.1 --server-host cloud.openipc.org --port 7000\n", progname);
 }
 
 static int validate_and_prepare_client(camex_config_t *config)
@@ -2631,8 +2631,27 @@ int camex_init(camex_config_t *config)
             return -1;
         }
 
-        if (client_socket_create(current_config.server_host, current_config.port) != 0) {
-            return -1;
+        {
+            unsigned int dns_attempt = 0;
+            while (running) {
+                if (client_socket_create(current_config.server_host, current_config.port) == 0) {
+                    break;
+                }
+                dns_attempt++;
+                if (dns_attempt == 1 || dns_attempt % 12 == 0) {
+                    log_message(LOG_WARNING, "Cannot reach server %s:%d, retrying every 5s...",
+                                current_config.server_host, current_config.port);
+                }
+                {
+                    int s;
+                    for (s = 0; s < 5 && running; s++) {
+                        usleep(1000000);
+                    }
+                }
+            }
+            if (!running) {
+                return -1;
+            }
         }
 
         if (current_config.auto_config) {
