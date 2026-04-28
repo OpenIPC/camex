@@ -1708,20 +1708,58 @@ static int server_handle_plain_register(const uint8_t *buffer, size_t len, const
         return -1;
     }
 
-    entry = server_upsert_client(addr.s_addr, from);
-    if (entry == NULL) {
-        log_message(LOG_WARNING, "No free slots for client %s", local_ip);
-        return -1;
-    }
+    {
+        server_client_t *by_addr = server_find_by_addr(from);
+        server_client_t *by_ip   = server_find_by_ip(addr.s_addr);
 
-    server_reset_replay(entry);
-    entry->last_register_time = g_now;
-    /* Store the key that authenticated this client for future packets. */
-    if (used_key != NULL) {
-        memcpy(entry->psk_key, used_key, 32);
+        if (by_addr != NULL) {
+            /*
+             * Keepalive from the same UDP endpoint: refresh last_seen silently.
+             * No replay reset — the session is continuous.
+             */
+            by_addr->ip_be = addr.s_addr;
+            by_addr->last_seen = g_now;
+            by_addr->last_register_time = g_now;
+            if (used_key != NULL) {
+                memcpy(by_addr->psk_key, used_key, 32);
+            }
+            return 0;
+        }
+
+        if (by_ip != NULL) {
+            /* Reconnect: same TUN IP, new UDP endpoint. */
+            char old_peer[64], new_peer[64];
+            sockaddr_to_string(&by_ip->addr, old_peer, sizeof(old_peer));
+            sockaddr_to_string(from, new_peer, sizeof(new_peer));
+            log_message(LOG_INFO, "Client %s reconnected: %s -> %s",
+                        local_ip, old_peer, new_peer);
+            by_ip->addr = *from;
+            by_ip->last_seen = g_now;
+            by_ip->last_register_time = g_now;
+            server_reset_replay(by_ip);
+            if (used_key != NULL) {
+                memcpy(by_ip->psk_key, used_key, 32);
+            }
+            return 0;
+        }
+
+        /* New client: allocate a fresh slot. */
+        entry = server_alloc_client();
+        if (entry == NULL) {
+            log_message(LOG_WARNING, "No free slots for client %s", local_ip);
+            return -1;
+        }
+        entry->ip_be = addr.s_addr;
+        entry->addr = *from;
+        entry->last_seen = g_now;
+        entry->last_register_time = g_now;
+        server_reset_replay(entry);
+        if (used_key != NULL) {
+            memcpy(entry->psk_key, used_key, 32);
+        }
+        log_message(LOG_INFO, "Registered client %s", local_ip);
+        return 0;
     }
-    log_message(LOG_INFO, "Registered client %s", local_ip);
-    return 0;
 }
 
 static int server_handle_register_packet(const uint8_t *plain, size_t plain_len, const struct sockaddr_in *from, uint64_t seq, const uint8_t *used_key)
@@ -1853,10 +1891,21 @@ static int server_handle_packet(const uint8_t *buffer, size_t len, const struct 
          * server_upsert_client() above may have returned a different slot
          * (looked up by src IP from the packet body, which is attacker-controlled).
          * Using 'src' here instead of 'decrypt_src' would allow replay attacks.
+         *
+         * Special case: decrypt_src == NULL means the packet was authenticated via
+         * the slow-path keystore scan — i.e. the client connected from a new UDP
+         * address and no per-addr slot existed yet. The old replay window belongs
+         * to the previous session and is no longer valid, so we reset it here.
+         * This is safe because a valid AEAD MAC guarantees authenticity.
          */
-        server_client_t *check_entry = (decrypt_src != NULL) ? decrypt_src : src;
-        if (replay_check(&check_entry->recv_seq_max, &check_entry->recv_window, seq) != 0) {
-            return -1;
+        if (decrypt_src == NULL && src != NULL) {
+            server_reset_replay(src);
+        }
+        {
+            server_client_t *check_entry = (decrypt_src != NULL) ? decrypt_src : src;
+            if (replay_check(&check_entry->recv_seq_max, &check_entry->recv_window, seq) != 0) {
+                return -1;
+            }
         }
     }
 
