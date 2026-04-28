@@ -159,6 +159,7 @@ static int build_register_message(camex_config_t *config, char *buffer, size_t s
 static int parse_register_message(char *message, char *client_id, size_t client_id_size, char *local_ip, size_t local_ip_size, uint8_t *auto_request);
 static int build_config_message(const char *client_id, const camex_profile_t *profile, char *buffer, size_t size);
 static int parse_config_message(char *message, camex_config_t *config);
+static int client_apply_config_response(const uint8_t *payload, size_t payload_len);
 static int set_fd_nonblocking(int fd);
 static int tune_udp_socket(int fd);
 static int client_socket_create(const char *host, int port);
@@ -540,6 +541,19 @@ static int validate_route_cidr(const char *cidr)
     return 0;
 }
 
+static int validate_route_list(const char routes[CAMEX_MAX_ROUTES][32], uint8_t route_count)
+{
+    size_t i;
+
+    for (i = 0; i < route_count; ++i) {
+        if (validate_route_cidr(routes[i]) != 0) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
 static int set_fd_nonblocking(int fd)
 {
     int flags;
@@ -568,6 +582,71 @@ static int tune_udp_socket(int fd)
         print_errno_message(LOG_WARNING, "setsockopt(SO_SNDBUF)");
     }
     return set_fd_nonblocking(fd);
+}
+
+static void close_udp_socket(void)
+{
+    if (udp_socket >= 0) {
+        close(udp_socket);
+        udp_socket = -1;
+    }
+}
+
+static int configure_udp_socket(int fd)
+{
+    if (current_config.bind_dev[0] != '\0') {
+        if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE,
+                       current_config.bind_dev, strlen(current_config.bind_dev) + 1U) < 0) {
+            print_errno_message(LOG_WARNING, "setsockopt(SO_BINDTODEVICE)");
+        }
+    }
+
+    if (tune_udp_socket(fd) != 0) {
+        print_errno_message(LOG_ERR, "fcntl(O_NONBLOCK)");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int open_udp_socket(void)
+{
+    int fd;
+
+    fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) {
+        print_errno_message(LOG_ERR, "socket");
+        return -1;
+    }
+
+    if (configure_udp_socket(fd) != 0) {
+        close(fd);
+        return -1;
+    }
+
+    return fd;
+}
+
+static void copy_ifreq_name(struct ifreq *req, const char *name)
+{
+    memset(req, 0, sizeof(*req));
+    snprintf(req->ifr_name, sizeof(req->ifr_name), "%s", name);
+}
+
+static void reset_tun_backend(void)
+{
+    tun_name[0] = '\0';
+}
+
+static void close_tun_creation(int sock, int fd)
+{
+    if (sock >= 0) {
+        close(sock);
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+    reset_tun_backend();
 }
 
 static int get_random_bytes(void *buf, size_t len)
@@ -1262,9 +1341,7 @@ static int tun_create_device(const char *local_ip, const char *netmask, int mtu)
         return -1;
     }
 
-    /* Determine which TUN device path to use */
     if (current_config.tun_dev[0] != '\0') {
-        /* User-specified path */
         devpath_used = current_config.tun_dev;
         log_message(LOG_INFO, "TUN device override: %s", devpath_used);
         fd = open(devpath_used, O_RDWR);
@@ -1276,16 +1353,13 @@ static int tun_create_device(const char *local_ip, const char *netmask, int mtu)
         /* Auto-detect: try /dev/net/tun (tun.ko) first */
         fd = open(DEV_NET_TUN, O_RDWR);
         if (fd >= 0) {
-            /* Probe TUNSETIFF; if it fails, fall back to /dev/camex */
-            memset(&ifr, 0, sizeof(ifr));
+            copy_ifreq_name(&ifr, "tun%d");
             ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
-            snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "tun%%d");
             if (ioctl(fd, TUNSETIFF, (void *)&ifr) >= 0) {
                 devpath_used  = DEV_NET_TUN;
                 use_tunsetiff = 1;
                 snprintf(tun_name, sizeof(tun_name), "%s", ifr.ifr_name);
             } else {
-                /* TUNSETIFF failed — not the right backend, try camex.ko */
                 close(fd);
                 fd = -1;
             }
@@ -1301,21 +1375,17 @@ static int tun_create_device(const char *local_ip, const char *netmask, int mtu)
         }
     }
 
-    /* For explicit path or camex.ko fallback: determine mode */
     if (!use_tunsetiff) {
         if (strcmp(devpath_used, DEV_NET_TUN) == 0) {
-            /* Explicit /dev/net/tun path */
-            memset(&ifr, 0, sizeof(ifr));
+            copy_ifreq_name(&ifr, "tun%d");
             ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
-            snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "tun%%d");
             if (ioctl(fd, TUNSETIFF, (void *)&ifr) < 0) {
                 print_errno_message(LOG_ERR, "ioctl(TUNSETIFF)");
-                close(fd);
+                close_tun_creation(-1, fd);
                 return -1;
             }
             snprintf(tun_name, sizeof(tun_name), "%s", ifr.ifr_name);
         } else {
-            /* camex.ko mode: no TUNSETIFF; derive interface name from path */
             p = strrchr(devpath_used, '/');
             strncpy(tun_name, (p != NULL) ? p + 1 : devpath_used, sizeof(tun_name) - 1U);
             tun_name[sizeof(tun_name) - 1U] = '\0';
@@ -1327,58 +1397,45 @@ static int tun_create_device(const char *local_ip, const char *netmask, int mtu)
     sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         print_errno_message(LOG_ERR, "socket(AF_INET, SOCK_DGRAM)");
-        close(fd);
-        tun_name[0] = '\0';
+        close_tun_creation(-1, fd);
         return -1;
     }
 
-    memset(&cfg, 0, sizeof(cfg));
-    snprintf(cfg.ifr_name, sizeof(cfg.ifr_name), "%s", tun_name);
+    copy_ifreq_name(&cfg, tun_name);
     sin = (struct sockaddr_in *)&cfg.ifr_addr;
     sin->sin_family = AF_INET;
     if (inet_pton(AF_INET, local_ip, &sin->sin_addr) != 1 || ioctl(sock, SIOCSIFADDR, &cfg) < 0) {
         print_errno_message(LOG_ERR, "ioctl(SIOCSIFADDR)");
-        close(sock);
-        close(fd);
-        tun_name[0] = '\0';
+        close_tun_creation(sock, fd);
         return -1;
     }
 
-    memset(&cfg, 0, sizeof(cfg));
-    snprintf(cfg.ifr_name, sizeof(cfg.ifr_name), "%s", tun_name);
+    copy_ifreq_name(&cfg, tun_name);
     sin = (struct sockaddr_in *)&cfg.ifr_netmask;
     sin->sin_family = AF_INET;
     if (inet_pton(AF_INET, netmask, &sin->sin_addr) != 1 || ioctl(sock, SIOCSIFNETMASK, &cfg) < 0) {
         print_errno_message(LOG_ERR, "ioctl(SIOCSIFNETMASK)");
-        close(sock);
-        close(fd);
-        tun_name[0] = '\0';
+        close_tun_creation(sock, fd);
         return -1;
     }
 
-    memset(&cfg, 0, sizeof(cfg));
-    snprintf(cfg.ifr_name, sizeof(cfg.ifr_name), "%s", tun_name);
+    copy_ifreq_name(&cfg, tun_name);
     cfg.ifr_mtu = mtu;
     if (ioctl(sock, SIOCSIFMTU, &cfg) < 0) {
         print_errno_message(LOG_WARNING, "ioctl(SIOCSIFMTU)");
     }
 
-    memset(&cfg, 0, sizeof(cfg));
-    snprintf(cfg.ifr_name, sizeof(cfg.ifr_name), "%s", tun_name);
+    copy_ifreq_name(&cfg, tun_name);
     if (ioctl(sock, SIOCGIFFLAGS, &cfg) < 0) {
         print_errno_message(LOG_ERR, "ioctl(SIOCGIFFLAGS)");
-        close(sock);
-        close(fd);
-        tun_name[0] = '\0';
+        close_tun_creation(sock, fd);
         return -1;
     }
 
     cfg.ifr_flags |= IFF_UP | IFF_RUNNING;
     if (ioctl(sock, SIOCSIFFLAGS, &cfg) < 0) {
         print_errno_message(LOG_ERR, "ioctl(SIOCSIFFLAGS)");
-        close(sock);
-        close(fd);
-        tun_name[0] = '\0';
+        close_tun_creation(sock, fd);
         return -1;
     }
 
@@ -1396,7 +1453,7 @@ static void tun_close_device(void)
         close(tun_fd);
         tun_fd = -1;
     }
-    tun_name[0] = '\0';
+    reset_tun_backend();
 }
 
 static int tun_read_packet(uint8_t *buffer, size_t size)
@@ -1762,12 +1819,6 @@ static int server_handle_plain_register(const uint8_t *buffer, size_t len, const
     }
 }
 
-static int server_handle_register_packet(const uint8_t *plain, size_t plain_len, const struct sockaddr_in *from, uint64_t seq, const uint8_t *used_key)
-{
-    (void)seq;
-    return server_handle_plain_register(plain, plain_len, from, used_key);
-}
-
 /*
  * Try every keystore entry to decrypt a packet.
  * Returns pointer to the matching psk_key on success, NULL on failure.
@@ -1857,7 +1908,7 @@ static int server_handle_packet(const uint8_t *buffer, size_t len, const struct 
         }
 
         if (type == CAMEX_PACKET_REGISTER) {
-            return server_handle_register_packet(plain, plain_len, from, seq, used_key);
+            return server_handle_plain_register(plain, plain_len, from, used_key);
         }
 
         if (type == CAMEX_PACKET_CONFIG) {
@@ -1962,33 +2013,10 @@ static int client_handle_udp_packet(const uint8_t *buffer, size_t len)
         }
 
         if (type == CAMEX_PACKET_CONFIG && current_config.auto_config) {
-            char message[CAMEX_CONTROL_MAX];
-            int rc;
-
             if (replay_check(&client_state.recv_seq_max, &client_state.recv_window, seq) != 0) {
                 return -1;
             }
-            if (plain_len >= sizeof(message)) {
-                return -1;
-            }
-            memcpy(message, plain, plain_len);
-            message[plain_len] = '\0';
-            rc = parse_config_message(message, &current_config);
-            if (rc == 0) {
-                char lip[16], lmask[16];
-                client_state.config_received = 1U;
-                if (parse_local_cidr(current_config.local_cidr, lip, sizeof(lip), lmask, sizeof(lmask)) == 0) {
-                    snprintf(current_config.local_ip, sizeof(current_config.local_ip), "%s", lip);
-                }
-                log_message(LOG_INFO,
-                            "Received config from server:"
-                            " CIDR=%s GW=%s MTU=%d routes=%u",
-                            current_config.local_cidr,
-                            current_config.gateway_ip,
-                            current_config.mtu,
-                            (unsigned)current_config.route_count);
-            }
-            return rc;
+            return client_apply_config_response(plain, plain_len);
         }
 
         if (type != CAMEX_PACKET_DATA) {
@@ -2002,30 +2030,7 @@ static int client_handle_udp_packet(const uint8_t *buffer, size_t len)
         buffer = plain;
         len = plain_len;
     } else if (current_config.auto_config && len >= 4U && memcmp(buffer, CAMEX_MAGIC, 4) == 0) {
-        char message[CAMEX_CONTROL_MAX];
-        int rc;
-
-        if (len >= sizeof(message)) {
-            return -1;
-        }
-        memcpy(message, buffer, len);
-        message[len] = '\0';
-        rc = parse_config_message(message, &current_config);
-        if (rc == 0) {
-            char lip[16], lmask[16];
-            client_state.config_received = 1U;
-            if (parse_local_cidr(current_config.local_cidr, lip, sizeof(lip), lmask, sizeof(lmask)) == 0) {
-                snprintf(current_config.local_ip, sizeof(current_config.local_ip), "%s", lip);
-            }
-            log_message(LOG_INFO,
-                        "Received config from server:"
-                        " CIDR=%s GW=%s MTU=%d routes=%u",
-                        current_config.local_cidr,
-                        current_config.gateway_ip,
-                        current_config.mtu,
-                        (unsigned)current_config.route_count);
-        }
-        return rc;
+        return client_apply_config_response(buffer, len);
     }
 
     return tun_write_packet(buffer, len);
@@ -2108,10 +2113,7 @@ static int client_handle_tun_packet(const uint8_t *buffer, size_t len)
  */
 static void client_reconnect(void)
 {
-    if (udp_socket >= 0) {
-        close(udp_socket);
-        udp_socket = -1;
-    }
+    close_udp_socket();
 
     log_message(LOG_INFO, "Reconnecting to server %s:%d...",
                 current_config.server_host, current_config.port);
@@ -2176,8 +2178,7 @@ static void client_tick(void)
         if (client_send_register() != 0) {
             log_message(LOG_ERR, "Failed to send REGISTER to server %s:%d — forcing reconnect",
                         current_config.server_host, current_config.port);
-            close(udp_socket);
-            udp_socket = -1;
+            close_udp_socket();
             client_reconnect_at = 0;
         }
     }
@@ -2187,22 +2188,15 @@ static int server_socket_create(const char *bind_ip, int port)
 {
     struct sockaddr_in addr;
     int reuse = 1;
+    int fd;
 
-    udp_socket = socket(AF_INET, SOCK_DGRAM, 0);
-    if (udp_socket < 0) {
-        print_errno_message(LOG_ERR, "socket");
+    fd = open_udp_socket();
+    if (fd < 0) {
         return -1;
     }
 
-    if (setsockopt(udp_socket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
         print_errno_message(LOG_WARNING, "setsockopt(SO_REUSEADDR)");
-    }
-
-    if (current_config.bind_dev[0] != '\0') {
-        if (setsockopt(udp_socket, SOL_SOCKET, SO_BINDTODEVICE,
-                       current_config.bind_dev, strlen(current_config.bind_dev) + 1U) < 0) {
-            print_errno_message(LOG_WARNING, "setsockopt(SO_BINDTODEVICE)");
-        }
     }
 
     memset(&addr, 0, sizeof(addr));
@@ -2212,61 +2206,40 @@ static int server_socket_create(const char *bind_ip, int port)
 
     if (bind_ip != NULL && *bind_ip != '\0' && inet_pton(AF_INET, bind_ip, &addr.sin_addr) != 1) {
         log_message(LOG_ERR, "Invalid bind IP: %s", bind_ip);
-        close(udp_socket);
-        udp_socket = -1;
+        close(fd);
         return -1;
     }
 
-    if (bind(udp_socket, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         print_errno_message(LOG_ERR, "bind");
-        close(udp_socket);
-        udp_socket = -1;
+        close(fd);
         return -1;
     }
 
-    if (tune_udp_socket(udp_socket) != 0) {
-        print_errno_message(LOG_ERR, "fcntl(O_NONBLOCK)");
-        close(udp_socket);
-        udp_socket = -1;
-        return -1;
-    }
-
+    udp_socket = fd;
     return 0;
 }
 
 static int client_socket_create(const char *host, int port)
 {
+    int fd;
+
     if (resolve_udp_endpoint(host, port, &server_addr, "server") != 0) {
         return -1;
     }
 
-    udp_socket = socket(AF_INET, SOCK_DGRAM, 0);
-    if (udp_socket < 0) {
-        print_errno_message(LOG_ERR, "socket");
+    fd = open_udp_socket();
+    if (fd < 0) {
         return -1;
     }
 
-    if (current_config.bind_dev[0] != '\0') {
-        if (setsockopt(udp_socket, SOL_SOCKET, SO_BINDTODEVICE,
-                       current_config.bind_dev, strlen(current_config.bind_dev) + 1U) < 0) {
-            print_errno_message(LOG_WARNING, "setsockopt(SO_BINDTODEVICE)");
-        }
-    }
-
-    if (connect(udp_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+    if (connect(fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
         print_errno_message(LOG_ERR, "connect");
-        close(udp_socket);
-        udp_socket = -1;
+        close(fd);
         return -1;
     }
 
-    if (tune_udp_socket(udp_socket) != 0) {
-        print_errno_message(LOG_ERR, "fcntl(O_NONBLOCK)");
-        close(udp_socket);
-        udp_socket = -1;
-        return -1;
-    }
-
+    udp_socket = fd;
     return 0;
 }
 
@@ -2301,7 +2274,6 @@ static int validate_config(camex_config_t *config)
         } else {
             char local_ip[16];
             char local_netmask[16];
-            size_t i;
 
             if (config->local_cidr[0] == '\0') {
                 log_message(LOG_ERR, "Local CIDR must be specified");
@@ -2318,10 +2290,8 @@ static int validate_config(camex_config_t *config)
                 return -1;
             }
 
-            for (i = 0; i < config->route_count; ++i) {
-                if (validate_route_cidr(config->route_cidrs[i]) != 0) {
-                    return -1;
-                }
+            if (validate_route_list(config->route_cidrs, config->route_count) != 0) {
+                return -1;
             }
         }
 
@@ -2528,7 +2498,6 @@ static int validate_and_prepare_client(camex_config_t *config)
 {
     char local_ip[16];
     char local_netmask[16];
-    size_t i;
 
     if (parse_local_cidr(config->local_cidr, local_ip, sizeof(local_ip), local_netmask, sizeof(local_netmask)) != 0) {
         return -1;
@@ -2539,10 +2508,8 @@ static int validate_and_prepare_client(camex_config_t *config)
         return -1;
     }
 
-    for (i = 0; i < config->route_count; ++i) {
-        if (validate_route_cidr(config->route_cidrs[i]) != 0) {
-            return -1;
-        }
+    if (validate_route_list(config->route_cidrs, config->route_count) != 0) {
+        return -1;
     }
 
     return 0;
@@ -2832,6 +2799,37 @@ static int parse_config_message(char *message, camex_config_t *config)
     return 0;
 }
 
+static int client_apply_config_response(const uint8_t *payload, size_t payload_len)
+{
+    char message[CAMEX_CONTROL_MAX];
+    int rc;
+
+    if (payload == NULL || payload_len >= sizeof(message)) {
+        return -1;
+    }
+
+    memcpy(message, payload, payload_len);
+    message[payload_len] = '\0';
+    rc = parse_config_message(message, &current_config);
+    if (rc == 0) {
+        char lip[16], lmask[16];
+
+        client_state.config_received = 1U;
+        if (parse_local_cidr(current_config.local_cidr, lip, sizeof(lip), lmask, sizeof(lmask)) == 0) {
+            snprintf(current_config.local_ip, sizeof(current_config.local_ip), "%s", lip);
+        }
+        log_message(LOG_INFO,
+                    "Received config from server:"
+                    " CIDR=%s GW=%s MTU=%d routes=%u",
+                    current_config.local_cidr,
+                    current_config.gateway_ip,
+                    current_config.mtu,
+                    (unsigned)current_config.route_count);
+    }
+
+    return rc;
+}
+
 /*
  * Build the server keystore from the global PSK and all per-client PSKs
  * defined in the config file.  Called once after server_db_load_file().
@@ -3065,16 +3063,16 @@ int camex_init(camex_config_t *config)
     return 0;
 }
 
-static void handle_udp_packet(void)
+static void drain_udp_packets(void)
 {
     static uint8_t buffer[TUN_PACKET_MAX + CAMEX_HDR_LEN + 16U];
     struct sockaddr_in from;
-    socklen_t fromlen = sizeof(from);
     int len;
 
     if (server_mode) {
         while (1) {
-            fromlen = sizeof(from);
+            socklen_t fromlen = sizeof(from);
+
             len = recvfrom(udp_socket, buffer, sizeof(buffer), 0, (struct sockaddr *)&from, &fromlen);
             if (len > 0) {
                 if (server_handle_packet(buffer, (size_t)len, &from) != 0) {
@@ -3113,30 +3111,23 @@ static void handle_udp_packet(void)
 }
 
 /* Forward a packet read from the local TUN to the appropriate UDP client. */
-static int server_handle_tun_packet(const uint8_t *buffer, size_t len)
-{
-    uint32_t src_ip_be = 0;
-    uint32_t dst_ip_be = 0;
-
-    /* Silently discard non-IPv4 (IPv6 ND/RS, etc.) from the local TUN device */
-    if (ipv4_parse_endpoints(buffer, len, &src_ip_be, &dst_ip_be) != 0) {
-        return 0;
-    }
-
-    return server_forward_packet(buffer, len, src_ip_be, dst_ip_be);
-}
-
 static void handle_tun_packet(void)
 {
     static uint8_t buffer[TUN_PACKET_MAX];
     int len;
+    uint32_t src_ip_be = 0;
+    uint32_t dst_ip_be = 0;
 
     while (1) {
         len = tun_read_packet(buffer, sizeof(buffer));
         if (len > 0) {
             int rc;
             if (server_mode) {
-                rc = server_handle_tun_packet(buffer, (size_t)len);
+                if (ipv4_parse_endpoints(buffer, (size_t)len, &src_ip_be, &dst_ip_be) != 0) {
+                    rc = 0;
+                } else {
+                    rc = server_forward_packet(buffer, (size_t)len, src_ip_be, dst_ip_be);
+                }
             } else {
                 rc = client_handle_tun_packet(buffer, (size_t)len);
             }
@@ -3197,7 +3188,7 @@ void camex_run(void)
             ready = select(maxfd + 1, &readset, NULL, NULL, &tv);
             if (ready > 0) {
                 if (FD_ISSET(udp_socket, &readset)) {
-                    handle_udp_packet();
+                    drain_udp_packets();
                 }
                 if (tun_fd >= 0 && FD_ISSET(tun_fd, &readset)) {
                     handle_tun_packet();
@@ -3208,10 +3199,21 @@ void camex_run(void)
 
             server_expire_clients();
             if (reload_config) {
+                camex_server_db_t saved_db = server_db;
+                camex_keystore_entry_t saved_keystore[CAMEX_MAX_CLIENTS + 1];
+                size_t saved_keystore_count = server_keystore_count;
+
                 reload_config = 0;
                 log_message(LOG_INFO, "Reloading config: %s", current_config.config_path);
-                (void)server_db_load_file(current_config.config_path);
-                server_build_keystore();
+                memcpy(saved_keystore, server_keystore, sizeof(saved_keystore));
+                if (server_db_load_file(current_config.config_path) != 0) {
+                    server_db = saved_db;
+                    memcpy(server_keystore, saved_keystore, sizeof(saved_keystore));
+                    server_keystore_count = saved_keystore_count;
+                    log_message(LOG_WARNING, "Keeping previous server configuration");
+                } else {
+                    server_build_keystore();
+                }
             }
         }
 
@@ -3247,7 +3249,7 @@ void camex_run(void)
         ready = select(maxfd + 1, &readset, NULL, NULL, &tv);
         if (ready > 0) {
             if (FD_ISSET(udp_socket, &readset)) {
-                handle_udp_packet();
+                drain_udp_packets();
             }
             if (tun_fd >= 0 && FD_ISSET(tun_fd, &readset)) {
                 handle_tun_packet();
