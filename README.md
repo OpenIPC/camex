@@ -153,7 +153,7 @@ sudo ./camex \
 | `--local-cidr <cidr>` | `-l` | Tunnel address in `address/prefix` form |
 | `--gateway-ip <addr>` | `-g` | Client gateway inside the tunnel |
 | `--server-host <addr>` | `-s` | Server hostname or IP for client mode |
-| `--port <port>` | `-p` | Server port (UDP) for client or listen port for server |
+| `--port <port>` | `-p` | Server port for client or listen port for server |
 | `--bind-ip <addr>` | `-b` | Optional server bind address |
 | `--config <path>` | `-f` | Server config file path |
 | `--route-cidr <cidr>` | `-c` | Extra route to install on the client; repeatable |
@@ -163,6 +163,7 @@ sudo ./camex \
 | `--tun-dev <path>` | `-T` | TUN device path (default: auto-detect `/dev/net/tun` then `/dev/camex`) |
 | `--pid-file <path>` | `-P` | Write PID to file on startup |
 | `--bind-dev <iface>` | `-d` | Bind socket to a specific network interface (`SO_BINDTODEVICE`) |
+| `--transport <proto>` | `-R` | Transport protocol: `udp` (default) or `tcp` |
 | `--version` | `-v` | Print version and exit |
 | `--help` | `-h` | Print usage and exit |
 

@@ -65,8 +65,15 @@ int client_send_register(void)
             return -1;
         }
     } else {
-        if (net_send_text(net_fd, NULL, message) != 0) {
-            return -1;
+        if (current_config.transport == CAMEX_TRANSPORT_TCP) {
+            if (net_tcp_send_frame(net_fd, (const uint8_t *)message,
+                                   message_len) != 0) {
+                return -1;
+            }
+        } else {
+            if (net_send_text(net_fd, NULL, message) != 0) {
+                return -1;
+            }
         }
     }
 
@@ -176,9 +183,18 @@ int client_wait_for_config(void)
             continue;
         }
 
-        ready = recv(net_fd, buffer, sizeof(buffer), 0);
-        if (ready <= 0) {
-            continue;
+        if (current_config.transport == CAMEX_TRANSPORT_TCP) {
+            size_t frame_len;
+            if (net_tcp_recv_frame(net_fd, buffer, sizeof(buffer),
+                                   &frame_len) != 0) {
+                continue;
+            }
+            ready = (int)frame_len;
+        } else {
+            ready = recv(net_fd, buffer, sizeof(buffer), 0);
+            if (ready <= 0) {
+                continue;
+            }
         }
         if (client_handle_net_packet(buffer, (size_t)ready) == 0 &&
             current_config.local_cidr[0] != '\0' &&
@@ -339,6 +355,16 @@ int client_socket_create(const char *host, int port, const char *bind_dev)
     int fd;
     (void)bind_dev;
 
+    if (current_config.transport == CAMEX_TRANSPORT_TCP) {
+        fd = net_tcp_connect(host, port);
+        if (fd < 0) {
+            return -1;
+        }
+        net_fd = fd;
+        return 0;
+    }
+
+    /* UDP path */
     if (net_resolve_endpoint(host, port, &server_addr, "server",
                              SOCK_DGRAM) != 0) {
         return -1;

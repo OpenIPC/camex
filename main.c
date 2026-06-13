@@ -88,13 +88,14 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         { "pid-file", required_argument, NULL, 'P' },
         { "bind-dev", required_argument, NULL, 'd' },
         { "tun-dev",  required_argument, NULL, 'T' },
+        { "transport", required_argument, NULL, 'R' },
         { NULL, 0, NULL, 0 }
     };
     int opt;
     int option_index = 0;
 
     opterr = 0;
-    while ((opt = getopt_long(argc, argv, "M:b:an:f:l:g:p:s:c:t:k:evhP:d:T:",
+    while ((opt = getopt_long(argc, argv, "M:b:an:f:l:g:p:s:c:t:k:evhP:d:T:R:",
                              long_options, &option_index)) != -1) {
         switch (opt) {
         case 'M':
@@ -190,6 +191,17 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         case 'T':
             if (copy_option(config->tun_dev, sizeof(config->tun_dev),
                             optarg, "TUN device") != 0) {
+                return -1;
+            }
+            break;
+        case 'R':
+            if (strcmp(optarg, "tcp") == 0) {
+                config->transport = CAMEX_TRANSPORT_TCP;
+            } else if (strcmp(optarg, "udp") == 0) {
+                config->transport = CAMEX_TRANSPORT_UDP;
+            } else {
+                log_message(LOG_ERR, "Invalid transport: %s (use tcp or udp)",
+                            optarg);
                 return -1;
             }
             break;
@@ -330,7 +342,7 @@ void print_usage(const char *progname)
     printf("Modes:\n");
     printf("  client    Creates a TUN device and connects outbound"
            " to the server\n");
-    printf("  server    Listens on UDP and relays packets"
+    printf("  server    Listens on UDP/TCP and relays packets"
            " between clients\n\n");
 
     printf("Client options:\n");
@@ -340,7 +352,7 @@ void print_usage(const char *progname)
     printf("  -l, --local-cidr     Local tunnel address in CIDR form\n");
     printf("  -g, --gateway-ip     Gateway inside the tunnel\n");
     printf("  -s, --server-host    Tunnel server host or address\n");
-    printf("  -p, --port <port>    Tunnel server UDP port\n");
+    printf("  -p, --port <port>    Tunnel server port\n");
     printf("  -c, --route-cidr     Route to install through the tunnel"
            " (repeatable)\n");
     printf("  -T, --tun-dev <path> "
@@ -351,7 +363,7 @@ void print_usage(const char *progname)
            " (default: %s)\n", CAMEX_DEFAULT_CONFIG_PATH);
     printf("  -b, --bind-ip <addr> Optional bind address"
            " (default: 0.0.0.0)\n");
-    printf("  -p, --port <port>    UDP port to listen on\n");
+    printf("  -p, --port <port>    Port to listen on\n");
     printf("  -d, --bind-dev <iface>  Bind socket to a"
            " specific network interface\n\n");
 
@@ -360,6 +372,7 @@ void print_usage(const char *progname)
     printf("  -k, --psk <key>      Passphrase used to derive key\n");
     printf("  -e, --encrypt        Enable ChaCha20-Poly1305 encryption\n");
     printf("  -P, --pid-file       Write PID to file on startup\n");
+    printf("  -R, --transport <t>  Transport protocol: udp (default) or tcp\n");
     printf("  -v, --version        Show version and exit\n");
     printf("  -h, --help           Show this help message and exit\n\n");
 

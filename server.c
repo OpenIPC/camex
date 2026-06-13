@@ -92,6 +92,7 @@ server_client_t *server_alloc_client(void)
     for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
         if (!server_clients[i].active) {
             memset(&server_clients[i], 0, sizeof(server_clients[i]));
+            server_clients[i].tcp_fd = -1;
             if (get_random_bytes(
                     server_clients[i].send_nonce_prefix,
                     sizeof(server_clients[i].send_nonce_prefix)) != 0) {
@@ -110,6 +111,7 @@ server_client_t *server_alloc_client(void)
     }
 
     memset(&server_clients[oldest], 0, sizeof(server_clients[oldest]));
+    server_clients[oldest].tcp_fd = -1;
     if (get_random_bytes(
             server_clients[oldest].send_nonce_prefix,
             sizeof(server_clients[oldest].send_nonce_prefix)) != 0) {
@@ -167,6 +169,10 @@ void server_expire_clients(void)
             addr.s_addr = server_clients[i].ip_be;
             inet_ntop(AF_INET, &addr, ipbuf, sizeof(ipbuf));
             log_message(LOG_INFO, "Expired client %s", ipbuf);
+            if (server_clients[i].tcp_fd >= 0) {
+                close(server_clients[i].tcp_fd);
+                server_clients[i].tcp_fd = -1;
+            }
             memset(&server_clients[i], 0, sizeof(server_clients[i]));
         }
     }
@@ -230,9 +236,16 @@ int server_send_config_response(const struct sockaddr_in *from,
             }
             entry->send_seq = seq + 1U;
         }
+        if (entry->tcp_fd >= 0) {
+            return net_tcp_send_frame(entry->tcp_fd, packet, packet_len);
+        }
         return net_send_payload(net_fd, &entry->addr, packet, packet_len);
     }
 
+    if (entry != NULL && entry->tcp_fd >= 0) {
+        return net_tcp_send_frame(entry->tcp_fd,
+                                  (const uint8_t *)message, strlen(message));
+    }
     return net_send_text(net_fd, from, message);
 }
 
@@ -408,10 +421,15 @@ int server_forward_packet(const uint8_t *packet, size_t len,
                 &encrypted_len) != 0) {
             return -1;
         }
-        dst->send_seq = seq + 1U;
+        if (dst->tcp_fd >= 0) {
+            return net_tcp_send_frame(dst->tcp_fd, encrypted, encrypted_len);
+        }
         return net_send_payload(net_fd, &dst->addr, encrypted, encrypted_len);
     }
 
+    if (dst->tcp_fd >= 0) {
+        return net_tcp_send_frame(dst->tcp_fd, packet, len);
+    }
     return net_send_payload(net_fd, &dst->addr, packet, len);
 }
 
@@ -540,10 +558,25 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
 int server_socket_create(const char *bind_ip, int port,
                          const char *bind_dev)
 {
+    (void)bind_dev;
+
+    if (current_config.transport == CAMEX_TRANSPORT_TCP) {
+        listen_fd = net_tcp_listen(bind_ip, port);
+        if (listen_fd < 0) {
+            return -1;
+        }
+        if (set_fd_nonblocking(listen_fd) != 0) {
+            close(listen_fd);
+            listen_fd = -1;
+            return -1;
+        }
+        return 0;
+    }
+
+    /* UDP path */
     struct sockaddr_in addr;
     int reuse = 1;
     int fd;
-    (void)bind_dev;
 
     fd = net_open_udp_socket();
     if (fd < 0) {

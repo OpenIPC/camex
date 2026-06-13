@@ -20,7 +20,8 @@ typedef enum {
 } camex_transport_t;
 
 /* Network FD (global) */
-extern int net_fd;       /* client-side connected / server-side listen */
+extern int net_fd;       /* client-side connected / server-side data */
+extern int listen_fd;    /* TCP listen socket (server mode, -1 when unused) */
 extern struct sockaddr_in server_addr;
 
 /* Resolve endpoint (socktype: SOCK_DGRAM or SOCK_STREAM) */
@@ -69,5 +70,11 @@ int net_client_send(const uint8_t *data, size_t len);
 int net_tcp_listen(const char *bind_ip, int port);
 int net_tcp_connect(const char *host, int port);
 int net_tcp_accept(int listen_fd, struct sockaddr_in *peer);
+
+/* TCP framing: send 2-byte big-endian length prefix + payload */
+int net_tcp_send_frame(int fd, const uint8_t *data, size_t len);
+
+/* TCP framing: recv 2-byte length prefix + payload (blocks until full frame) */
+int net_tcp_recv_frame(int fd, uint8_t *buffer, size_t size, size_t *len);
 
 #endif /* CAMEX_NET_H */

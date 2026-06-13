@@ -324,6 +324,9 @@ int camex_init(camex_config_t *config)
         log_message(LOG_INFO, "  MTU: %d", current_config.mtu);
         log_message(LOG_INFO, "  Encryption: %s",
                     current_config.encrypt ? "enabled" : "disabled");
+        log_message(LOG_INFO, "  Transport: %s",
+                    current_config.transport == CAMEX_TRANSPORT_TCP
+                        ? "TCP" : "UDP");
         return 0;
     }
 
@@ -364,6 +367,9 @@ int camex_init(camex_config_t *config)
     log_message(LOG_INFO, "  MTU: %d", current_config.mtu);
     log_message(LOG_INFO, "  Encryption: %s",
                 current_config.encrypt ? "enabled" : "disabled");
+    log_message(LOG_INFO, "  Transport: %s",
+                current_config.transport == CAMEX_TRANSPORT_TCP
+                    ? "TCP" : "UDP");
     return 0;
 }
 
@@ -397,6 +403,20 @@ static void drain_udp_packets(void)
         return;
     }
 
+    /* Client mode */
+    if (current_config.transport == CAMEX_TRANSPORT_TCP) {
+        size_t frame_len;
+        if (net_tcp_recv_frame(net_fd, buffer, sizeof(buffer),
+                               &frame_len) == 0) {
+            client_state.last_recv = g_now;
+            if (client_handle_net_packet(buffer, frame_len) != 0) {
+                log_message(LOG_WARNING, "Dropped packet from server");
+            }
+        }
+        return;
+    }
+
+    /* UDP client: drain all available packets */
     while (1) {
         len = recv(net_fd, buffer, sizeof(buffer), 0);
         if (len > 0) {
@@ -412,6 +432,89 @@ static void drain_udp_packets(void)
         }
 
         break;
+    }
+}
+
+static void drain_tcp_server_accept(void)
+{
+    struct sockaddr_in peer;
+    size_t i;
+    char peer_str[64];
+
+    /* Accept new connections (nonblocking loop) */
+    while (1) {
+        int client_fd;
+        socklen_t addrlen;
+
+        memset(&peer, 0, sizeof(peer));
+        addrlen = sizeof(peer);
+        client_fd = accept(listen_fd, (struct sockaddr *)&peer, &addrlen);
+        if (client_fd < 0) {
+            break;
+        }
+
+        for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
+            if (!server_clients[i].active) {
+                memset(&server_clients[i], 0, sizeof(server_clients[i]));
+                server_clients[i].tcp_fd = client_fd;
+                server_clients[i].addr = peer;
+                server_clients[i].last_seen = g_now;
+                server_clients[i].active = 1U;
+                net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
+                log_message(LOG_INFO, "TCP client connected: %s (fd=%d)",
+                            peer_str, client_fd);
+                break;
+            }
+        }
+        if (i >= CAMEX_MAX_CLIENTS) {
+            close(client_fd);
+            net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
+            log_message(LOG_WARNING,
+                        "No free slots for TCP client: %s", peer_str);
+        }
+    }
+}
+
+static void drain_tcp_client_read(int fd)
+{
+    uint8_t buffer[TUN_PACKET_MAX + CAMEX_HDR_LEN + 1 + 16U];
+    size_t frame_len;
+    size_t i;
+    char peer_str[64];
+
+    if (net_tcp_recv_frame(fd, buffer, sizeof(buffer), &frame_len) != 0) {
+        /* Connection closed or error — find and remove this client */
+        for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
+            if (server_clients[i].active &&
+                server_clients[i].tcp_fd == fd) {
+                net_sockaddr_to_string(&server_clients[i].addr,
+                                       peer_str, sizeof(peer_str));
+                log_message(LOG_INFO,
+                            "TCP client disconnected: %s (fd=%d)",
+                            peer_str, fd);
+                close(fd);
+                memset(&server_clients[i], 0, sizeof(server_clients[i]));
+                return;
+            }
+        }
+        close(fd);
+        return;
+    }
+
+    /* Find the client entry for this fd */
+    for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
+        if (server_clients[i].active &&
+            server_clients[i].tcp_fd == fd) {
+            server_clients[i].last_seen = g_now;
+            if (server_handle_packet(buffer, frame_len,
+                                     &server_clients[i].addr) != 0) {
+                net_sockaddr_to_string(&server_clients[i].addr,
+                                       peer_str, sizeof(peer_str));
+                log_message(LOG_WARNING, "Dropped TCP packet from %s",
+                            peer_str);
+            }
+            return;
+        }
     }
 }
 
@@ -464,16 +567,38 @@ void camex_run(void)
     if (server_mode) {
         log_message(LOG_INFO, "Server started. Press Ctrl+C to stop.");
         while (running) {
+            size_t si;
+
             g_now = time(NULL);
             FD_ZERO(&readset);
-            FD_SET(net_fd, &readset);
-            if (tun_fd >= 0) {
-                FD_SET(tun_fd, &readset);
+
+            if (current_config.transport == CAMEX_TRANSPORT_UDP) {
+                if (net_fd >= 0) {
+                    FD_SET(net_fd, &readset);
+                }
+                maxfd = net_fd;
+            } else {
+                /* TCP: monitor listen_fd + all active client fds */
+                if (listen_fd >= 0) {
+                    FD_SET(listen_fd, &readset);
+                }
+                maxfd = listen_fd;
+                for (si = 0; si < CAMEX_MAX_CLIENTS; ++si) {
+                    if (server_clients[si].active &&
+                        server_clients[si].tcp_fd >= 0) {
+                        FD_SET(server_clients[si].tcp_fd, &readset);
+                        if (server_clients[si].tcp_fd > maxfd) {
+                            maxfd = server_clients[si].tcp_fd;
+                        }
+                    }
+                }
             }
 
-            maxfd = net_fd;
-            if (tun_fd > maxfd) {
-                maxfd = tun_fd;
+            if (tun_fd >= 0) {
+                FD_SET(tun_fd, &readset);
+                if (tun_fd > maxfd) {
+                    maxfd = tun_fd;
+                }
             }
 
             tv.tv_sec = 1;
@@ -481,8 +606,24 @@ void camex_run(void)
 
             ready = select(maxfd + 1, &readset, NULL, NULL, &tv);
             if (ready > 0) {
-                if (FD_ISSET(net_fd, &readset)) {
-                    drain_udp_packets();
+                if (current_config.transport == CAMEX_TRANSPORT_UDP) {
+                    if (net_fd >= 0 && FD_ISSET(net_fd, &readset)) {
+                        drain_udp_packets();
+                    }
+                } else {
+                    /* TCP: accept new connections */
+                    if (listen_fd >= 0 && FD_ISSET(listen_fd, &readset)) {
+                        drain_tcp_server_accept();
+                    }
+                    /* Read from active TCP clients */
+                    for (si = 0; si < CAMEX_MAX_CLIENTS; ++si) {
+                        if (server_clients[si].active &&
+                            server_clients[si].tcp_fd >= 0 &&
+                            FD_ISSET(server_clients[si].tcp_fd, &readset)) {
+                            drain_tcp_client_read(
+                                server_clients[si].tcp_fd);
+                        }
+                    }
                 }
                 if (tun_fd >= 0 && FD_ISSET(tun_fd, &readset)) {
                     handle_tun_packet();

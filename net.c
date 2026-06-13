@@ -19,9 +19,11 @@
 #include <string.h>
 #include <stdio.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 int net_fd = -1;
+int listen_fd = -1;
 struct sockaddr_in server_addr;
 
 int net_resolve_endpoint(const char *host, int port,
@@ -147,6 +149,10 @@ void net_close(void)
         close(net_fd);
         net_fd = -1;
     }
+    if (listen_fd >= 0) {
+        close(listen_fd);
+        listen_fd = -1;
+    }
 }
 
 int net_send_payload(int fd, const struct sockaddr_in *to,
@@ -179,7 +185,79 @@ int net_send_text(int fd, const struct sockaddr_in *to, const char *text)
 
 int net_client_send(const uint8_t *data, size_t len)
 {
+    if (current_config.transport == CAMEX_TRANSPORT_TCP) {
+        return net_tcp_send_frame(net_fd, data, len);
+    }
     return net_send_payload(net_fd, NULL, data, len);
+}
+
+int net_tcp_send_frame(int fd, const uint8_t *data, size_t len)
+{
+    uint8_t header[2];
+    uint16_t net_len;
+    struct iovec iov[2];
+    struct msghdr msg;
+
+    if (fd < 0 || data == NULL || len > 65535U) {
+        return -1;
+    }
+
+    net_len = htons((uint16_t)len);
+    memcpy(header, &net_len, 2);
+
+    memset(&msg, 0, sizeof(msg));
+    iov[0].iov_base = header;
+    iov[0].iov_len = 2;
+    iov[1].iov_base = (void *)data;
+    iov[1].iov_len = len;
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 2;
+
+    if (sendmsg(fd, &msg, MSG_NOSIGNAL) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int net_tcp_recv_frame(int fd, uint8_t *buffer, size_t size, size_t *len)
+{
+    uint8_t header[2];
+    uint16_t net_len;
+    size_t body_len;
+    ssize_t n;
+    size_t total = 0;
+
+    if (fd < 0 || buffer == NULL || len == NULL) {
+        return -1;
+    }
+
+    /* Read 2-byte header */
+    while (total < 2) {
+        n = read(fd, header + total, 2 - total);
+        if (n <= 0) {
+            return -1;
+        }
+        total += (size_t)n;
+    }
+
+    memcpy(&net_len, header, 2);
+    body_len = (size_t)ntohs(net_len);
+
+    if (body_len == 0U || body_len > size) {
+        return -1;
+    }
+
+    total = 0;
+    while (total < body_len) {
+        n = read(fd, buffer + total, body_len - total);
+        if (n <= 0) {
+            return -1;
+        }
+        total += (size_t)n;
+    }
+
+    *len = body_len;
+    return 0;
 }
 
 /*
@@ -250,21 +328,16 @@ int net_tcp_connect(const char *host, int port)
         return -1;
     }
 
-    if (set_fd_nonblocking(fd) != 0) {
-        close(fd);
-        return -1;
-    }
-
     server_addr = addr;
     return fd;
 }
 
-int net_tcp_accept(int listen_fd, struct sockaddr_in *peer)
+int net_tcp_accept(int lfd, struct sockaddr_in *peer)
 {
     socklen_t addrlen = sizeof(*peer);
     int fd;
 
-    fd = accept(listen_fd, (struct sockaddr *)peer, &addrlen);
+    fd = accept(lfd, (struct sockaddr *)peer, &addrlen);
     if (fd < 0) {
         return -1;
     }

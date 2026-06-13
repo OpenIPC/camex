@@ -27,6 +27,7 @@ typedef struct {
     char client_id[CAMEX_CLIENT_ID_LEN];
     uint8_t active;
     uint8_t send_nonce_prefix[4];
+    int tcp_fd;         /* TCP socket fd for this client (-1 = UDP) */
     uint8_t psk_key[32];
 } server_client_t;
 
