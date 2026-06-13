@@ -90,8 +90,9 @@ int proto_parse_register(char *message,
             proto_ver = (unsigned int)atoi(value);
             if (proto_ver > CAMEX_PROTO_VER) {
                 log_message(LOG_WARNING,
-                            "Client protocol version %u > server %u",
+                            "Rejecting client: protocol version %u > server %u",
                             proto_ver, (unsigned)CAMEX_PROTO_VER);
+                return -1;
             }
             continue;
         }

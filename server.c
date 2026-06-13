@@ -92,8 +92,12 @@ server_client_t *server_alloc_client(void)
     for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
         if (!server_clients[i].active) {
             memset(&server_clients[i], 0, sizeof(server_clients[i]));
-            (void)get_random_bytes(server_clients[i].send_nonce_prefix,
-                                   sizeof(server_clients[i].send_nonce_prefix));
+            if (get_random_bytes(
+                    server_clients[i].send_nonce_prefix,
+                    sizeof(server_clients[i].send_nonce_prefix)) != 0) {
+                log_message(LOG_WARNING,
+                            "getrandom failed: using weak nonce prefix");
+            }
             server_clients[i].active = 1U;
             return &server_clients[i];
         }
@@ -106,8 +110,12 @@ server_client_t *server_alloc_client(void)
     }
 
     memset(&server_clients[oldest], 0, sizeof(server_clients[oldest]));
-    (void)get_random_bytes(server_clients[oldest].send_nonce_prefix,
-                           sizeof(server_clients[oldest].send_nonce_prefix));
+    if (get_random_bytes(
+            server_clients[oldest].send_nonce_prefix,
+            sizeof(server_clients[oldest].send_nonce_prefix)) != 0) {
+        log_message(LOG_WARNING,
+                    "getrandom failed: using weak nonce prefix");
+    }
     server_clients[oldest].active = 1U;
     return &server_clients[oldest];
 }
@@ -392,13 +400,15 @@ int server_forward_packet(const uint8_t *packet, size_t len,
     dst->last_seen = (g_now != 0) ? g_now : time(NULL);
 
     if (current_config.encrypt) {
-        if (crypto_encrypt_packet(CAMEX_PACKET_DATA, dst->send_seq++,
+        uint64_t seq = dst->send_seq;
+        if (crypto_encrypt_packet(CAMEX_PACKET_DATA, seq,
                 dst->send_nonce_prefix,
                 is_zero_key(dst->psk_key) ? NULL : dst->psk_key,
                 packet, len, encrypted, sizeof(encrypted),
                 &encrypted_len) != 0) {
             return -1;
         }
+        dst->send_seq = seq + 1U;
         return net_send_payload(net_fd, &dst->addr, encrypted, encrypted_len);
     }
 
@@ -496,6 +506,15 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
     }
 
     if (current_config.encrypt) {
+        if (decrypt_src != NULL && src != NULL && decrypt_src != src) {
+            char peer[64];
+            net_sockaddr_to_string(from, peer, sizeof(peer));
+            log_message(LOG_WARNING,
+                        "Key-identity mismatch: decrypted with key of %s "
+                        "but inner IP belongs to %s — dropping",
+                        decrypt_src->client_id, src->client_id);
+            return -1;
+        }
         if (decrypt_src == NULL && src != NULL) {
             server_reset_replay(src);
         }

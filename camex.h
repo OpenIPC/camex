@@ -6,8 +6,8 @@
  *
  */
 
-#ifndef __CAMEX_H__
-#define __CAMEX_H__
+#ifndef CAMEX_H
+#define CAMEX_H
 
 #include <net/if.h>
 #include <signal.h>

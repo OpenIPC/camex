@@ -70,7 +70,7 @@ int crypto_encrypt_packet(uint8_t type, uint64_t seq,
         return -1;
     }
 
-    if (plain_len > 65535U || packet_size < CAMEX_HDR_LEN + plain_len + 16U) {
+    if (plain_len > 65535U || packet_size < CAMEX_HDR_LEN + 1U + plain_len + 16U) {
         return -1;
     }
 
@@ -80,45 +80,10 @@ int crypto_encrypt_packet(uint8_t type, uint64_t seq,
     memcpy(packet, CAMEX_MAGIC, 4);
     packet[4] = type;
 
-    /* Write protocol version byte (CAMEX_PROTO_VER) after the magic+type */
-    /* We reuse the first byte of the 12-byte nonce area as version,
-     * shifting nonce by 1 byte — but maintaining wire compatibility
-     * requires keeping the same header layout. Instead, embed version
-     * as byte 5, and move nonce prefix to byte 6-9, seq to 10-13:
-     *
-     * Offset: 0-3 = magic "CX2P", 4 = type, 5 = version,
-     *         6-9 = nonce_prefix (4 bytes), 10-17 = seq (8 bytes),
-     *         18-19 = body_len (2 bytes) => total = 20 bytes
-     *
-     * Old:  magic(4) + type(1) + nonce(12) + body_len(2) + seq(8) = 27
-     * New:  magic(4) + type(1) + ver(1) + nonce(4) + seq(8) + body_len(2) = 20
-     *
-     * But this breaks existing wire format. For backward compatibility
-     * we keep the 27-byte header and add version as byte 5, reducing
-     * nonce from 12 to 11 bytes.
-     *
-     * Actually, keeping things simple: version goes after type (byte 5),
-     * nonce moves to byte 6-17 (12 bytes unchanged),
-     * body_len stays at 18-19, seq at 20-27. That's 28 bytes total.
-     *
-     * Wait — we need to keep CAMEX_HDR_LEN = 27 for compatibility.
-     * Let's instead put version in the first byte of the nonce prefix
-     * (byte 5) and use nonce bytes 6-16 (11 bytes) + seq bytes 17-24.
-     * But that changes the nonce length.
-     *
-     * SIMPLEST APPROACH: append version as a new field without changing
-     * the header length. Put version as byte 27 (CAMEX_HDR_LEN currently
-     * = 27, indices 0-26). This means CAMEX_HDR_LEN becomes 28.
-     *
-     * Old header: magic(4) type(1) nonce(12) body_len(2) seq(8) = 27
-     * New header: magic(4) type(1) nonce(12) body_len(2) seq(8) ver(1) = 28
-     *
-     * This will break old clients, but since we already need to
-     * coordinate a protocol upgrade (versioning), it's acceptable.
-     */
-
-    /* Write version at CAMEX_HDR_LEN position (byte 27) */
-    /* We write the 27-byte header first, then append version at offset 27 */
+    /* Version byte appended at offset CAMEX_HDR_LEN (byte 27).
+     * Old format (CAMEX_HDR_LEN=27): magic(4) type(1) nonce(12) body_len(2) seq(8)
+     * New format (CAMEX_HDR_LEN+1=28): ... + ver(1) at offset 27.
+     * The decryption side detects the version byte by packet length. */
     memcpy(packet + 5, nonce, 12);
     body_len = htons((uint16_t)plain_len);
     memcpy(packet + 17, &body_len, sizeof(body_len));

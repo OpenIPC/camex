@@ -52,14 +52,15 @@ int client_send_register(void)
 
     message_len = strlen(message);
     if (current_config.encrypt) {
-        if (crypto_encrypt_packet(CAMEX_PACKET_REGISTER,
-                client_state.send_seq++,
+        uint64_t seq = client_state.send_seq;
+        if (crypto_encrypt_packet(CAMEX_PACKET_REGISTER, seq,
                 client_state.send_nonce_prefix,
                 NULL,
                 (const uint8_t *)message, message_len,
                 packet, sizeof(packet), &packet_len) != 0) {
             return -1;
         }
+        client_state.send_seq = seq + 1U;
         if (net_client_send(packet, packet_len) != 0) {
             return -1;
         }
@@ -196,6 +197,9 @@ int client_apply_config_response(const uint8_t *payload, size_t payload_len)
     int rc;
 
     if (payload == NULL || payload_len >= sizeof(message)) {
+        log_message(LOG_ERR,
+                    "Config response too large: %zu bytes (max %zu)",
+                    payload_len, sizeof(message) - 1U);
         return -1;
     }
 
@@ -233,13 +237,14 @@ int client_handle_tun_packet(const uint8_t *buffer, size_t len)
     }
 
     if (current_config.encrypt) {
-        if (crypto_encrypt_packet(CAMEX_PACKET_DATA,
-                client_state.send_seq++,
+        uint64_t seq = client_state.send_seq;
+        if (crypto_encrypt_packet(CAMEX_PACKET_DATA, seq,
                 client_state.send_nonce_prefix,
                 NULL, buffer, len,
                 packet, sizeof(packet), &packet_len) != 0) {
             return -1;
         }
+        client_state.send_seq = seq + 1U;
         return net_client_send(packet, packet_len);
     }
 

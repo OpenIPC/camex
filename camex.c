@@ -7,7 +7,6 @@
  */
 
 #define _GNU_SOURCE
-#define _POSIX_C_SOURCE 200809L
 
 #include "camex.h"
 #include "client.h"
@@ -495,7 +494,7 @@ void camex_run(void)
             server_expire_clients();
             if (reload_config) {
                 camex_server_db_t saved_db = server_db;
-                camex_keystore_entry_t saved_keystore[CAMEX_MAX_CLIENTS + 1];
+                static camex_keystore_entry_t saved_keystore[CAMEX_MAX_CLIENTS + 1];
                 size_t saved_keystore_count = server_keystore_count;
 
                 reload_config = 0;

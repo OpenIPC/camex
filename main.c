@@ -45,7 +45,7 @@ void sighup_handler(int sig)
 
 void print_version(void)
 {
-    printf("camex %s (built %s %s)\n", CAMEX_VERSION, __DATE__, __TIME__);
+    printf("camex %s\n", CAMEX_VERSION);
 }
 
 static int parse_mode(const char *value, camex_mode_t *mode)
