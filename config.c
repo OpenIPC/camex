@@ -369,12 +369,13 @@ int config_db_lookup_profile(const char *client_id, camex_profile_t *profile)
 
 void config_build_keystore(void)
 {
+    const camex_crypto_t *ctx;
     size_t i;
 
     server_keystore_count = 0U;
     memset(server_keystore, 0, sizeof(server_keystore));
 
-    const camex_crypto_t *ctx = crypto_get_ctx();
+    ctx = crypto_get_ctx();
     if (ctx->ready) {
         memcpy(server_keystore[0].psk_key, ctx->psk_key, 32);
         server_keystore_count = 1U;

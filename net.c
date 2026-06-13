@@ -25,7 +25,8 @@ int net_fd = -1;
 struct sockaddr_in server_addr;
 
 int net_resolve_endpoint(const char *host, int port,
-                         struct sockaddr_in *addr, const char *label)
+                         struct sockaddr_in *addr, const char *label,
+                         int socktype)
 {
     struct addrinfo hints;
     struct addrinfo *result = NULL;
@@ -38,7 +39,7 @@ int net_resolve_endpoint(const char *host, int port,
     memset(addr, 0, sizeof(*addr));
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_socktype = socktype;
     snprintf(portbuf, sizeof(portbuf), "%d", port);
 
     if (getaddrinfo(host, portbuf, &hints, &result) != 0 || result == NULL) {
@@ -232,7 +233,8 @@ int net_tcp_connect(const char *host, int port)
     struct sockaddr_in addr;
     int fd;
 
-    if (net_resolve_endpoint(host, port, &addr, "server") != 0) {
+    if (net_resolve_endpoint(host, port, &addr, "server",
+                             SOCK_STREAM) != 0) {
         return -1;
     }
 

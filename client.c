@@ -76,7 +76,7 @@ int client_send_register(void)
 
 int client_handle_net_packet(const uint8_t *buffer, size_t len)
 {
-    static uint8_t plain[TUN_PACKET_MAX];
+    uint8_t plain[TUN_PACKET_MAX];
     uint8_t type = 0U;
     size_t plain_len = 0U;
     uint64_t seq = 0;
@@ -143,7 +143,8 @@ int client_wait_for_config(void)
 
     log_message(LOG_INFO, "Waiting for auto-config from server...");
 
-    for (;;) {
+    unsigned int wait_retries;
+    for (wait_retries = 0; wait_retries < 300; wait_retries++) {
         if (!running) {
             return -1;
         }
@@ -184,6 +185,9 @@ int client_wait_for_config(void)
             return 0;
         }
     }
+
+    log_message(LOG_ERR, "Timeout: server did not provide config after 300 retries");
+    return -1;
 }
 
 int client_apply_config_response(const uint8_t *payload, size_t payload_len)
@@ -242,6 +246,8 @@ int client_handle_tun_packet(const uint8_t *buffer, size_t len)
     return net_client_send(buffer, len);
 }
 
+static unsigned int reconnect_backoff = 0;
+
 void client_reconnect(void)
 {
     net_close();
@@ -252,12 +258,20 @@ void client_reconnect(void)
     if (client_socket_create(current_config.server_host,
                              current_config.port,
                              current_config.bind_dev) != 0) {
-        log_message(LOG_WARNING, "Reconnect failed; will retry in %ds",
-                    CAMEX_RECONNECT_INTERVAL);
-        client_reconnect_at = g_now + CAMEX_RECONNECT_INTERVAL;
+        unsigned int delay = CAMEX_RECONNECT_INTERVAL << reconnect_backoff;
+        if (delay > 60) {
+            delay = 60;
+        }
+        if (reconnect_backoff < 4) {
+            reconnect_backoff++;
+        }
+        log_message(LOG_WARNING, "Reconnect failed; will retry in %us", delay);
+        client_reconnect_at = g_now + (time_t)delay;
         client_state.last_recv = 0;
         return;
     }
+
+    reconnect_backoff = 0;
 
     client_state.registered = 0;
     client_state.last_register = 0;
@@ -318,8 +332,10 @@ void client_tick(void)
 int client_socket_create(const char *host, int port, const char *bind_dev)
 {
     int fd;
+    (void)bind_dev;
 
-    if (net_resolve_endpoint(host, port, &server_addr, "server") != 0) {
+    if (net_resolve_endpoint(host, port, &server_addr, "server",
+                             SOCK_DGRAM) != 0) {
         return -1;
     }
 

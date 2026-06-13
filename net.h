@@ -23,9 +23,10 @@ typedef enum {
 extern int net_fd;       /* client-side connected / server-side listen */
 extern struct sockaddr_in server_addr;
 
-/* Resolve UDP endpoint */
+/* Resolve endpoint (socktype: SOCK_DGRAM or SOCK_STREAM) */
 int net_resolve_endpoint(const char *host, int port,
-                         struct sockaddr_in *addr, const char *label);
+                         struct sockaddr_in *addr, const char *label,
+                         int socktype);
 
 /* Compare sockaddr_in */
 int net_sockaddr_equal(const struct sockaddr_in *lhs,

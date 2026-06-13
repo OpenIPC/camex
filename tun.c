@@ -16,6 +16,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <linux/if_tun.h>
 #include <net/if.h>
 #include <net/if_arp.h>
@@ -196,7 +197,7 @@ int tun_read_packet(uint8_t *buffer, size_t size)
     }
 
     len = read(tun_fd, buffer, size);
-    if (len <= 0 || (size_t)len > size) {
+    if (len <= 0 || (size_t)len > size || len > INT_MAX) {
         return -1;
     }
 

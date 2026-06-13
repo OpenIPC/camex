@@ -273,10 +273,10 @@ int camex_init(camex_config_t *config)
                         current_config.server_host, current_config.port);
                 }
                 {
-                    int s;
-                    for (s = 0; s < 5 && running; s++) {
-                        usleep(1000000);
-                    }
+                    struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
+                    fd_set dummy;
+                    FD_ZERO(&dummy);
+                    select(0, NULL, NULL, NULL, &tv);
                 }
             }
             if (!running) {
@@ -370,7 +370,7 @@ int camex_init(camex_config_t *config)
 
 static void drain_udp_packets(void)
 {
-    static uint8_t buffer[TUN_PACKET_MAX + CAMEX_HDR_LEN + 1 + 16U];
+    uint8_t buffer[TUN_PACKET_MAX + CAMEX_HDR_LEN + 1 + 16U];
     struct sockaddr_in from;
     int len;
 
@@ -418,7 +418,7 @@ static void drain_udp_packets(void)
 
 static void handle_tun_packet(void)
 {
-    static uint8_t buffer[TUN_PACKET_MAX];
+    uint8_t buffer[TUN_PACKET_MAX];
     int len;
     uint32_t src_ip_be = 0;
     uint32_t dst_ip_be = 0;

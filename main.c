@@ -383,15 +383,16 @@ int main(int argc, char *argv[])
     camex_config_t config;
     int parse_result;
 
+    if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+        fprintf(stderr,
+            "SECURITY WARNING: mlockall failed (%s)"
+            " — sensitive key material may be swapped to disk\n",
+            strerror(errno));
+    }
+
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);
     openlog("camex", LOG_PID, LOG_DAEMON);
-    if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
-        log_message(LOG_ERR,
-            "SECURITY WARNING: mlockall failed (%s)"
-            " — sensitive key material may be swapped to disk",
-            strerror(errno));
-    }
     prctl(PR_SET_DUMPABLE, 0);
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);

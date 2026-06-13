@@ -211,12 +211,16 @@ int server_send_config_response(const struct sockaddr_in *from,
         if (entry == NULL) {
             return -1;
         }
-        if (crypto_encrypt_packet(CAMEX_PACKET_CONFIG, entry->send_seq++,
-                entry->send_nonce_prefix,
-                is_zero_key(entry->psk_key) ? NULL : entry->psk_key,
-                (const uint8_t *)message, strlen(message),
-                packet, sizeof(packet), &packet_len) != 0) {
-            return -1;
+        {
+            uint64_t seq = entry->send_seq;
+            if (crypto_encrypt_packet(CAMEX_PACKET_CONFIG, seq,
+                    entry->send_nonce_prefix,
+                    is_zero_key(entry->psk_key) ? NULL : entry->psk_key,
+                    (const uint8_t *)message, strlen(message),
+                    packet, sizeof(packet), &packet_len) != 0) {
+                return -1;
+            }
+            entry->send_seq = seq + 1U;
         }
         return net_send_payload(net_fd, &entry->addr, packet, packet_len);
     }
@@ -372,7 +376,7 @@ int server_forward_packet(const uint8_t *packet, size_t len,
                           uint32_t src_ip_be, uint32_t dst_ip_be)
 {
     server_client_t *dst;
-    static uint8_t encrypted[TUN_PACKET_MAX + CAMEX_HDR_LEN + 1 + 16U];
+    uint8_t encrypted[TUN_PACKET_MAX + CAMEX_HDR_LEN + 1 + 16U];
     size_t encrypted_len = 0;
 
     (void)src_ip_be;
@@ -404,7 +408,7 @@ int server_forward_packet(const uint8_t *packet, size_t len,
 int server_handle_packet(const uint8_t *buffer, size_t len,
                          const struct sockaddr_in *from)
 {
-    static uint8_t plain[TUN_PACKET_MAX];
+    uint8_t plain[TUN_PACKET_MAX];
     uint8_t type = 0U;
     size_t plain_len = 0U;
     uint64_t seq = 0;
@@ -520,6 +524,7 @@ int server_socket_create(const char *bind_ip, int port,
     struct sockaddr_in addr;
     int reuse = 1;
     int fd;
+    (void)bind_dev;
 
     fd = net_open_udp_socket();
     if (fd < 0) {
