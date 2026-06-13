@@ -1,4 +1,4 @@
-# Camex
+# Camex — v2.0.0
 
 Minimal dependency-free Linux UDP/TUN tunnel for embedded targets.
 
@@ -8,7 +8,7 @@ Ships as a userspace daemon and an optional standalone kernel module.
 
 | Component | Description |
 |---|---|
-| `camex` (userspace) | Client/server daemon that creates a TUN interface, encapsulates IPv4 packets in UDP, and optionally encrypts them with ChaCha20-Poly1305. |
+| `camex` (userspace) | Client/server daemon that creates a TUN interface, encapsulates IPv4 packets in UDP (with TCP helper functions available), and optionally encrypts them with ChaCha20-Poly1305. |
 | `camex.ko` (kernel module) | Standalone TUN driver that registers `/dev/camex` and a `camex` network interface — no dependency on `tun.ko`. |
 | Relationship | The userspace daemon can use **either** the standard `/dev/net/tun` (tun.ko) **or** `/dev/camex` (camex.ko) as its TUN backend. Both produce bare IPv4 packets; the tunnel protocol is identical. |
 
@@ -153,7 +153,7 @@ sudo ./camex \
 | `--local-cidr <cidr>` | `-l` | Tunnel address in `address/prefix` form |
 | `--gateway-ip <addr>` | `-g` | Client gateway inside the tunnel |
 | `--server-host <addr>` | `-s` | Server hostname or IP for client mode |
-| `--port <port>` | `-p` | Server UDP port (client) or listen port (server) |
+| `--port <port>` | `-p` | Server port (UDP) for client or listen port for server |
 | `--bind-ip <addr>` | `-b` | Optional server bind address |
 | `--config <path>` | `-f` | Server config file path |
 | `--route-cidr <cidr>` | `-c` | Extra route to install on the client; repeatable |
@@ -162,7 +162,7 @@ sudo ./camex \
 | `--encrypt` | `-e` | Enable ChaCha20-Poly1305 transport |
 | `--tun-dev <path>` | `-T` | TUN device path (default: auto-detect `/dev/net/tun` then `/dev/camex`) |
 | `--pid-file <path>` | `-P` | Write PID to file on startup |
-| `--bind-dev <iface>` | `-d` | Bind socket to a specific network interface (server) |
+| `--bind-dev <iface>` | `-d` | Bind socket to a specific network interface (`SO_BINDTODEVICE`) |
 | `--version` | `-v` | Print version and exit |
 | `--help` | `-h` | Print usage and exit |
 
@@ -444,7 +444,7 @@ sudo rmmod camex
 | O_NONBLOCK                        | Yes                | Yes                  |
 | Statistics (`ip -s link`)         | Yes                | Yes                  |
 | Kernel 3.x support                | Yes                | Yes                  |
-| Code size                         | ~350 lines         | ~3500 lines          |
+| Code size                         | ~490 lines         | ~3500 lines          |
 
 ### Internal Specifics
 
