@@ -18,7 +18,7 @@ CFLAGS   += -std=c99 -D_POSIX_C_SOURCE=200809L \
             -Os -ffunction-sections -fdata-sections
 LDFLAGS  += -Wl,--gc-sections
 
-SRCS = camex.c monocypher.c
+SRCS = main.c camex.c monocypher.c util.c log.c crypto.c tun.c net.c proto.c config.c client.c server.c
 OBJS = $(SRCS:.c=.o)
 
 KDIR ?= /lib/modules/$(shell uname -r)/build
