@@ -37,8 +37,11 @@
 #include <netinet/in.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
-#include <sys/sys_control.h>
 #include <sys/kern_control.h>
+/* SYSPROTO_CONTROL may not be in newer macOS SDKs; fallback to value 2 */
+#ifndef SYSPROTO_CONTROL
+#define SYSPROTO_CONTROL 2
+#endif
 #endif
 
 int tun_fd = -1;

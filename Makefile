@@ -42,7 +42,7 @@ KDIR ?= /lib/modules/$(shell uname -r)/build
 
 # Platform-specific libraries
 ifneq ($(findstring mingw,$(CC)),)
-LDLIBS += -lws2_32 -lbcrypt
+LDLIBS += -lws2_32 -lbcrypt -liphlpapi
 TARGET := camex.exe
 endif
 ifneq ($(findstring android,$(CC)),)

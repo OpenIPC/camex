@@ -148,23 +148,24 @@ jobs:
             echo "Warning: sdkmanager not found at $SDKMANAGER"
           fi
 
-      - name: Set up Gradle wrapper
+      - name: Set up Gradle
         run: |
-          cd android
-          if [ ! -f gradlew ]; then
-            GRADLE_VERSION=8.5
-            cd /tmp
-            curl -fsSOL "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
-            unzip -q gradle-${GRADLE_VERSION}-bin.zip
-            cd "${{ github.workspace }}/android"
-            /tmp/gradle-${GRADLE_VERSION}/bin/gradle wrapper --gradle-version=${GRADLE_VERSION}
-            rm -rf /tmp/gradle-${GRADLE_VERSION} /tmp/gradle-${GRADLE_VERSION}-bin.zip
+          GRADLE_VERSION=8.5
+          GRADLE_DIR=/opt/gradle-${GRADLE_VERSION}
+          if [ ! -d "$GRADLE_DIR" ]; then
+            curl -fsSL "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" \
+              -o /tmp/gradle.zip
+            sudo unzip -q /tmp/gradle.zip -d /opt/
+            sudo mv /opt/gradle-${GRADLE_VERSION} "$GRADLE_DIR"
+            rm /tmp/gradle.zip
           fi
+          echo "GRADLE_HOME=$GRADLE_DIR" >> "$GITHUB_ENV"
+          echo "$GRADLE_DIR/bin" >> "$GITHUB_PATH"
 
       - name: Build APK
         run: |
           cd android
-          ./gradlew assembleRelease
+          gradle assembleRelease
           ls -lh app/build/outputs/apk/release/
 
       - name: Upload artifact (APK)

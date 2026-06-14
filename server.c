@@ -619,7 +619,7 @@ int server_socket_create(const char *bind_ip, int port,
     }
 
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
-                   &reuse, sizeof(reuse)) < 0) {
+                   (const char *)&reuse, sizeof(reuse)) < 0) {
         print_errno_message(LOG_WARNING, "setsockopt(SO_REUSEADDR)");
     }
 
