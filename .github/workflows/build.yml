@@ -333,12 +333,52 @@ jobs:
           echo "=== Release binaries ==="
           ls -lh release-binaries/
 
-      - name: Create release (gh CLI — no push event loop)
+      - name: Package .zip archives for macOS and Windows
+        run: |
+          # macOS .zip
+          if [ -f release-binaries/camex-darwin ]; then
+            VERSION="${{ steps.tag.outputs.tag }}"
+            VERSION="${VERSION#v}"
+            [ -z "$VERSION" ] && VERSION="0.0.0"
+            mkdir -p pkg-macos
+            cp release-binaries/camex-darwin pkg-macos/camex
+            cp LICENSE README.md pkg-macos/ 2>/dev/null || true
+            cd pkg-macos && zip -9 "../release-binaries/camex-${VERSION}-macos.zip" * && cd ..
+            rm -rf pkg-macos
+          fi
+          # Windows .zip — download wintun.dll (AMD64) and bundle
+          if [ -f release-binaries/camex.exe ]; then
+            VERSION="${{ steps.tag.outputs.tag }}"
+            VERSION="${VERSION#v}"
+            [ -z "$VERSION" ] && VERSION="0.0.0"
+            mkdir -p pkg-windows
+            cp release-binaries/camex.exe pkg-windows/
+            cp LICENSE README.md pkg-windows/ 2>/dev/null || true
+            # Download wintun.dll (AMD64) from official release
+            curl -fsSL "https://www.wintun.net/builds/wintun-0.14.1.zip" -o /tmp/wintun.zip
+            unzip -q -o /tmp/wintun.zip -d /tmp/wintun-extract
+            find /tmp/wintun-extract -name 'wintun.dll' -path '*/amd64/*' -exec cp {} pkg-windows/wintun.dll \;
+            cd pkg-windows && zip -9 "../release-binaries/camex-${VERSION}-windows.zip" * && cd ..
+            rm -rf pkg-windows /tmp/wintun.zip /tmp/wintun-extract
+          fi
+          echo "=== Release binaries (final) ==="
+          ls -lh release-binaries/
+
+      - name: Create or update release (gh CLI)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ steps.tag.outputs.tag }}" \
-            --repo "${{ github.repository }}" \
-            --title "camex ${{ steps.tag.outputs.tag }}" \
-            --generate-notes \
-            release-binaries/*
+          if gh release view "${{ steps.tag.outputs.tag }}" --repo "${{ github.repository }}" &>/dev/null; then
+            # Release exists — upload/clobber new assets
+            gh release upload "${{ steps.tag.outputs.tag }}" \
+              --repo "${{ github.repository }}" \
+              --clobber \
+              release-binaries/*
+          else
+            # Create new release
+            gh release create "${{ steps.tag.outputs.tag }}" \
+              --repo "${{ github.repository }}" \
+              --title "camex ${{ steps.tag.outputs.tag }}" \
+              --generate-notes \
+              release-binaries/*
+          fi

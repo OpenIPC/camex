@@ -2,7 +2,7 @@
  *
  * Copyright (c) OpenIPC  https://openipc.org  MIT License
  *
- * tun.c — TUN device creation and I/O (Linux / macOS / Win32 stub)
+ * tun.c — TUN device creation and I/O (Linux / macOS / Windows WinTUN)
  *
  */
 
@@ -44,6 +44,11 @@
 #endif
 #endif
 
+#ifdef _WIN32
+#include "wintun.h"
+#include <process.h>   /* _beginthreadex */
+#endif
+
 int tun_fd = -1;
 char tun_name[IFNAMSIZ];
 static int tun_from_env = 0; /* 1 = fd was passed via CAMEX_TUN_FD */
@@ -69,7 +74,7 @@ int tun_accept_fd(void)
     tun_fd = (int)fd;
     tun_from_env = 1;
     snprintf(tun_name, sizeof(tun_name), "camex-android");
-    log_message(LOG_INFO, "TUN backend: fd %d from environment (Android VpnService)", tun_fd);
+    log_message(LOG_INFO, "TUN backend: fd %d from environment (Android VpnService)", (int)fd);
     return tun_fd;
 }
 
@@ -213,6 +218,126 @@ done:
 }
 #endif /* __APPLE__ */
 
+#ifdef _WIN32
+/* WinTUN reader thread: waits for packets from WinTUN and forwards
+ * them to a UDP signal socket so the main select() loop can work. */
+struct wintun_thread_arg {
+    WINTUN_SESSION_HANDLE sess;
+    SOCKET signal_sock;
+    struct sockaddr_in signal_dest;
+    volatile int *running;
+};
+
+static unsigned int __stdcall wintun_reader_thread(void *arg)
+{
+    struct wintun_thread_arg *a = (struct wintun_thread_arg *)arg;
+    HANDLE wait_ev;
+    BYTE *packet;
+    DWORD packet_size;
+    int ret;
+    WINTUN_SESSION_HANDLE sess = a->sess;
+    SOCKET sock = a->signal_sock;
+    struct sockaddr_in dest = a->signal_dest;
+    volatile int *running = a->running;
+
+    wait_ev = pWintunGetReadWaitEvent(sess);
+    if (wait_ev == NULL) {
+        log_message(LOG_ERR, "WinTUN: WintunGetReadWaitEvent failed");
+        return 1;
+    }
+
+    while (*running) {
+        ret = WaitForSingleObject(wait_ev, 1000);
+        if (ret == WAIT_TIMEOUT) {
+            continue;
+        }
+        if (!*running) {
+            break;
+        }
+        /* Drain all available packets */
+        for (;;) {
+            packet = pWintunReceivePacket(sess, &packet_size);
+            if (packet == NULL) {
+                break;  /* no more packets */
+            }
+            /* Forward to UDP signal socket for main loop */
+            sendto(sock, (const char *)packet, (int)packet_size, 0,
+                   (const struct sockaddr *)&dest, sizeof(dest));
+            pWintunReleaseReceivePacket(sess, packet);
+        }
+    }
+    return 0;
+}
+#endif /* _WIN32 */
+
+#ifdef _WIN32
+static int set_ip_windows(const char *adapter_name,
+                          const char *local_ip, const char *netmask_str,
+                          int mtu)
+{
+    NET_LUID luid;
+    MIB_UNICASTIPADDRESS_ROW addr_row;
+    ULONG status;
+    int prefix_len = 0;
+    struct in_addr mask;
+
+    (void)adapter_name;
+
+    /* Parse netmask to prefix length */
+    if (inet_pton(AF_INET, netmask_str, &mask) != 1) {
+        log_message(LOG_ERR, "WinTUN: invalid netmask '%s'", netmask_str);
+        return -1;
+    }
+    {
+        ULONG mask_bits = ntohl(mask.s_addr);
+        while (mask_bits & 0x80000000) { ++prefix_len; mask_bits <<= 1; }
+    }
+
+    pWintunGetAdapterLUID(g_wintun_adapter, &luid);
+
+    /* Set IP address via IP Helper API */
+    InitializeUnicastIpAddressEntry(&addr_row);
+    addr_row.Address.Ipv4.sin_family = AF_INET;
+    inet_pton(AF_INET, local_ip, &addr_row.Address.Ipv4.sin_addr);
+    addr_row.OnLinkPrefixLength = (UINT8)prefix_len;
+    addr_row.DadState = IpDadStatePreferred;
+    memcpy(&addr_row.InterfaceLuid, &luid, sizeof(luid));
+
+    status = CreateUnicastIpAddressEntry(&addr_row);
+    if (status != NO_ERROR && status != ERROR_OBJECT_ALREADY_EXISTS) {
+        log_message(LOG_ERR, "WinTUN: CreateUnicastIpAddressEntry failed (%lu)",
+                    status);
+        return -1;
+    }
+
+    /* Set MTU via netsh */
+    {
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd),
+                 "netsh interface ipv4 set subinterface \"%S\" mtu=%d "
+                 "store=persist >nul 2>&1",
+                 L"Camex", mtu);
+        system(cmd);
+    }
+
+    /* Bring interface up */
+    {
+        MIB_IPINTERFACE_ROW iface;
+        InitializeIpInterfaceEntry(&iface);
+        iface.Family = AF_INET;
+        iface.InterfaceLuid = luid;
+        status = GetIpInterfaceEntry(&iface);
+        if (status == NO_ERROR) {
+            iface.InterfaceMetric = 0;
+            iface.SitePrefixLength = 0;
+            status = SetIpInterfaceEntry(&iface);
+        }
+    }
+
+    return 0;
+}
+#endif
+
 int tun_create_device(const char *local_ip, const char *netmask,
                       int mtu, const char *tun_dev_override)
 {
@@ -221,10 +346,127 @@ int tun_create_device(const char *local_ip, const char *netmask,
     (void)mtu;
 
 #if defined(_WIN32)
-    /* Windows: WinTUN is not bundled; return a clear error */
-    log_message(LOG_ERR, "TUN devices are not supported on Windows "
-                "(install WinTUN and recompile with -lwintun)");
-    return -1;
+    WINTUN_ADAPTER_HANDLE adapter;
+    SOCKET signal_sock;
+    struct sockaddr_in signal_addr;
+    int socklen;
+    HANDLE thread_h;
+    unsigned int thread_id;
+    struct wintun_thread_arg *targ;
+
+    if (local_ip == NULL || netmask == NULL || mtu <= 0) {
+        return -1;
+    }
+
+    /* Load wintun.dll */
+    if (wintun_load_dll() != 0) {
+        log_message(LOG_ERR, "WinTUN: failed to load wintun.dll");
+        return -1;
+    }
+
+    /* Create adapter */
+    adapter = pWintunCreateAdapter(L"Camex", L"Camex", NULL);
+    if (adapter == NULL) {
+        log_message(LOG_ERR, "WinTUN: WintunCreateAdapter failed (%lu)",
+                    GetLastError());
+        wintun_unload_dll();
+        return -1;
+    }
+    g_wintun_adapter = adapter;
+    log_message(LOG_INFO, "WinTUN: adapter 'Camex' created");
+
+    /* Set IP address, netmask, MTU */
+    if (set_ip_windows("Camex", local_ip, netmask, mtu) != 0) {
+        log_message(LOG_ERR, "WinTUN: failed to configure IP/MTU");
+        pWintunCloseAdapter(adapter);
+        g_wintun_adapter = NULL;
+        wintun_unload_dll();
+        return -1;
+    }
+
+    /* Start session */
+    g_wintun_sess = pWintunStartSession(adapter, WINTUN_MIN_RING_CAPACITY);
+    if (g_wintun_sess == NULL) {
+        log_message(LOG_ERR, "WinTUN: WintunStartSession failed (%lu)",
+                    GetLastError());
+        pWintunCloseAdapter(adapter);
+        g_wintun_adapter = NULL;
+        wintun_unload_dll();
+        return -1;
+    }
+
+    /* Create UDP signal socket for the reader thread */
+    signal_sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (signal_sock == INVALID_SOCKET) {
+        log_message(LOG_ERR, "WinTUN: signal socket creation failed (%lu)",
+                    WSAGetLastError());
+        pWintunEndSession(g_wintun_sess);
+        g_wintun_sess = NULL;
+        pWintunCloseAdapter(adapter);
+        g_wintun_adapter = NULL;
+        wintun_unload_dll();
+        return -1;
+    }
+
+    /* Bind to localhost:0 */
+    memset(&signal_addr, 0, sizeof(signal_addr));
+    signal_addr.sin_family = AF_INET;
+    signal_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    signal_addr.sin_port = 0;
+    if (bind(signal_sock, (struct sockaddr *)&signal_addr,
+             sizeof(signal_addr)) < 0) {
+        log_message(LOG_ERR, "WinTUN: signal socket bind failed (%lu)",
+                    WSAGetLastError());
+        closesocket(signal_sock);
+        pWintunEndSession(g_wintun_sess);
+        g_wintun_sess = NULL;
+        pWintunCloseAdapter(adapter);
+        g_wintun_adapter = NULL;
+        wintun_unload_dll();
+        return -1;
+    }
+
+    /* Get the port we bound to */
+    socklen = sizeof(signal_addr);
+    getsockname(signal_sock, (struct sockaddr *)&signal_addr, &socklen);
+
+    /* Start the reader thread */
+    g_wintun_running = 1;
+    targ = (struct wintun_thread_arg *)malloc(sizeof(*targ));
+    if (targ == NULL) {
+        closesocket(signal_sock);
+        pWintunEndSession(g_wintun_sess);
+        g_wintun_sess = NULL;
+        pWintunCloseAdapter(adapter);
+        g_wintun_adapter = NULL;
+        wintun_unload_dll();
+        return -1;
+    }
+    targ->sess = g_wintun_sess;
+    targ->signal_sock = signal_sock;
+    targ->signal_dest = signal_addr;
+    targ->running = &g_wintun_running;
+
+    thread_h = (HANDLE)_beginthreadex(NULL, 0, wintun_reader_thread,
+                                       targ, 0, &thread_id);
+    if (thread_h == NULL) {
+        log_message(LOG_ERR, "WinTUN: failed to start reader thread");
+        free(targ);
+        closesocket(signal_sock);
+        pWintunEndSession(g_wintun_sess);
+        g_wintun_sess = NULL;
+        pWintunCloseAdapter(adapter);
+        g_wintun_adapter = NULL;
+        wintun_unload_dll();
+        return -1;
+    }
+    g_wintun_thread = thread_h;
+
+    tun_fd = (int)signal_sock;
+    snprintf(tun_name, sizeof(tun_name), "wintun0");
+    log_message(LOG_INFO, "TUN backend: wintun (session %p, signal fd %d)",
+                (void *)g_wintun_sess, (int)tun_fd);
+    return 0;
 #elif defined(__APPLE__)
     int fd;
 
@@ -379,11 +621,36 @@ int tun_create_device(const char *local_ip, const char *netmask,
 
 void tun_close_device(void)
 {
+#if defined(_WIN32)
+    /* Stop WinTUN reader thread */
+    g_wintun_running = 0;
+    if (g_wintun_thread != NULL) {
+        WaitForSingleObject(g_wintun_thread, 3000);
+        CloseHandle(g_wintun_thread);
+        g_wintun_thread = NULL;
+    }
+    /* Close WinTUN session */
+    if (g_wintun_sess != NULL) {
+        pWintunEndSession(g_wintun_sess);
+        g_wintun_sess = NULL;
+    }
+    /* Destroy WinTUN adapter */
+    if (g_wintun_adapter != NULL) {
+        pWintunDeleteAdapter(g_wintun_adapter, TRUE);
+        pWintunCloseAdapter(g_wintun_adapter);
+        g_wintun_adapter = NULL;
+    }
+    /* Close signal socket */
     if (tun_fd >= 0) {
-        close(tun_fd);
+        closesocket((SOCKET)tun_fd);
         tun_fd = -1;
     }
-#if !defined(_WIN32)
+    wintun_unload_dll();
+#else
+    if (tun_fd >= 0) {
+        close((int)tun_fd);
+        tun_fd = -1;
+    }
     reset_tun_backend();
 #endif
 }
@@ -411,6 +678,20 @@ ssize_t tun_read_packet(uint8_t *buffer, size_t size)
 
     memcpy(buffer, raw + 4, (size_t)len);
     return len;
+#elif defined(_WIN32)
+    /* Windows WinTUN: read from UDP signal socket */
+    ssize_t len;
+
+    if (tun_fd < 0 || buffer == NULL || size == 0U) {
+        return -1;
+    }
+
+    {
+        int addr_len = 0;
+        len = recvfrom((SOCKET)tun_fd, (char *)buffer, (int)size, 0,
+                       NULL, &addr_len);
+    }
+    return (len < 0) ? -1 : len;
 #else
     ssize_t len;
 
@@ -425,8 +706,6 @@ ssize_t tun_read_packet(uint8_t *buffer, size_t size)
 
 int tun_write_packet(const uint8_t *buffer, size_t len)
 {
-    ssize_t written;
-
     if (tun_fd < 0 || buffer == NULL || len == 0U) {
         return -1;
     }
@@ -436,6 +715,7 @@ int tun_write_packet(const uint8_t *buffer, size_t len)
     {
         uint8_t raw[TUN_PACKET_MAX + 4];
         uint32_t family = htonl(AF_INET);
+        ssize_t written;
 
         if (len + 4 > sizeof(raw)) {
             return -1;
@@ -448,10 +728,31 @@ int tun_write_packet(const uint8_t *buffer, size_t len)
             return -1;
         }
     }
+#elif defined(_WIN32)
+    /* Windows WinTUN: allocate and send */
+    {
+        BYTE *packet;
+
+        if (g_wintun_sess == NULL) {
+            return -1;
+        }
+
+        packet = pWintunAllocateSendPacket(g_wintun_sess, (DWORD)len);
+        if (packet == NULL) {
+            return -1;
+        }
+
+        memcpy(packet, buffer, len);
+        pWintunSendPacket(g_wintun_sess, packet);
+    }
 #else
-    written = write(tun_fd, buffer, len);
-    if (written < 0 || (size_t)written != len) {
-        return -1;
+    {
+        ssize_t written;
+
+        written = write(tun_fd, buffer, len);
+        if (written < 0 || (size_t)written != len) {
+            return -1;
+        }
     }
 #endif
 

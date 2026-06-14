@@ -13,7 +13,12 @@
 #include <stddef.h>
 #include <sys/types.h>
 
-/* TUN file descriptor (global, accessible from modules) */
+/*
+ * TUN file descriptor (global, accessible from modules).
+ * On POSIX: native fd (int).
+ * On Windows: Winsock SOCKET stored as int (signal socket for WinTUN).
+ * Windows socket handles are typically small integers; the cast is safe.
+ */
 extern int tun_fd;
 extern char tun_name[];
 

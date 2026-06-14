@@ -40,6 +40,7 @@ else
 endif
 
 SRCS = main.c camex.c monocypher.c util.c log.c crypto.c tun.c net.c proto.c config.c client.c server.c
+SRCS += wintun.c
 OBJS = $(SRCS:.c=.o)
 
 KDIR ?= /lib/modules/$(shell uname -r)/build
