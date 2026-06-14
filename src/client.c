@@ -106,8 +106,8 @@ int client_handle_net_packet(const uint8_t *buffer, size_t len)
             net_sockaddr_to_string(&server_addr, peer, sizeof(peer));
             log_message(LOG_WARNING,
                         "Crypto error: failed to decrypt packet "
-                        "from server %s (len=%zu)",
-                        peer, len);
+                        "from server %s (len=%u)",
+                        peer, (unsigned)len);
             return -1;
         }
 
@@ -219,8 +219,9 @@ int client_apply_config_response(const uint8_t *payload, size_t payload_len)
 
     if (payload == NULL || payload_len >= sizeof(message)) {
         log_message(LOG_ERR,
-                    "Config response too large: %zu bytes (max %zu)",
-                    payload_len, sizeof(message) - 1U);
+                    "Config response too large: %u bytes (max %u)",
+                    (unsigned)payload_len,
+                    (unsigned)(sizeof(message) - 1U));
         return -1;
     }
 

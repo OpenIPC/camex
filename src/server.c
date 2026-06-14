@@ -513,8 +513,8 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
             net_sockaddr_to_string(from, peer, sizeof(peer));
             log_message(LOG_WARNING,
                         "Crypto error from %s: decrypt failed, "
-                        "trying all %zu keystore keys",
-                        peer, server_keystore_count);
+                        "trying all %u keystore keys",
+                        peer, (unsigned)server_keystore_count);
 
             used_key = server_try_all_keys(buffer, len, &type, plain,
                                            sizeof(plain), &plain_len, &seq);
@@ -523,10 +523,11 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
                 net_sockaddr_to_string(from, peer_str, sizeof(peer_str));
                 log_message(LOG_WARNING,
                             "Dropped packet from %s: "
-                            "decryption failed with all %zu keys "
-                            "(type=%u, len=%zu)",
-                            peer_str, server_keystore_count,
-                            (unsigned)(len > 4 ? buffer[4] : 0), len);
+                            "decryption failed with all %u keys "
+                            "(type=%u, len=%u)",
+                            peer_str, (unsigned)server_keystore_count,
+                            (unsigned)(len > 4 ? buffer[4] : 0),
+                            (unsigned)len);
                 return -1;
             }
             decrypt_src = server_find_by_addr(from);

@@ -400,8 +400,8 @@ void config_build_keystore(void)
     }
     crypto_wipe(server_db.defaults.psk, sizeof(server_db.defaults.psk));
 
-    log_message(LOG_INFO, "Server keystore: %zu PSK(s) loaded",
-                server_keystore_count);
+    log_message(LOG_INFO, "Server keystore: %u PSK(s) loaded",
+                (unsigned)server_keystore_count);
 }
 
 int config_apply_profile(camex_config_t *config, const camex_profile_t *profile)

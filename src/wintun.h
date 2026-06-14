@@ -19,6 +19,8 @@
 #define NTDDI_VERSION 0x06010000
 #endif
 
+/* winsock2.h MUST come before windows.h (MinGW requirement) */
+#include <winsock2.h>
 #include <windows.h>
 #include <winternl.h>
 #include <iphlpapi.h>

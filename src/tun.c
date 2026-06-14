@@ -353,6 +353,7 @@ int tun_create_device(const char *local_ip, const char *netmask,
     (void)mtu;
 
 #if defined(_WIN32)
+    (void)tun_dev_override;
     WINTUN_ADAPTER_HANDLE adapter;
     SOCKET signal_sock;
     struct sockaddr_in signal_addr;
@@ -375,7 +376,7 @@ int tun_create_device(const char *local_ip, const char *netmask,
     adapter = pWintunCreateAdapter(L"Camex", L"Camex", NULL);
     if (adapter == NULL) {
         log_message(LOG_ERR, "WinTUN: WintunCreateAdapter failed (%lu)",
-                    GetLastError());
+                    (unsigned long)GetLastError());
         wintun_unload_dll();
         return -1;
     }
@@ -395,7 +396,7 @@ int tun_create_device(const char *local_ip, const char *netmask,
     g_wintun_sess = pWintunStartSession(adapter, WINTUN_MIN_RING_CAPACITY);
     if (g_wintun_sess == NULL) {
         log_message(LOG_ERR, "WinTUN: WintunStartSession failed (%lu)",
-                    GetLastError());
+                    (unsigned long)GetLastError());
         pWintunCloseAdapter(adapter);
         g_wintun_adapter = NULL;
         wintun_unload_dll();
@@ -406,7 +407,7 @@ int tun_create_device(const char *local_ip, const char *netmask,
     signal_sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (signal_sock == INVALID_SOCKET) {
         log_message(LOG_ERR, "WinTUN: signal socket creation failed (%lu)",
-                    WSAGetLastError());
+                    (unsigned long)WSAGetLastError());
         pWintunEndSession(g_wintun_sess);
         g_wintun_sess = NULL;
         pWintunCloseAdapter(adapter);
@@ -423,7 +424,7 @@ int tun_create_device(const char *local_ip, const char *netmask,
     if (bind(signal_sock, (struct sockaddr *)&signal_addr,
              sizeof(signal_addr)) < 0) {
         log_message(LOG_ERR, "WinTUN: signal socket bind failed (%lu)",
-                    WSAGetLastError());
+                    (unsigned long)WSAGetLastError());
         closesocket(signal_sock);
         pWintunEndSession(g_wintun_sess);
         g_wintun_sess = NULL;
