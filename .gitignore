@@ -1,0 +1,20 @@
+# Local plan files (not for commit/push)
+PLAN.md
+
+# Build artifacts
+camex
+camex.exe
+build/
+src/camex
+*.o
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
