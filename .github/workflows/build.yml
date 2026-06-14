@@ -251,6 +251,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           path: artifacts
+          merge-multiple: true
 
       - name: Generate size table
         run: |
@@ -258,9 +259,9 @@ jobs:
           echo "" >> sizes-table.md
           echo "| Platform | Size |" >> sizes-table.md
           echo "|----------|------|" >> sizes-table.md
-          find artifacts -type f -name 'camex-*' | sort | while read f; do
+          find artifacts -type f \( -name 'camex-*' -o -name 'camex.exe' \) | sort | while read f; do
             sz=$(ls -lh "$f" | awk '{print $5}')
-            name=$(basename "$f" | sed 's/camex-//')
+            name=$(basename "$f" | sed 's/camex-//; s/\.exe//')
             echo "| $name | $sz |" >> sizes-table.md
           done
           cat sizes-table.md
@@ -281,15 +282,25 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout (for release notes)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
       - name: Download all artifacts
         uses: actions/download-artifact@v7
         with:
           path: artifacts
+          merge-multiple: true
 
-      - name: Collect binaries
+      - name: Collect release binaries
         run: |
           mkdir release-binaries
-          find artifacts -type f -name 'camex-*' -exec cp {} release-binaries/ \;
+          # Collect all camex-* and camex.exe binaries
+          find artifacts -type f \( -name 'camex-*' -o -name 'camex.exe' \) \
+            -exec cp -v {} release-binaries/ \;
+          echo "=== Release binaries ==="
+          ls -lh release-binaries/
 
       - name: Create release
         uses: softprops/action-gh-release@v3
