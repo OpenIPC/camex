@@ -9,7 +9,9 @@
 #ifndef CAMEX_H
 #define CAMEX_H
 
+#ifndef _WIN32
 #include <net/if.h>
+#endif
 #include <signal.h>
 #include <stdint.h>
 #include <time.h>
