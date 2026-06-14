@@ -467,6 +467,7 @@ int server_forward_packet(const uint8_t *packet, size_t len,
                 &encrypted_len) != 0) {
             return -1;
         }
+        dst->send_seq = seq + 1U;
         if (dst->tcp_fd >= 0) {
             return net_tcp_send_frame(dst->tcp_fd, encrypted, encrypted_len);
         }
