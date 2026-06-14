@@ -29,6 +29,34 @@ CLIENT_NAME="camex-client-$$"
 PASS="ci-test-pass"
 PASSFILE="/tmp/camex-psk-$$"
 
+run_docker() {
+    local label="$1" name="$2" extra="$3"
+    shift 3
+    echo "   Starting $label container..."
+    cid=$(docker run -d --name "$name" \
+        --network "$NET_NAME" \
+        --cap-add NET_ADMIN \
+        --device /dev/net/tun:/dev/net/tun \
+        --security-opt seccomp=unconfined \
+        $extra \
+        camex:smoke \
+        "$@" 2>&1) || {
+        echo "   ERROR: docker run failed: $cid"
+        return 1
+    }
+    echo "   Container: $name ($cid)"
+    # Give it a moment to start
+    sleep 1
+    # Check the container is still running
+    if ! docker ps --format '{{.Names}}' | grep -qx "$name"; then
+        ec=$(docker inspect "$name" --format='{{.State.ExitCode}}' 2>/dev/null || echo "?")
+        echo "   ERROR: $label exited (code=$ec). Logs:"
+        docker logs "$name" 2>&1 || true
+        return 1
+    fi
+    return 0
+}
+
 cleanup() {
     echo "=== Cleaning up ==="
     docker rm -f "$SERVER_NAME" "$CLIENT_NAME" 2>/dev/null || true
@@ -54,8 +82,18 @@ echo "2. Version check..."
 "$CAMEX_BINARY" --version 2>&1
 echo ""
 
+# --- Load tun module (if not loaded) ---
+echo "3. Loading tun kernel module..."
+if [ -c /dev/net/tun ]; then
+    echo "   /dev/net/tun already exists"
+else
+    sudo modprobe tun 2>/dev/null && echo "   tun module loaded" || \
+        echo "   WARNING: could not load tun module, TUN will not work"
+fi
+echo ""
+
 # --- Build Docker image ---
-echo "3. Building Docker smoke image..."
+echo "4. Building Docker smoke image..."
 BUILD_DIR=$(mktemp -d /tmp/camex-smoke-build-XXXXXX)
 cp "$CAMEX_BINARY" "$BUILD_DIR/camex"
 cp "$SCRIPT_DIR/Dockerfile.smoke" "$BUILD_DIR/"
@@ -65,94 +103,75 @@ echo "   OK"
 echo ""
 
 # --- Create test network ---
-echo "4. Creating Docker network..."
+echo "5. Creating Docker network..."
 docker network create "$NET_NAME" > /dev/null
 echo "   Network: $NET_NAME"
 echo ""
 
 # --- Start server ---
-echo "5. Starting server container..."
-echo "$PASS" > "$PASSFILE"
-# The server needs to be able to write PID file
-docker run -d --name "$SERVER_NAME" \
-    --network "$NET_NAME" \
-    --cap-add NET_ADMIN \
-    --device /dev/net/tun \
-    --security-opt apparmor=unconfined \
-    camex:smoke \
+echo "6. Starting server..."
+run_docker "Server" "$SERVER_NAME" "" \
     --mode server --port 7000 --bind-ip 0.0.0.0 \
     --encrypt --psk "$PASS" \
-    --pid-file /tmp/camex.pid 2>&1
+    --pid-file /tmp/camex.pid
+echo ""
 
 SERVER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$SERVER_NAME")
 echo "   Server IP: $SERVER_IP"
-echo "   Container: $SERVER_NAME"
-sleep 2
-
-# Verify server is running
-if ! docker ps --format '{{.Names}}' | grep -q "$SERVER_NAME"; then
-    echo "ERROR: server failed to start"
-    docker logs "$SERVER_NAME" 2>&1 || true
-    exit 2
-fi
-echo "   Server is running"
 echo ""
 
 # --- Start client ---
-echo "6. Starting client container (auto mode)..."
-docker run -d --name "$CLIENT_NAME" \
-    --network "$NET_NAME" \
-    --cap-add NET_ADMIN \
-    --device /dev/net/tun \
-    --security-opt apparmor=unconfined \
-    camex:smoke \
+echo "7. Starting client (auto mode)..."
+run_docker "Client" "$CLIENT_NAME" "" \
     --mode client --auto --name SMOKE01 \
     --server-host "$SERVER_NAME" --port 7000 \
     --encrypt --psk "$PASS" \
-    --pid-file /tmp/camex.pid 2>&1
-
-echo "   Container: $CLIENT_NAME"
-sleep 3
-
-# --- Check logs ---
-echo "7. Server logs:"
-docker logs "$SERVER_NAME" 2>&1 | tail -15
+    --pid-file /tmp/camex.pid
 echo ""
 
-echo "8. Client logs:"
-docker logs "$CLIENT_NAME" 2>&1 | tail -15
+sleep 2
+
+# --- Check logs ---
+echo "8. Server logs:"
+docker logs "$SERVER_NAME" 2>&1 | tail -20
+echo ""
+
+echo "9. Client logs:"
+docker logs "$CLIENT_NAME" 2>&1 | tail -20
 echo ""
 
 # --- Validate test outcome ---
-echo "9. Validating..."
+echo "10. Validating..."
 
 # Check server registered the client
 if docker logs "$SERVER_NAME" 2>&1 | grep -qiE "(registered|client.*SMOKE01)"; then
     echo "   ✅ Server detected client registration"
 else
-    echo "   ⚠️  Client registration not confirmed in server logs"
+    echo "   ⚠️  Client registration not confirmed"
 fi
 
-# Check client received config (auto mode response from server)
+# Check client received config
 if docker logs "$CLIENT_NAME" 2>&1 | grep -qiE "(config|register|assigned|tunnel)"; then
     echo "   ✅ Client processed server response"
 else
-    echo "   ⚠️  No config response seen in client logs"
+    echo "   ⚠️  No config response in client logs"
 fi
 
-# Check if both containers are still running
-SERVER_RUNNING=$(docker ps --format '{{.Names}}' | grep -c "$SERVER_NAME" || true)
-CLIENT_RUNNING=$(docker ps --format '{{.Names}}' | grep -c "$CLIENT_NAME" || true)
-echo "   Server running: $([ "$SERVER_RUNNING" -gt 0 ] && echo "✅" || echo "❌")"
-echo "   Client running: $([ "$CLIENT_RUNNING" -gt 0 ] && echo "✅" || echo "❌")"
+# Check both containers are still running
+SERVER_OK=$(docker ps --format '{{.Names}}' | grep -qxc "$SERVER_NAME" && echo 1 || echo 0)
+CLIENT_OK=$(docker ps --format '{{.Names}}' | grep -qxc "$CLIENT_NAME" && echo 1 || echo 0)
+echo "   Server running: $([ "$SERVER_OK" = 1 ] && echo "✅" || echo "❌")"
+echo "   Client running: $([ "$CLIENT_OK" = 1 ] && echo "✅" || echo "❌")"
 
 # --- Determine outcome ---
-if [ "$SERVER_RUNNING" -gt 0 ] || docker logs "$SERVER_NAME" 2>&1 | grep -qE "(listening|TUN|bound|register)"; then
-    echo ""
+echo ""
+if [ "$SERVER_OK" = 1 ] && [ "$CLIENT_OK" = 1 ]; then
     echo "=== ✅ SMOKE TEST PASSED ==="
     exit 0
-else
-    echo ""
-    echo "=== ❌ SMOKE TEST FAILED ==="
-    exit 2
 fi
+if [ "$SERVER_OK" = 1 ] || docker logs "$SERVER_NAME" 2>&1 | grep -qE "(listening|TUN|bound|register)"; then
+    echo "=== ✅ SMOKE TEST PASSED (minimal server activity) ==="
+    exit 0
+fi
+echo "=== ❌ SMOKE TEST FAILED ==="
+exit 2
