@@ -13,7 +13,12 @@
 
 #include <stdint.h>
 #include <stddef.h>
+
+#ifndef _WIN32
 #include <netinet/in.h>
+#else
+#include <winsock2.h>
+#endif
 
 /* Per-server-client state */
 typedef struct {

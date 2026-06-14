@@ -6,21 +6,33 @@
  *
  */
 
-#define _GNU_SOURCE
-
 #include "net.h"
 #include "log.h"
 #include "util.h"
 #include "camex.h"
 
-#include <arpa/inet.h>
 #include <errno.h>
-#include <netdb.h>
 #include <string.h>
 #include <stdio.h>
+
+#ifndef _WIN32
+#include <arpa/inet.h>
+#include <netdb.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <unistd.h>
+#else
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
+#ifdef _WIN32
+#define close(fd) closesocket(fd)
+#endif
 
 int net_fd = -1;
 int listen_fd = -1;
@@ -109,6 +121,7 @@ int net_tune_udp_socket(int fd)
 
 int net_configure_socket(int fd)
 {
+#ifdef __linux__
     if (current_config.bind_dev[0] != '\0') {
         if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE,
                        current_config.bind_dev,
@@ -116,6 +129,7 @@ int net_configure_socket(int fd)
             print_errno_message(LOG_WARNING, "setsockopt(SO_BINDTODEVICE)");
         }
     }
+#endif
 
     if (net_tune_udp_socket(fd) != 0) {
         print_errno_message(LOG_ERR, "fcntl(O_NONBLOCK)");
@@ -309,6 +323,13 @@ int net_tcp_listen(const char *bind_ip, int port)
         print_errno_message(LOG_WARNING, "setsockopt(SO_REUSEADDR)");
     }
 
+#if defined(__APPLE__)
+    {
+        int nosigpipe = 1;
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, sizeof(nosigpipe));
+    }
+#endif
+
     if (net_configure_socket(fd) != 0) {
         close(fd);
         return -1;
@@ -357,7 +378,15 @@ int net_tcp_connect(const char *host, int port)
         return -1;
     }
 
+#if defined(__APPLE__)
+    {
+        int nosigpipe = 1;
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, sizeof(nosigpipe));
+    }
+#endif
+
     /* Set bind_dev and buffer sizes before connect */
+#ifdef __linux__
     if (current_config.bind_dev[0] != '\0') {
         if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE,
                        current_config.bind_dev,
@@ -366,6 +395,7 @@ int net_tcp_connect(const char *host, int port)
                                 "setsockopt(SO_BINDTODEVICE)");
         }
     }
+#endif
     {
         int bufsize = 4 * 1024 * 1024;
         (void)setsockopt(fd, SOL_SOCKET, SO_RCVBUF,

@@ -12,11 +12,16 @@
 #include "log.h"
 #include "util.h"
 
-#include <arpa/inet.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <stdio.h>
+
+#ifndef _WIN32
+#include <arpa/inet.h>
+#else
+#include <winsock2.h>
+#endif
 
 int proto_build_register(const camex_config_t *config,
                          char *buffer, size_t size)

@@ -12,7 +12,11 @@
 #include "monocypher.h"
 
 #include <string.h>
+#ifndef _WIN32
 #include <arpa/inet.h>
+#else
+#include <winsock2.h>
+#endif
 
 static camex_crypto_t crypto_ctx;
 

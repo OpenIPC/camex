@@ -117,7 +117,6 @@ jobs:
   # ----------------------------------------------------------- android (NDK)
   android:
     name: Android (aarch64 NDK)
-    needs: [linux]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -143,17 +142,35 @@ jobs:
           llvm-strip --strip-unneeded build/camex-aarch64-android 2>/dev/null || true
           ls -lh build/camex-aarch64-android
 
-      - name: Upload artifact
+      - name: Build Android .ipk package
+        run: |
+          PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          make clean
+          make -j$(nproc) \
+            CC=aarch64-linux-android21-clang \
+            STRIP=llvm-strip
+          make ipk
+          mkdir -p build
+          cp camex_*.ipk build/
+          ls -lh build/camex_*.ipk
+
+      - name: Upload artifact (binary)
         uses: actions/upload-artifact@v7
         with:
           name: camex-aarch64-android
           path: build/camex-aarch64-android
           if-no-files-found: error
 
+      - name: Upload artifact (ipk)
+        uses: actions/upload-artifact@v7
+        with:
+          name: camex-aarch64-android-ipk
+          path: build/camex_*.ipk
+          if-no-files-found: ignore
+
   # ---------------------------------------------------------------- windows
   windows:
     name: Windows (MinGW)
-    needs: [linux]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -165,16 +182,14 @@ jobs:
           sudo apt-get install -y -qq gcc-mingw-w64-x86-64
 
       - name: Build for x86_64-w64-mingw32
-        continue-on-error: true
         run: |
           make clean
           make -j$(nproc) \
             CC=x86_64-w64-mingw32-gcc \
             STRIP=x86_64-w64-mingw32-strip \
-            LDFLAGS="-lws2_32" \
-            TARGET=camex.exe 2>&1 || echo "MinGW build failed (experimental)"
+            TARGET=camex.exe 2>&1
           mkdir -p build
-          cp camex.exe build/ 2>/dev/null || true
+          cp camex.exe build/
           x86_64-w64-mingw32-strip --strip-unneeded build/camex.exe 2>/dev/null || true
 
       - name: Upload artifact
@@ -187,7 +202,6 @@ jobs:
   # ------------------------------------------------------------- macos (utun)
   macos:
     name: macOS (clang + utun)
-    needs: [linux]
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -196,17 +210,15 @@ jobs:
           fetch-depth: 0
 
       - name: Build
-        continue-on-error: true
         run: |
           make clean
           make -j$(sysctl -n hw.logicalcpu) \
-            CC=clang 2>&1 || echo "macOS build failed (experimental)"
+            CC=clang 2>&1
           mkdir -p build
-          cp camex build/camex-darwin 2>/dev/null || true
+          cp camex build/camex-darwin
           strip --strip-unneeded build/camex-darwin 2>/dev/null || true
 
       - name: Smoke test (--help and --version)
-        continue-on-error: true
         run: |
           if [ -x build/camex-darwin ]; then
             build/camex-darwin --help 2>&1 | head -5
@@ -278,7 +290,7 @@ jobs:
   # ----------------------------------------------------------------- release
   release:
     name: GitHub Release
-    needs: [linux, smoke]
+    needs: [linux, smoke, android, windows, macos]
     runs-on: ubuntu-latest
     # Runs on tag push (auto) OR manual workflow_dispatch
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'

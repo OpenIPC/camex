@@ -9,9 +9,14 @@
 #ifndef CAMEX_NET_H
 #define CAMEX_NET_H
 
-#include <netinet/in.h>
 #include <stdint.h>
 #include <stddef.h>
+
+#ifndef _WIN32
+#include <netinet/in.h>
+#else
+#include <winsock2.h>
+#endif
 
 /* Transport type */
 typedef enum {
@@ -48,9 +53,6 @@ int net_open_udp_socket(void);
 
 /* Tune UDP buffer sizes */
 int net_tune_udp_socket(int fd);
-
-/* Set/clear SO_BINDTODEVICE */
-void net_set_bind_dev(const char *ifname);
 
 /* Close net_fd */
 void net_close(void);

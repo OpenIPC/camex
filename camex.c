@@ -6,8 +6,6 @@
  *
  */
 
-#define _GNU_SOURCE
-
 #include "camex.h"
 #include "client.h"
 #include "server.h"
@@ -27,24 +25,42 @@
 #if defined(__APPLE__)
 #include <sys/types.h>
 #endif
+#ifndef _WIN32
+#ifndef __APPLE__
 #include <net/route.h>
+#endif
 #include <net/if_arp.h>
+#endif
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/mman.h>
+#endif
 #ifdef __linux__
 #include <sys/prctl.h>
 #endif
+#ifndef _WIN32
 #include <sys/time.h>
 #include <sys/syslog.h>
 #include <sys/stat.h>
+#endif
 #include <time.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
+#if defined(__APPLE__)
+#include <ifaddrs.h>
+#include <net/if_dl.h>
+#endif
+#ifdef _WIN32
+#include <winsock2.h>
+#include <iphlpapi.h>
+#endif
 
 /* Global state */
 camex_config_t current_config;
@@ -57,6 +73,70 @@ uint8_t server_mode = 0;
 time_t client_reconnect_at = 0;
 uint8_t client_link_up = 0;
 
+#ifdef _WIN32
+static void read_default_gateway(char *ifname, size_t size)
+{
+    ULONG buflen = 0;
+    PIP_ADAPTER_INFO pAdapter = NULL;
+    PIP_ADAPTER_INFO pAdapterInfo;
+    DWORD ret;
+
+    if (ifname == NULL || size == 0U) {
+        return;
+    }
+    ifname[0] = '\0';
+
+    ret = GetAdaptersInfo(NULL, &buflen);
+    if (ret != ERROR_BUFFER_OVERFLOW) {
+        return;
+    }
+
+    pAdapterInfo = (PIP_ADAPTER_INFO)malloc(buflen);
+    if (pAdapterInfo == NULL) {
+        return;
+    }
+
+    if (GetAdaptersInfo(pAdapterInfo, &buflen) == NO_ERROR) {
+        pAdapter = pAdapterInfo;
+        while (pAdapter != NULL) {
+            if (pAdapter->GatewayList.IpAddress.String[0] != '\0' &&
+                strcmp(pAdapter->GatewayList.IpAddress.String, "0.0.0.0") != 0) {
+                snprintf(ifname, size, "%s", pAdapter->AdapterName);
+                break;
+            }
+            pAdapter = pAdapter->Next;
+        }
+    }
+
+    free(pAdapterInfo);
+}
+#elif defined(__APPLE__)
+static void read_default_gateway(char *ifname, size_t size)
+{
+    FILE *fp;
+    char line[256];
+
+    if (ifname == NULL || size == 0U) {
+        return;
+    }
+    ifname[0] = '\0';
+
+    fp = popen("/sbin/route -n get default 2>/dev/null", "r");
+    if (fp == NULL) {
+        return;
+    }
+
+    while (fgets(line, sizeof(line), fp) != NULL) {
+        char iface[IFNAMSIZ];
+        if (sscanf(line, " interface: %15s", iface) == 1) {
+            snprintf(ifname, size, "%s", iface);
+            break;
+        }
+    }
+
+    pclose(fp);
+}
+#else
 static void read_default_gateway(char *ifname, size_t size)
 {
     FILE *fp;
@@ -91,7 +171,88 @@ static void read_default_gateway(char *ifname, size_t size)
 
     fclose(fp);
 }
+#endif
 
+#ifdef _WIN32
+static int read_mac(const char *ifname, uint8_t mac[6])
+{
+    PIP_ADAPTER_INFO pAdapterInfo = NULL;
+    PIP_ADAPTER_INFO pAdapter;
+    ULONG buflen = sizeof(IP_ADAPTER_INFO);
+    DWORD ret;
+
+    if (ifname == NULL || mac == NULL || *ifname == '\0') {
+        return -1;
+    }
+
+    pAdapterInfo = (PIP_ADAPTER_INFO)malloc(buflen);
+    if (pAdapterInfo == NULL) {
+        return -1;
+    }
+
+    ret = GetAdaptersInfo(pAdapterInfo, &buflen);
+    if (ret == ERROR_BUFFER_OVERFLOW) {
+        free(pAdapterInfo);
+        pAdapterInfo = (PIP_ADAPTER_INFO)malloc(buflen);
+        if (pAdapterInfo == NULL) {
+            return -1;
+        }
+        ret = GetAdaptersInfo(pAdapterInfo, &buflen);
+    }
+
+    if (ret != NO_ERROR) {
+        free(pAdapterInfo);
+        return -1;
+    }
+
+    pAdapter = pAdapterInfo;
+    while (pAdapter != NULL) {
+        if (strcmp(pAdapter->AdapterName, ifname) == 0 &&
+            pAdapter->AddressLength >= 6) {
+            memcpy(mac, pAdapter->Address, 6);
+            free(pAdapterInfo);
+            return 0;
+        }
+        pAdapter = pAdapter->Next;
+    }
+
+    free(pAdapterInfo);
+    return -1;
+}
+#elif defined(__APPLE__)
+static int read_mac(const char *ifname, uint8_t mac[6])
+{
+    struct ifaddrs *ifap, *ifa;
+    int ret = -1;
+
+    if (ifname == NULL || mac == NULL || *ifname == '\0') {
+        return -1;
+    }
+
+    if (getifaddrs(&ifap) != 0) {
+        return -1;
+    }
+
+    for (ifa = ifap; ifa != NULL; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == NULL ||
+            ifa->ifa_addr->sa_family != AF_LINK) {
+            continue;
+        }
+        if (strcmp(ifa->ifa_name, ifname) != 0) {
+            continue;
+        }
+        struct sockaddr_dl *sdl = (struct sockaddr_dl *)ifa->ifa_addr;
+        if (sdl->sdl_alen >= 6) {
+            memcpy(mac, LLADDR(sdl), 6);
+            ret = 0;
+            break;
+        }
+    }
+
+    freeifaddrs(ifap);
+    return ret;
+}
+#else
 static int read_mac(const char *ifname, uint8_t mac[6])
 {
     struct ifreq ifr;
@@ -128,6 +289,7 @@ static int read_mac(const char *ifname, uint8_t mac[6])
 
     return 0;
 }
+#endif
 
 int derive_client_id(char *client_id, size_t client_id_size)
 {
@@ -736,6 +898,16 @@ void camex_stop(void)
     net_close();
 }
 
+#ifdef _WIN32
+static int run_ip_route(const char *verb, const char *cidr, const char *gateway)
+{
+    (void)verb;
+    (void)cidr;
+    (void)gateway;
+    log_message(LOG_WARNING, "Route management is not supported on Windows");
+    return 0;  /* non-fatal: continue without adding routes */
+}
+#else
 static int run_ip_route(const char *verb, const char *cidr, const char *gateway)
 {
     struct rtentry rt;
@@ -819,6 +991,7 @@ static int run_ip_route(const char *verb, const char *cidr, const char *gateway)
 
     return 0;
 }
+#endif
 
 int camex_add_route(const char *cidr, const char *gateway)
 {

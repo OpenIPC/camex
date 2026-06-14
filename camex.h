@@ -10,11 +10,9 @@
 #define CAMEX_H
 
 #ifndef _WIN32
-#if defined(__APPLE__)
-/* macOS requires sys/types.h before net/if.h under strict C99 */
-#include <sys/types.h>
-#endif
+#ifndef __APPLE__
 #include <net/if.h>
+#endif
 #endif
 #include <signal.h>
 #include <stdint.h>

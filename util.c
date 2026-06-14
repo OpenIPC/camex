@@ -6,23 +6,30 @@
  *
  */
 
-#define _GNU_SOURCE
-
 #include "util.h"
 #include "camex.h"
 #include "log.h"
 
-#include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifndef _WIN32
+#include <arpa/inet.h>
+#include <fcntl.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#else
+#include <windows.h>
+#include <bcrypt.h>
+#endif
+#if defined(__APPLE__)
+#include <CommonCrypto/CommonRandom.h>
+#endif
 
 void write_be64(uint8_t *dst, uint64_t val)
 {
@@ -70,6 +77,22 @@ int get_random_bytes(void *buf, size_t len)
     ssize_t ret;
     int fd;
 
+#ifdef _WIN32
+    (void)ret;
+    (void)fd;
+    if (BCryptGenRandom(NULL, (PUCHAR)buf, (ULONG)len,
+                        BCRYPT_USE_SYSTEM_PREFERRED_RNG) >= 0) {
+        return 0;
+    }
+    return -1;
+#elif defined(__APPLE__)
+    (void)ret;
+    (void)fd;
+    if (CCRandomGenerateBytes(buf, len) == kCCSuccess) {
+        return 0;
+    }
+    return -1;
+#else
 #ifdef SYS_getrandom
     ret = syscall(SYS_getrandom, buf, len, 0);
     if (ret == (ssize_t)len) {
@@ -84,6 +107,7 @@ int get_random_bytes(void *buf, size_t len)
     ret = read(fd, buf, (size_t)len);
     close(fd);
     return (ret == (ssize_t)len) ? 0 : -1;
+#endif
 }
 
 void trim_whitespace(char *text)
@@ -350,6 +374,7 @@ int token_value(const char *token, const char *key,
 
 int set_fd_nonblocking(int fd)
 {
+#ifndef _WIN32
     int flags;
 
     flags = fcntl(fd, F_GETFL, 0);
@@ -362,6 +387,10 @@ int set_fd_nonblocking(int fd)
     }
 
     return 0;
+#else
+    u_long mode = 1;
+    return (ioctlsocket(fd, FIONBIO, &mode) == 0) ? 0 : -1;
+#endif
 }
 
 int is_zero_key(const uint8_t key[32])

@@ -6,8 +6,6 @@
  *
  */
 
-#define _GNU_SOURCE
-
 #include "config.h"
 #include "crypto.h"
 #include "log.h"

@@ -6,8 +6,6 @@
  *
  */
 
-#define _GNU_SOURCE
-
 #include "client.h"
 #include "crypto.h"
 #include "log.h"
@@ -18,15 +16,20 @@
 #include "config.h"
 #include "camex.h"
 
-#include <arpa/inet.h>
 #include <errno.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
+
+#ifndef _WIN32
+#include <arpa/inet.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/time.h>
-#include <time.h>
 #include <unistd.h>
+#else
+#include <winsock2.h>
+#endif
 
 client_state_t client_state;
 

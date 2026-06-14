@@ -6,8 +6,6 @@
  *
  */
 
-#define _GNU_SOURCE
-
 #include "camex.h"
 #include "client.h"
 #include "server.h"
@@ -26,12 +24,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
+#ifndef _WIN32
+#include <unistd.h>
+#else
+#include <windows.h>
+#endif
 #ifdef __linux__
 #include <sys/prctl.h>
 #endif
+#ifndef _WIN32
+#include <sys/mman.h>
 #include <sys/syslog.h>
-#include <unistd.h>
+#endif
 
 void signal_handler(int sig)
 {
@@ -371,7 +375,7 @@ void print_usage(const char *progname)
 
     printf("Common options:\n");
     printf("  -t, --mtu <size>     Tunnel MTU, 576-9000 (default: 1500)\n");
-    printf("  -k, --psk <pass>     Passphrase used to derive encryption key\n");
+    printf("  -k, --psk <pass>     Passphrase stretched into a 32-byte key\n");
     printf("  -e, --encrypt        Enable ChaCha20-Poly1305 encryption\n");
     printf("  -P, --pid-file <path> Write PID to file on startup\n");
     printf("  -R, --transport <t>  Transport protocol: udp (default) or tcp\n");
@@ -398,17 +402,31 @@ int main(int argc, char *argv[])
     camex_config_t config;
     int parse_result;
 
+#ifdef _WIN32
+    {
+        WSADATA wsaData;
+        if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+            fprintf(stderr, "WSAStartup failed\n");
+            return 1;
+        }
+    }
+#endif
+
+#ifndef _WIN32
     if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
         fprintf(stderr,
             "SECURITY WARNING: mlockall failed (%s)"
             " — sensitive key material may be swapped to disk\n",
             strerror(errno));
     }
+#endif
 
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);
+#ifndef _WIN32
     openlog("camex", LOG_PID, LOG_DAEMON);
-#ifdef PR_SET_DUMPABLE
+#endif
+#ifdef __linux__
     prctl(PR_SET_DUMPABLE, 0);
 #endif
     signal(SIGINT, signal_handler);
@@ -424,31 +442,41 @@ int main(int argc, char *argv[])
 
     if (argc == 1) {
         print_usage(argv[0]);
+#ifndef _WIN32
         closelog();
+#endif
         return 0;
     }
 
     parse_result = parse_arguments(argc, argv, &config);
     if (parse_result != 0) {
         if (parse_result > 0) {
+#ifndef _WIN32
             closelog();
+#endif
             return 0;
         }
 
         print_usage(argv[0]);
+#ifndef _WIN32
         closelog();
+#endif
         return 1;
     }
 
     if (validate_config(&config) != 0) {
         print_usage(argv[0]);
+#ifndef _WIN32
         closelog();
+#endif
         return 1;
     }
 
     if (camex_init(&config) != 0) {
         log_message(LOG_ERR, "Initialization failed");
+#ifndef _WIN32
         closelog();
+#endif
         return 1;
     }
 
@@ -477,8 +505,12 @@ int main(int argc, char *argv[])
     camex_run();
     camex_stop();
     if (config.pid_file[0] != '\0') {
+#ifndef _WIN32
         unlink(config.pid_file);
+#endif
     }
+#ifndef _WIN32
     closelog();
+#endif
     return 0;
 }

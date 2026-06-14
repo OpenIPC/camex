@@ -6,8 +6,6 @@
  *
  */
 
-#define _GNU_SOURCE
-
 #include "server.h"
 #include "client.h"
 #include "crypto.h"
@@ -25,11 +23,16 @@
 #include <strings.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
+
+#ifndef _WIN32
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/time.h>
-#include <time.h>
 #include <unistd.h>
+#else
+#include <winsock2.h>
+#endif
 
 server_client_t server_clients[CAMEX_MAX_CLIENTS];
 
@@ -370,6 +373,7 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
         entry->addr = *from;
         entry->last_seen = g_now;
         entry->last_register_time = g_now;
+        snprintf(entry->client_id, sizeof(entry->client_id), "%s", client_id);
         server_reset_replay(entry);
         if (used_key != NULL) {
             memcpy(entry->psk_key, used_key, 32);

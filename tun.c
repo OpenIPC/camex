@@ -2,35 +2,42 @@
  *
  * Copyright (c) OpenIPC  https://openipc.org  MIT License
  *
- * tun.c — TUN device creation and I/O
+ * tun.c — TUN device creation and I/O (Linux / macOS / Win32 stub)
  *
  */
-
-#define _GNU_SOURCE
 
 #include "tun.h"
 #include "util.h"
 #include "log.h"
 #include "camex.h"
 
-#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <linux/if_tun.h>
-#ifndef _WIN32
-#if defined(__APPLE__)
-#include <sys/types.h>
-#endif
-#include <net/if.h>
-#endif
-#include <net/if_arp.h>
-#include <netinet/in.h>
 #include <string.h>
 #include <stdio.h>
+
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+#include <arpa/inet.h>
+#include <linux/if_tun.h>
+#include <net/if.h>
+#include <net/if_arp.h>
+#include <netinet/in.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
-#include <unistd.h>
+#elif defined(__APPLE__)
+#include <arpa/inet.h>
+#include <net/if.h>
+#include <net/if_utun.h>
+#include <netinet/in.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <sys/kern_control.h>
+#endif
 
 int tun_fd = -1;
 char tun_name[IFNAMSIZ];
@@ -57,9 +64,161 @@ static void close_tun_creation(int sock, int fd)
     reset_tun_backend();
 }
 
+#if defined(__APPLE__)
+/* macOS: create utun interface via kernel control API */
+static int tun_open_macos(void)
+{
+    struct sockaddr_ctl sc;
+    struct ctl_info ctlInfo;
+    socklen_t optlen;
+    int unit;
+    int fd;
+
+    memset(&ctlInfo, 0, sizeof(ctlInfo));
+    snprintf(ctlInfo.ctl_name, sizeof(ctlInfo.ctl_name), "%s",
+             UTUN_CONTROL_NAME);
+
+    fd = socket(PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL);
+    if (fd < 0) {
+        print_errno_message(LOG_ERR, "socket(PF_SYSTEM) for utun");
+        return -1;
+    }
+
+    if (ioctl(fd, CTLIOCGINFO, &ctlInfo) < 0) {
+        print_errno_message(LOG_ERR, "ioctl(CTLIOCGINFO) for utun");
+        close(fd);
+        return -1;
+    }
+
+    sc.sc_id = ctlInfo.ctl_id;
+    sc.sc_len = sizeof(sc);
+    sc.sc_family = AF_SYSTEM;
+    sc.ss_sysaddr = SYSPROTO_CONTROL;
+    sc.sc_unit = 0;  /* 0 = dynamic allocation */
+
+    if (connect(fd, (struct sockaddr *)&sc, sizeof(sc)) < 0) {
+        print_errno_message(LOG_ERR, "connect(utun)");
+        close(fd);
+        return -1;
+    }
+
+    /* Get the assigned unit number */
+    optlen = sizeof(sc);
+    if (getsockname(fd, (struct sockaddr *)&sc, &optlen) == 0) {
+        unit = sc.sc_unit;
+    } else {
+        unit = 0;
+    }
+
+    snprintf(tun_name, sizeof(tun_name), "utun%d", unit);
+    log_message(LOG_INFO, "TUN backend: %s (macOS utun)", tun_name);
+    return fd;
+}
+
+/* macOS: configure interface IP/MTU and bring it up */
+static int tun_configure_macos(int fd)
+{
+    struct ifreq cfg;
+    struct sockaddr_in *sin;
+    char local_ip[16];
+    char netmask[16];
+    int sock;
+    int ret = -1;
+
+    if (parse_local_cidr(current_config.local_cidr, local_ip,
+                         sizeof(local_ip), netmask,
+                         sizeof(netmask)) != 0) {
+        return -1;
+    }
+
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        print_errno_message(LOG_ERR, "socket for ifconfig");
+        return -1;
+    }
+
+    copy_ifreq_name(&cfg, tun_name);
+    sin = (struct sockaddr_in *)&cfg.ifr_addr;
+    sin->sin_family = AF_INET;
+    if (inet_pton(AF_INET, local_ip, &sin->sin_addr) != 1 ||
+        ioctl(sock, SIOCSIFADDR, &cfg) < 0) {
+        print_errno_message(LOG_ERR, "ioctl(SIOCSIFADDR)");
+        goto done;
+    }
+
+    copy_ifreq_name(&cfg, tun_name);
+    sin = (struct sockaddr_in *)&cfg.ifr_netmask;
+    sin->sin_family = AF_INET;
+    if (inet_pton(AF_INET, netmask, &sin->sin_addr) != 1 ||
+        ioctl(sock, SIOCSIFNETMASK, &cfg) < 0) {
+        print_errno_message(LOG_ERR, "ioctl(SIOCSIFNETMASK)");
+        goto done;
+    }
+
+    copy_ifreq_name(&cfg, tun_name);
+    cfg.ifr_mtu = current_config.mtu;
+    if (ioctl(sock, SIOCSIFMTU, &cfg) < 0) {
+        print_errno_message(LOG_WARNING, "ioctl(SIOCSIFMTU)");
+    }
+
+    copy_ifreq_name(&cfg, tun_name);
+    if (ioctl(sock, SIOCGIFFLAGS, &cfg) < 0) {
+        print_errno_message(LOG_ERR, "ioctl(SIOCGIFFLAGS)");
+        goto done;
+    }
+
+    cfg.ifr_flags |= IFF_UP | IFF_RUNNING;
+    if (ioctl(sock, SIOCSIFFLAGS, &cfg) < 0) {
+        print_errno_message(LOG_ERR, "ioctl(SIOCSIFFLAGS)");
+        goto done;
+    }
+
+    ret = 0;
+done:
+    close(sock);
+    return ret;
+}
+#endif /* __APPLE__ */
+
 int tun_create_device(const char *local_ip, const char *netmask,
                       int mtu, const char *tun_dev_override)
 {
+    (void)local_ip;
+    (void)netmask;
+    (void)mtu;
+
+#if defined(_WIN32)
+    /* Windows: WinTUN is not bundled; return a clear error */
+    log_message(LOG_ERR, "TUN devices are not supported on Windows "
+                "(install WinTUN and recompile with -lwintun)");
+    return -1;
+#elif defined(__APPLE__)
+    int fd;
+
+    if (local_ip == NULL || netmask == NULL || mtu <= 0) {
+        return -1;
+    }
+
+    /* macOS: use utun kernel control */
+    fd = tun_open_macos();
+    if (fd < 0) {
+        log_message(LOG_ERR, "Failed to create utun interface");
+        return -1;
+    }
+
+    /* Configure IP/MTU/UP */
+    if (tun_configure_macos(fd) != 0) {
+        close_tun_creation(-1, fd);
+        return -1;
+    }
+
+    tun_fd = fd;
+    if (set_fd_nonblocking(tun_fd) != 0) {
+        print_errno_message(LOG_WARNING, "fcntl(O_NONBLOCK)");
+    }
+    return 0;
+#else
+    /* Linux: original implementation */
     struct ifreq ifr;
     struct ifreq cfg;
     struct sockaddr_in *sin;
@@ -182,6 +341,7 @@ int tun_create_device(const char *local_ip, const char *netmask,
         print_errno_message(LOG_WARNING, "fcntl(O_NONBLOCK)");
     }
     return 0;
+#endif
 }
 
 void tun_close_device(void)
@@ -195,6 +355,28 @@ void tun_close_device(void)
 
 ssize_t tun_read_packet(uint8_t *buffer, size_t size)
 {
+#if defined(__APPLE__)
+    /* macOS utun: first 4 bytes are protocol family (AF_INET = 2) */
+    uint8_t raw[TUN_PACKET_MAX + 4];
+    ssize_t len;
+
+    if (tun_fd < 0 || buffer == NULL || size == 0U) {
+        return -1;
+    }
+
+    len = read(tun_fd, raw, sizeof(raw));
+    if (len <= 4) {
+        return -1;
+    }
+
+    len -= 4;
+    if ((size_t)len > size) {
+        return -1;
+    }
+
+    memcpy(buffer, raw + 4, (size_t)len);
+    return len;
+#else
     ssize_t len;
 
     if (tun_fd < 0 || buffer == NULL || size == 0U) {
@@ -203,6 +385,7 @@ ssize_t tun_read_packet(uint8_t *buffer, size_t size)
 
     len = read(tun_fd, buffer, size);
     return len;
+#endif
 }
 
 int tun_write_packet(const uint8_t *buffer, size_t len)
@@ -213,10 +396,29 @@ int tun_write_packet(const uint8_t *buffer, size_t len)
         return -1;
     }
 
+#if defined(__APPLE__)
+    /* macOS utun: prepend 4-byte protocol family header */
+    {
+        uint8_t raw[TUN_PACKET_MAX + 4];
+        uint32_t family = htonl(AF_INET);
+
+        if (len + 4 > sizeof(raw)) {
+            return -1;
+        }
+
+        memcpy(raw, &family, 4);
+        memcpy(raw + 4, buffer, len);
+        written = write(tun_fd, raw, len + 4);
+        if (written < 0 || (size_t)written != len + 4) {
+            return -1;
+        }
+    }
+#else
     written = write(tun_fd, buffer, len);
     if (written < 0 || (size_t)written != len) {
         return -1;
     }
+#endif
 
     return 0;
 }

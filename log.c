@@ -12,7 +12,9 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#ifndef _WIN32
 #include <sys/syslog.h>
+#endif
 
 void log_message(int priority, const char *fmt, ...)
 {
@@ -24,7 +26,9 @@ void log_message(int priority, const char *fmt, ...)
     vsnprintf(message, sizeof(message), fmt, ap);
     va_end(ap);
 
+#ifndef _WIN32
     syslog(priority, "%s", message);
+#endif
     fprintf(stream, "%s\n", message);
 }
 
