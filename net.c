@@ -195,8 +195,7 @@ int net_tcp_send_frame(int fd, const uint8_t *data, size_t len)
 {
     uint8_t header[2];
     uint16_t net_len;
-    struct iovec iov[2];
-    struct msghdr msg;
+    size_t total = 0, frame_size;
 
     if (fd < 0 || data == NULL || len > 65535U) {
         return -1;
@@ -204,17 +203,34 @@ int net_tcp_send_frame(int fd, const uint8_t *data, size_t len)
 
     net_len = htons((uint16_t)len);
     memcpy(header, &net_len, 2);
+    frame_size = 2 + len;
 
-    memset(&msg, 0, sizeof(msg));
-    iov[0].iov_base = header;
-    iov[0].iov_len = 2;
-    iov[1].iov_base = (void *)data;
-    iov[1].iov_len = len;
-    msg.msg_iov = iov;
-    msg.msg_iovlen = 2;
+    /*
+     * Coalesce header + data and loop on send() to handle
+     * partial writes on non-blocking TCP sockets.
+     */
+    while (total < frame_size) {
+        ssize_t n;
+        size_t offset = total;
+        size_t remaining = frame_size - total;
 
-    if (sendmsg(fd, &msg, MSG_NOSIGNAL) < 0) {
-        return -1;
+        /* Choose which part of the frame to send */
+        if (offset < 2) {
+            size_t hdr_rem = 2 - offset;
+            size_t chunk = (hdr_rem < remaining) ? hdr_rem : remaining;
+            n = send(fd, header + offset, chunk, MSG_NOSIGNAL);
+        } else {
+            n = send(fd, data + (offset - 2), remaining, MSG_NOSIGNAL);
+        }
+
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                /* caller will re-select after EPOLLOUT */
+                return -1;
+            }
+            return -1;
+        }
+        total += (size_t)n;
     }
     return 0;
 }
@@ -241,6 +257,7 @@ int net_tcp_recv_frame(int fd, uint8_t *buffer, size_t size, size_t *len)
             return -1;
         }
         if (n == 0) {
+            errno = ENOTCONN;
             return -1;  /* connection closed */
         }
         total += (size_t)n;
@@ -263,6 +280,7 @@ int net_tcp_recv_frame(int fd, uint8_t *buffer, size_t size, size_t *len)
             return -1;
         }
         if (n == 0) {
+            errno = ENOTCONN;
             return -1;  /* connection closed */
         }
         total += (size_t)n;

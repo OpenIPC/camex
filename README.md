@@ -1,31 +1,62 @@
 # Camex — v2.1.0
 
 [![camex CI](https://github.com/OpenIPC/camex/actions/workflows/build.yml/badge.svg)](https://github.com/OpenIPC/camex/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/OpenIPC/camex)](https://github.com/OpenIPC/camex/releases)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20(beta)-blue)](PLATFORM.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Code size](https://img.shields.io/github/languages/code-size/OpenIPC/camex)](https://github.com/OpenIPC/camex)
 
 Minimal dependency-free Linux UDP/TCP tunnel for embedded targets.
 
 Ships as a userspace daemon and an optional standalone kernel module.
 
+---
+
+## Features
+
+- **Client/server architecture** over UDP or TCP
+- **Auto-config mode** — client fetches tunnel parameters from the server
+- **ChaCha20-Poly1305 encryption** — optional, zero overhead when disabled
+- **No external dependencies** — only libc required
+- **Cross-platform builds** — x86_64, ARM, AArch64, MIPS (via CI)
+- **Custom kernel module** — `camex.ko` replaces `tun.ko` with no external deps
+- **Compact codebase** — ~3,500 lines total, easy to audit
+
+## Quick Start
+
+### Server
+
+```sh
+sudo ./camex --mode server --port 7000 --config /etc/camex/camex.conf
+```
+
+### Client (auto mode)
+
+```sh
+sudo ./camex --mode client --auto --name 0203A104B5AE \
+  --server-host vpn.example.org --port 7000
+```
+
+### Client (manual mode)
+
+```sh
+sudo ./camex --mode client \
+  --local-cidr 10.0.0.2/24 --gateway-ip 10.0.0.1 \
+  --server-host vpn.example.org --port 7000
+```
+
 ## Binary Sizes
 
-| Platform | Size (UPX compressed) |
-|----------|----------------------|
-| x86_64   | _see CI_ |
-| armhf    | _see CI_ |
-| aarch64  | _see CI_ |
+| Platform | Size (stripped) | UPX compressed |
+|----------|:---------------:|:--------------:|
+| x86_64   | _see CI_ | _see CI_ |
+| armhf    | _see CI_ | _see CI_ |
+| aarch64  | _see CI_ | _see CI_ |
+| mipsel   | _see CI_ | _see CI_ |
 
-> Sizes are automatically updated by the CI pipeline on each release. See
-> the latest [build artifacts](https://github.com/OpenIPC/camex/actions)
-> for current numbers.
-
-## Architecture
-
-| Component | Description |
-|---|---|
-| `camex` (userspace) | Client/server daemon that creates a TUN interface, encapsulates IPv4 packets in UDP (with TCP helper functions available), and optionally encrypts them with ChaCha20-Poly1305. |
-| `camex.ko` (kernel module) | Standalone TUN driver that registers `/dev/camex` and a `camex` network interface — no dependency on `tun.ko`. |
-| Relationship | The userspace daemon can use **either** the standard `/dev/net/tun` (tun.ko) **or** `/dev/camex` (camex.ko) as its TUN backend. Both produce bare IPv4 packets; the tunnel protocol is identical. |
+> Sizes are updated by CI on each release. See the latest
+> [build artifacts](https://github.com/OpenIPC/camex/actions)
+> or [releases](https://github.com/OpenIPC/camex/releases).
 
 ## Requirements
 

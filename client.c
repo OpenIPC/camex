@@ -297,6 +297,8 @@ void client_reconnect(void)
     client_state.registered = 0;
     client_state.last_register = 0;
     client_state.config_received = 0;
+    client_state.recv_seq_max = 0;
+    client_state.recv_window = 0;
     client_state.last_recv = g_now;
     client_reconnect_at = 0;
 

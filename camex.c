@@ -382,7 +382,7 @@ static void drain_udp_packets(void)
 {
     uint8_t buffer[TUN_PACKET_MAX + CAMEX_HDR_LEN + 1 + 16U];
     struct sockaddr_in from;
-    int len;
+    ssize_t len;
 
     if (server_mode) {
         while (1) {
@@ -538,7 +538,7 @@ static void drain_tcp_client_read(int fd)
 static void handle_tun_packet(void)
 {
     uint8_t buffer[TUN_PACKET_MAX];
-    int len;
+    ssize_t len;
     uint32_t src_ip_be = 0;
     uint32_t dst_ip_be = 0;
 

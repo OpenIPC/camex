@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <sys/types.h>
 
 /* TUN file descriptor (global, accessible from modules) */
 extern int tun_fd;
@@ -30,7 +31,7 @@ int tun_create_device(const char *local_ip, const char *netmask, int mtu,
 void tun_close_device(void);
 
 /* Read a packet from TUN */
-int tun_read_packet(uint8_t *buffer, size_t size);
+ssize_t tun_read_packet(uint8_t *buffer, size_t size);
 
 /* Write a packet to TUN */
 int tun_write_packet(const uint8_t *buffer, size_t len);

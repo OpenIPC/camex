@@ -193,7 +193,7 @@ void tun_close_device(void)
     reset_tun_backend();
 }
 
-int tun_read_packet(uint8_t *buffer, size_t size)
+ssize_t tun_read_packet(uint8_t *buffer, size_t size)
 {
     ssize_t len;
 
@@ -202,11 +202,7 @@ int tun_read_packet(uint8_t *buffer, size_t size)
     }
 
     len = read(tun_fd, buffer, size);
-    if (len <= 0 || (size_t)len > size || len > INT_MAX) {
-        return -1;
-    }
-
-    return (int)len;
+    return len;
 }
 
 int tun_write_packet(const uint8_t *buffer, size_t len)

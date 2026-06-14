@@ -336,6 +336,8 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
             by_addr->ip_be = addr.s_addr;
             by_addr->last_seen = g_now;
             by_addr->last_register_time = g_now;
+            snprintf(by_addr->client_id, sizeof(by_addr->client_id), "%s", client_id);
+            server_reset_replay(by_addr);
             if (used_key != NULL) {
                 memcpy(by_addr->psk_key, used_key, 32);
             }
@@ -351,6 +353,7 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
             by_ip->addr = *from;
             by_ip->last_seen = g_now;
             by_ip->last_register_time = g_now;
+            snprintf(by_ip->client_id, sizeof(by_ip->client_id), "%s", client_id);
             server_reset_replay(by_ip);
             if (used_key != NULL) {
                 memcpy(by_ip->psk_key, used_key, 32);
