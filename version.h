@@ -13,7 +13,7 @@
 #define CAMEX_VERSION_H
 
 #ifndef CAMEX_VERSION
-#define CAMEX_VERSION "2.0.0"
+#define CAMEX_VERSION "2.1.0"
 #endif
 
 #endif /* CAMEX_VERSION_H */
