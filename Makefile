@@ -12,7 +12,7 @@ TARGET  ?= camex
 VERSION ?= $(shell git -C $(dir $(abspath $(lastword $(MAKEFILE_LIST)))) \
                 describe --tags --always --dirty 2>/dev/null || echo "unknown")
 
-CPPFLAGS += -I. '-DCAMEX_VERSION="$(VERSION)"'
+CPPFLAGS += -I.
 CFLAGS   += -std=c99 -D_POSIX_C_SOURCE=200809L \
             -Wall -Wextra -Wshadow -Wstrict-prototypes \
             -Os -ffunction-sections -fdata-sections
