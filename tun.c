@@ -14,6 +14,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -41,6 +42,32 @@
 
 int tun_fd = -1;
 char tun_name[IFNAMSIZ];
+static int tun_from_env = 0; /* 1 = fd was passed via CAMEX_TUN_FD */
+
+/* Accept a TUN fd from environment variable CAMEX_TUN_FD (Android VpnService).
+ * Returns the accepted fd number or -1 if not set / invalid. */
+int tun_accept_fd(void)
+{
+    const char *env;
+    long fd;
+
+    env = getenv("CAMEX_TUN_FD");
+    if (env == NULL || *env == '\0') {
+        return -1;
+    }
+
+    errno = 0;
+    fd = strtol(env, NULL, 10);
+    if (errno != 0 || fd < 0 || fd != (int)fd) {
+        return -1;
+    }
+
+    tun_fd = (int)fd;
+    tun_from_env = 1;
+    snprintf(tun_name, sizeof(tun_name), "camex-android");
+    log_message(LOG_INFO, "TUN backend: fd %d from environment (Android VpnService)", tun_fd);
+    return tun_fd;
+}
 
 static void copy_ifreq_name(struct ifreq *req, const char *name)
 {

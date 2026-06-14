@@ -43,11 +43,13 @@ void signal_handler(int sig)
     running = 0;
 }
 
+#ifndef _WIN32
 void sighup_handler(int sig)
 {
     (void)sig;
     reload_config = 1;
 }
+#endif
 
 void print_version(void)
 {
@@ -384,17 +386,17 @@ void print_usage(const char *progname)
 
     printf("Examples:\n");
     printf("  # Server\n");
-    printf("  %s --mode server --port 7000"
+    printf("  %s --mode server --port 5800"
            " --config /etc/camex/camex.conf"
            " --encrypt --psk secret\n\n", progname);
     printf("  # Client (auto-config)\n");
     printf("  %s --mode client --auto --name 0203A104B5AE"
            " --server-host cloud.openipc.org"
-           " --port 7000 --encrypt --psk secret\n\n", progname);
+           " --port 5800 --encrypt --psk secret\n\n", progname);
     printf("  # Client (manual)\n");
     printf("  %s --mode client"
            " --local-cidr 10.0.0.2/24 --gateway-ip 10.0.0.1"
-           " --server-host cloud.openipc.org --port 7000\n", progname);
+           " --server-host cloud.openipc.org --port 5800\n", progname);
 }
 
 int main(int argc, char *argv[])
@@ -431,8 +433,10 @@ int main(int argc, char *argv[])
 #endif
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
+#ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
     signal(SIGHUP, sighup_handler);
+#endif
 
     memset(&config, 0, sizeof(config));
     config.mode = CAMEX_MODE_CLIENT;
@@ -483,7 +487,11 @@ int main(int argc, char *argv[])
     if (config.pid_file[0] != '\0') {
         FILE *pf = fopen(config.pid_file, "w");
         if (pf != NULL) {
+#ifdef _WIN32
+            fprintf(pf, "%lu\n", (unsigned long)GetCurrentProcessId());
+#else
             fprintf(pf, "%d\n", (int)getpid());
+#endif
             fclose(pf);
         } else {
             print_errno_message(LOG_WARNING, "Cannot write PID file");
@@ -513,4 +521,10 @@ int main(int argc, char *argv[])
     closelog();
 #endif
     return 0;
+}
+
+/* JNI entry point (Android) — binary-compatible with main() */
+int camex_main(int argc, char *argv[])
+{
+    return main(argc, argv);
 }

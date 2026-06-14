@@ -11,10 +11,10 @@
 #
 # For client mode with auto-config:
 #   Environment="CAMEX_ARGS=--mode client --auto --name 0203A104B5AE \
-#     --server-host vpn.example.org --port 7000 --encrypt --psk secret"
+#     --server-host vpn.example.org --port 5800 --encrypt --psk secret"
 #
 # For server mode:
-#   Environment="CAMEX_ARGS=--mode server --port 7000 \
+#   Environment="CAMEX_ARGS=--mode server --port 5800 \
 #     --config /etc/camex/camex.conf --encrypt --psk secret"
 #
 
@@ -27,7 +27,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/camex $CAMEX_ARGS
-Environment=CAMEX_ARGS=--mode client --auto --name 0203A104B5AE --server-host vpn.example.org --port 7000
+Environment=CAMEX_ARGS=--mode client --auto --name 0203A104B5AE --server-host vpn.example.org --port 5800
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=1024

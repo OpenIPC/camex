@@ -27,6 +27,9 @@ extern char tun_name[];
 int tun_create_device(const char *local_ip, const char *netmask, int mtu,
                       const char *tun_dev_override);
 
+/* Accept TUN fd from environment (CAMEX_TUN_FD) — used by Android VpnService */
+int tun_accept_fd(void);
+
 /* Close TUN device */
 void tun_close_device(void);
 

@@ -19,7 +19,9 @@
 #include "util.h"
 #include "version.h"
 
+#ifndef _WIN32
 #include <arpa/inet.h>
+#endif
 #include <errno.h>
 #include <getopt.h>
 #if defined(__APPLE__)
@@ -469,10 +471,13 @@ int camex_init(camex_config_t *config)
             return -1;
         }
 
-        if (tun_create_device(local_ip, local_netmask, current_config.mtu,
-                              current_config.tun_dev) != 0) {
-            net_close();
-            return -1;
+        /* Try accepting TUN fd from environment (Android VpnService) */
+        if (tun_accept_fd() < 0) {
+            if (tun_create_device(local_ip, local_netmask, current_config.mtu,
+                                  current_config.tun_dev) != 0) {
+                net_close();
+                return -1;
+            }
         }
 
         if (!current_config.auto_config && client_send_register() != 0) {
@@ -517,10 +522,13 @@ int camex_init(camex_config_t *config)
             return -1;
         }
 
-        if (tun_create_device(local_ip, local_netmask, current_config.mtu,
-                              current_config.tun_dev) != 0) {
-            net_close();
-            return -1;
+        /* Try accepting TUN fd from environment (Android VpnService) */
+        if (tun_accept_fd() < 0) {
+            if (tun_create_device(local_ip, local_netmask, current_config.mtu,
+                                  current_config.tun_dev) != 0) {
+                net_close();
+                return -1;
+            }
         }
     }
 
@@ -906,6 +914,28 @@ static int run_ip_route(const char *verb, const char *cidr, const char *gateway)
     (void)gateway;
     log_message(LOG_WARNING, "Route management is not supported on Windows");
     return 0;  /* non-fatal: continue without adding routes */
+}
+#elif defined(__APPLE__)
+static int run_ip_route(const char *verb, const char *cidr, const char *gateway)
+{
+    /*
+     * macOS: use /sbin/route command instead of ioctl(SIOCADDRT).
+     * ioctl routing is not supported on Darwin.
+     */
+    char cmd[256];
+    const char *op;
+    (void)verb;
+
+    op = (strcmp(verb, "add") == 0 || strcmp(verb, "replace") == 0)
+             ? "-n add" : "-n delete";
+
+    if (cidr == NULL || gateway == NULL) {
+        return -1;
+    }
+
+    snprintf(cmd, sizeof(cmd), "/sbin/route %s -inet %s %s 2>/dev/null",
+             op, cidr, gateway);
+    return system(cmd);
 }
 #else
 static int run_ip_route(const char *verb, const char *cidr, const char *gateway)

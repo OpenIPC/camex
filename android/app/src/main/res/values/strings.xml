@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Copyright (c) OpenIPC  https://openipc.org  MIT License
+
+    strings.xml — camex app strings
+-->
+<resources>
+    <string name="app_name">Camex VPN</string>
+    <string name="status_connected">Connected</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="btn_start">Start VPN</string>
+    <string name="btn_stop">Stop VPN</string>
+</resources>

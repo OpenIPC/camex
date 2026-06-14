@@ -111,7 +111,7 @@ echo ""
 # --- Start server ---
 echo "6. Starting server..."
 run_docker "Server" "$SERVER_NAME" "" \
-    --mode server --port 7000 --bind-ip 0.0.0.0 \
+    --mode server --port 5800 --bind-ip 0.0.0.0 \
     --encrypt --psk "$PASS" \
     --pid-file /tmp/camex.pid
 echo ""
@@ -124,7 +124,7 @@ echo ""
 echo "7. Starting client (auto mode)..."
 run_docker "Client" "$CLIENT_NAME" "" \
     --mode client --auto --name SMOKE01 \
-    --server-host "$SERVER_NAME" --port 7000 \
+    --server-host "$SERVER_NAME" --port 5800 \
     --encrypt --psk "$PASS" \
     --pid-file /tmp/camex.pid
 echo ""

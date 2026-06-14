@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Copyright (c) OpenIPC  https://openipc.org  MIT License
+
+    themes.xml — camex app theme (dark Material3)
+-->
+<resources>
+    <style name="Theme.Camex" parent="Theme.AppCompat.DayNight.DarkActionBar" />
+</resources>

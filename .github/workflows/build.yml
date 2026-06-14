@@ -114,9 +114,9 @@ jobs:
           path: sizes.md
           if-no-files-found: ignore
 
-  # ----------------------------------------------------------- android (NDK)
+  # ----------------------------------------------------------- android (APK)
   android:
-    name: Android (aarch64 NDK)
+    name: Android (aarch64 APK)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -129,44 +129,46 @@ jobs:
           curl -fsSOL "https://dl.google.com/android/repository/android-ndk-${NDK_VER}-linux.zip"
           unzip -q android-ndk-${NDK_VER}-linux.zip
           echo "NDK_PATH=/tmp/android-ndk-${NDK_VER}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=/tmp/android-ndk-${NDK_VER}" >> "$GITHUB_ENV"
 
-      - name: Build for aarch64-android
+      - name: Install Android SDK
         run: |
-          PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
-          make clean
-          make -j$(nproc) \
-            CC=aarch64-linux-android21-clang \
-            STRIP=llvm-strip
-          mkdir -p build
-          cp camex build/camex-aarch64-android
-          llvm-strip --strip-unneeded build/camex-aarch64-android 2>/dev/null || true
-          ls -lh build/camex-aarch64-android
+          mkdir -p $HOME/android-sdk/cmdline-tools
+          cd /tmp
+          curl -fsSOL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+          unzip -q commandlinetools-linux-11076708_latest.zip
+          mv cmdline-tools $HOME/android-sdk/cmdline-tools/latest
+          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> "$GITHUB_ENV"
+          export ANDROID_SDK_ROOT=$HOME/android-sdk
+          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager \
+            --sdk_root=$ANDROID_SDK_ROOT \
+            "platforms;android-34" "build-tools;34.0.0" \
+            2>&1 | tail -5
 
-      - name: Build Android .ipk package
+      - name: Set up Gradle wrapper
         run: |
-          PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
-          make clean
-          make -j$(nproc) \
-            CC=aarch64-linux-android21-clang \
-            STRIP=llvm-strip
-          make ipk
-          mkdir -p build
-          cp camex_*.ipk build/
-          ls -lh build/camex_*.ipk
+          cd android
+          if [ ! -f gradlew ]; then
+            GRADLE_VERSION=8.5
+            curl -fsSOL "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
+            unzip -q gradle-${GRADLE_VERSION}-bin.zip
+            gradle-${GRADLE_VERSION}/bin/gradle wrapper --gradle-version=${GRADLE_VERSION}
+            rm -rf gradle-${GRADLE_VERSION} gradle-${GRADLE_VERSION}-bin.zip
+          fi
 
-      - name: Upload artifact (binary)
+      - name: Build APK
+        run: |
+          export ANDROID_SDK_ROOT=$HOME/android-sdk
+          cd android
+          ./gradlew assembleRelease
+          ls -lh app/build/outputs/apk/release/
+
+      - name: Upload artifact (APK)
         uses: actions/upload-artifact@v7
         with:
-          name: camex-aarch64-android
-          path: build/camex-aarch64-android
+          name: camex-aarch64-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
-
-      - name: Upload artifact (ipk)
-        uses: actions/upload-artifact@v7
-        with:
-          name: camex-aarch64-android-ipk
-          path: build/camex_*.ipk
-          if-no-files-found: ignore
 
   # ---------------------------------------------------------------- windows
   windows:
@@ -213,7 +215,7 @@ jobs:
         run: |
           make clean
           make -j$(sysctl -n hw.logicalcpu) \
-            CC=clang 2>&1
+            CC=clang STD=gnu99 2>&1
           mkdir -p build
           cp camex build/camex-darwin
           strip --strip-unneeded build/camex-darwin 2>/dev/null || true
@@ -274,7 +276,7 @@ jobs:
           echo "" >> sizes-table.md
           echo "| Platform | Size |" >> sizes-table.md
           echo "|----------|------|" >> sizes-table.md
-          find artifacts -type f \( -name 'camex-*' -o -name 'camex.exe' \) | sort | while read f; do
+          find artifacts -type f \( -name 'camex-*' -o -name 'camex.exe' -o -name '*.apk' \) | sort | while read f; do
             sz=$(ls -lh "$f" | awk '{print $5}')
             name=$(basename "$f" | sed 's/camex-//; s/\.exe//')
             echo "| $name | $sz |" >> sizes-table.md
@@ -321,8 +323,8 @@ jobs:
       - name: Collect release binaries
         run: |
           mkdir release-binaries
-          # Collect all camex-* and camex.exe binaries
-          find artifacts -type f \( -name 'camex-*' -o -name 'camex.exe' \) \
+          # Collect all camex-* and camex.exe binaries and .apk files
+          find artifacts -type f \( -name 'camex-*' -o -name 'camex.exe' -o -name '*.apk' \) \
             -exec cp -v {} release-binaries/ \;
           echo "=== Release binaries ==="
           ls -lh release-binaries/

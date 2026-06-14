@@ -26,6 +26,7 @@
 #else
 #include <windows.h>
 #include <bcrypt.h>
+#include <ws2tcpip.h>
 #endif
 #if defined(__APPLE__)
 #include <CommonCrypto/CommonRandom.h>

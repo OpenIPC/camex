@@ -26,14 +26,14 @@ Ships as a userspace daemon and an optional standalone kernel module.
 ### Server
 
 ```sh
-sudo ./camex --mode server --port 7000 --config /etc/camex/camex.conf
+sudo ./camex --mode server --port 5800 --config /etc/camex/camex.conf
 ```
 
 ### Client (auto mode)
 
 ```sh
 sudo ./camex --mode client --auto --name 0203A104B5AE \
-  --server-host vpn.example.org --port 7000
+  --server-host vpn.example.org --port 5800
 ```
 
 ### Client (manual mode)
@@ -41,7 +41,7 @@ sudo ./camex --mode client --auto --name 0203A104B5AE \
 ```sh
 sudo ./camex --mode client \
   --local-cidr 10.0.0.2/24 --gateway-ip 10.0.0.1 \
-  --server-host vpn.example.org --port 7000
+  --server-host vpn.example.org --port 5800
 ```
 
 ## Binary Sizes
@@ -148,7 +148,7 @@ sudo ./camex \
   --auto \
   --name 0203A104B5AE \
   --server-host vpn.example.org \
-  --port 7000 \
+  --port 5800 \
   --encrypt --psk secret
 ```
 
@@ -160,7 +160,7 @@ sudo ./camex \
   --local-cidr 10.0.0.2/24 \
   --gateway-ip 10.0.0.1 \
   --server-host vpn.example.org \
-  --port 7000 \
+  --port 5800 \
   --route-cidr 192.168.100.0/24 \
   --encrypt --psk secret
 ```
@@ -173,7 +173,7 @@ sudo ./camex \
   --local-cidr 10.0.0.2/24 \
   --gateway-ip 10.0.0.1 \
   --server-host vpn.example.org \
-  --port 7000 \
+  --port 5800 \
   --tun-dev /dev/camex
 ```
 
@@ -182,7 +182,7 @@ sudo ./camex \
 ```sh
 sudo ./camex \
   --mode server \
-  --port 7000 \
+  --port 5800 \
   --bind-ip 0.0.0.0 \
   --config /etc/camex/camex.conf \
   --encrypt --psk secret
@@ -228,7 +228,7 @@ The server reads a flat key=value config file with one client record per block.
 See `examples/camex.conf` for the full format.
 
 ```sh
-sudo ./camex --mode server --port 7000 --config /etc/camex/camex.conf
+sudo ./camex --mode server --port 5800 --config /etc/camex/camex.conf
 ```
 
 ## Kernel Module
