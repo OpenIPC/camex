@@ -26,7 +26,7 @@ else
 endif
 # Windows (MinGW): need modern WINVER for socklen_t and Winsock2.
 ifneq ($(findstring mingw,$(CC)),)
-  WIN32_CFLAGS = -D_WIN32_WINNT=0x0601 -D__USE_MINGW_ANSI_STDIO
+  WIN32_CFLAGS = -D_WIN32_WINNT=0x0601 -DNTDDI_VERSION=0x06010000 -D__USE_MINGW_ANSI_STDIO
 else
   WIN32_CFLAGS =
 endif
