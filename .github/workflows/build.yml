@@ -12,9 +12,12 @@ on:
     tags: ['v*']
   pull_request:
     branches: [master, main]
-  release:
-    types: [published]
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v2.2.0)'
+        required: true
+        default: 'v2.2.0'
 
 env:
   BUILD_DIR: build
@@ -275,13 +278,23 @@ jobs:
   # ----------------------------------------------------------------- release
   release:
     name: GitHub Release
-    needs: [linux, smoke, android, windows, macos]
+    needs: [linux, smoke]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Runs on tag push (auto) OR manual workflow_dispatch
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
 
     steps:
+      - name: Determine tag name
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout (for release notes)
         uses: actions/checkout@v6
         with:
@@ -302,8 +315,12 @@ jobs:
           echo "=== Release binaries ==="
           ls -lh release-binaries/
 
-      - name: Create release
-        uses: softprops/action-gh-release@v3
-        with:
-          files: release-binaries/*
-          generate_release_notes: true
+      - name: Create release (gh CLI — no push event loop)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --title "camex ${{ steps.tag.outputs.tag }}" \
+            --generate-notes \
+            release-binaries/*
