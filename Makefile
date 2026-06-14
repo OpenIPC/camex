@@ -78,7 +78,7 @@ kmod-clean:
 # Android .apk package (requires Android SDK + NDK)
 apk:
 	cd android && ./gradlew assembleRelease
-	cp android/app/build/outputs/apk/release/app-release.apk camex-$(VERSION).apk
+	cp android/app/build/outputs/apk/release/app-release-unsigned.apk camex-$(VERSION).apk
 	@echo "Created camex-$(VERSION).apk"
 
 clean:
