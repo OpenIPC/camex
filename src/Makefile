@@ -24,8 +24,10 @@ ifneq ($(shell uname -s 2>/dev/null),Darwin)
 else
   DARWIN_CFLAGS = -D_DARWIN_C_SOURCE=1
 endif
-# Windows (MinGW): need modern WINVER for socklen_t and Winsock2.
+# Windows (MinGW): need gnu99 to expose MIB_* structs (__STRICT_ANSI__
+# with -std=c99 hides MIB_UNICASTIPADDRESS_ROW / MIB_IPINTERFACE_ROW).
 ifneq ($(findstring mingw,$(CC)),)
+  STD = gnu99
   WIN32_CFLAGS = -D_WIN32_WINNT=0x0601 -DNTDDI_VERSION=0x06010000 -D__USE_MINGW_ANSI_STDIO
 else
   WIN32_CFLAGS =
