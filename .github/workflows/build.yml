@@ -1,0 +1,298 @@
+#
+# Copyright (c) OpenIPC  https://openipc.org  MIT License
+#
+# build.yml — CI/CD for camex: build, test, release
+#
+
+name: camex CI
+
+on:
+  push:
+    branches: [master, main, develop]
+    tags: ['v*']
+  pull_request:
+    branches: [master, main]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+env:
+  BUILD_DIR: build
+  TARGET: camex
+
+jobs:
+  # ------------------------------------------------------------------ linux
+  linux:
+    name: Linux ${{ matrix.platform.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: x86_64
+            triple: x86_64-linux-gnu
+            arch: amd64
+            pkgs: gcc
+            strip_args: --strip-unneeded
+          - name: arm
+            triple: arm-linux-gnueabi
+            arch: armhf
+            pkgs: gcc-arm-linux-gnueabi
+            strip_args: --strip-unneeded
+          - name: aarch64
+            triple: aarch64-linux-gnu
+            arch: arm64
+            pkgs: gcc-aarch64-linux-gnu
+            strip_args: --strip-unneeded
+          - name: mipsel
+            triple: mipsel-linux-gnu
+            arch: mipsel
+            pkgs: gcc-mipsel-linux-gnu
+            strip_args: --strip-unneeded
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install cross-compiler
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ${{ matrix.platform.pkgs }} upx-ucl upx 2>/dev/null || true
+
+      - name: Build native (x86_64)
+        run: |
+          make clean
+          make -j$(nproc)
+          mkdir -p "${{ env.BUILD_DIR }}"
+          cp "${{ env.TARGET }}" "${{ env.BUILD_DIR }}/${{ env.TARGET }}-x86_64"
+          "${{ env.BUILD_DIR }}/${{ env.TARGET }}-x86_64" --help 2>&1 | head -5 || true
+        if: matrix.platform.name == 'x86_64'
+
+      - name: Build cross
+        run: |
+          make clean
+          make -j$(nproc) \
+            CROSS_COMPILE=${{ matrix.platform.triple }}- \
+            CPPFLAGS="-I. -DCAMEX_VERSION=\"$(git describe --tags --always --dirty 2>/dev/null || echo dev)\""
+          mkdir -p "${{ env.BUILD_DIR }}"
+          cp "${{ env.TARGET }}" "${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.platform.name }}"
+        if: matrix.platform.name != 'x86_64'
+
+      - name: Strip
+        run: |
+          ${{ matrix.platform.triple }}-strip ${{ matrix.platform.strip_args }} \
+            "${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.platform.name }}" || true
+
+      - name: Compress with UPX
+        run: |
+          upx --best --no-color \
+            "${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.platform.name }}" \
+            2>/dev/null || echo "UPX skipped (not available or cannot compress)"
+
+      - name: Report size
+        run: |
+          echo "## ${{ matrix.platform.name }} binary sizes" | tee -a sizes.md
+          ls -lh "${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.platform.name }}" | \
+            awk '{print "- `" $5 "`  " $9}' | tee -a sizes.md
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: camex-${{ matrix.platform.name }}
+          path: ${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.platform.name }}
+          if-no-files-found: error
+
+      - name: Upload size report
+        uses: actions/upload-artifact@v4
+        with:
+          name: sizes-${{ matrix.platform.name }}
+          path: sizes.md
+          if-no-files-found: ignore
+
+  # ----------------------------------------------------------- android (NDK)
+  android:
+    name: Android (aarch64 NDK)
+    needs: [linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install NDK
+        run: |
+          NDK_VER=r27c
+          cd /tmp
+          curl -fsSOL "https://dl.google.com/android/repository/android-ndk-${NDK_VER}-linux.zip"
+          unzip -q android-ndk-${NDK_VER}-linux.zip
+          echo "NDK_PATH=/tmp/android-ndk-${NDK_VER}" >> "$GITHUB_ENV"
+
+      - name: Build for aarch64-android
+        run: |
+          PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          make clean
+          make -j$(nproc) \
+            CC=aarch64-linux-android21-clang \
+            STRIP=llvm-strip \
+            CPPFLAGS="-I. -DCAMEX_VERSION=\"$(git describe --tags --always --dirty 2>/dev/null || echo dev)\""
+          mkdir -p build
+          cp camex build/camex-aarch64-android
+          llvm-strip --strip-unneeded build/camex-aarch64-android 2>/dev/null || true
+          ls -lh build/camex-aarch64-android
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: camex-aarch64-android
+          path: build/camex-aarch64-android
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------- windows
+  windows:
+    name: Windows (MinGW)
+    needs: [linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install MinGW
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-mingw-w64-x86-64
+
+      - name: Build for x86_64-w64-mingw32
+        run: |
+          make clean
+          make -j$(nproc) \
+            CC=x86_64-w64-mingw32-gcc \
+            STRIP=x86_64-w64-mingw32-strip \
+            CPPFLAGS="-I. -D_GNU_SOURCE -DCAMEX_VERSION=\"$(git describe --tags --always --dirty 2>/dev/null || echo dev)\"" \
+            LDFLAGS="-lws2_32" \
+            TARGET=camex.exe
+          mkdir -p build
+          cp camex.exe build/
+          x86_64-w64-mingw32-strip --strip-unneeded build/camex.exe 2>/dev/null || true
+          ls -lh build/camex.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: camex-x86_64-mingw
+          path: build/camex.exe
+          if-no-files-found: error
+
+  # ------------------------------------------------------------- macos (utun)
+  macos:
+    name: macOS (clang + utun)
+    needs: [linux]
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build
+        run: |
+          make clean
+          make -j$(sysctl -n hw.logicalcpu) \
+            CC=clang \
+            CPPFLAGS="-I. -D_GNU_SOURCE -DCAMEX_VERSION=\"$(git describe --tags --always --dirty 2>/dev/null || echo dev)\""
+          mkdir -p build
+          cp camex build/camex-darwin
+          strip --strip-unneeded build/camex-darwin 2>/dev/null || true
+          ls -lh build/camex-darwin
+
+      - name: Smoke test (--help and --version)
+        run: |
+          build/camex-darwin --help 2>&1 | head -5
+          build/camex-darwin --version 2>&1
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: camex-darwin
+          path: build/camex-darwin
+          if-no-files-found: error
+
+  # ------------------------------------------------------------- smoke test
+  smoke:
+    name: Smoke test (Docker)
+    needs: [linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download x86_64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: camex-x86_64
+          path: docker/
+
+      - name: Make binary executable
+        run: chmod +x docker/camex-x86_64
+
+      - name: Run smoke test
+        env:
+          CAMEX_BINARY: docker/camex-x86_64
+        run: |
+          docker/test-smoke.sh
+
+  # ------------------------------------------------------------- consolidated
+  sizes:
+    name: Collect sizes
+    needs: [linux, smoke, android, windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate size table
+        run: |
+          echo "## camex binary sizes (UPX compressed)" > sizes-table.md
+          echo "" >> sizes-table.md
+          echo "| Platform | Size |" >> sizes-table.md
+          echo "|----------|------|" >> sizes-table.md
+          find artifacts -type f -name 'camex-*' | sort | while read f; do
+            sz=$(ls -lh "$f" | awk '{print $5}')
+            name=$(basename "$f" | sed 's/camex-//')
+            echo "| $name | $sz |" >> sizes-table.md
+          done
+          cat sizes-table.md
+
+      - name: Upload size table
+        uses: actions/upload-artifact@v4
+        with:
+          name: sizes-table
+          path: sizes-table.md
+
+  # ----------------------------------------------------------------- release
+  release:
+    name: GitHub Release
+    needs: [linux, smoke, android, windows, macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect binaries
+        run: |
+          mkdir release-binaries
+          find artifacts -type f -name 'camex-*' -exec cp {} release-binaries/ \;
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-binaries/*
+          generate_release_notes: true

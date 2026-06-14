@@ -1,8 +1,23 @@
 # Camex — v2.0.0
 
-Minimal dependency-free Linux UDP/TUN tunnel for embedded targets.
+[![camex CI](https://github.com/OpenIPC/camex/actions/workflows/build.yml/badge.svg)](https://github.com/OpenIPC/camex/actions/workflows/build.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+Minimal dependency-free Linux UDP/TCP tunnel for embedded targets.
 
 Ships as a userspace daemon and an optional standalone kernel module.
+
+## Binary Sizes
+
+| Platform | Size (UPX compressed) |
+|----------|----------------------|
+| x86_64   | _see CI_ |
+| armhf    | _see CI_ |
+| aarch64  | _see CI_ |
+
+> Sizes are automatically updated by the CI pipeline on each release. See
+> the latest [build artifacts](https://github.com/OpenIPC/camex/actions)
+> for current numbers.
 
 ## Architecture
 

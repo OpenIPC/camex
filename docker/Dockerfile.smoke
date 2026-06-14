@@ -1,0 +1,16 @@
+#
+# Copyright (c) OpenIPC  https://openipc.org  MIT License
+#
+# Dockerfile.smoke — minimal Alpine runtime for camex smoke tests
+#
+# Build: docker build -f Dockerfile.smoke -t camex:smoke .
+# Usage: docker run --rm --cap-add NET_ADMIN --device /dev/net/tun camex:smoke --help
+#
+
+FROM alpine:3.20
+
+RUN apk add --no-cache libgcc
+
+COPY camex /usr/local/bin/camex
+
+ENTRYPOINT ["/usr/local/bin/camex"]

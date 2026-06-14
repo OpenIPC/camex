@@ -1,0 +1,11 @@
+#
+# Copyright (c) OpenIPC  https://openipc.org  MIT License
+#
+# .dockerignore — skip unnecessary files in Docker build context
+#
+.git*
+*.o
+*.ko
+*.md
+docker/
+build/
