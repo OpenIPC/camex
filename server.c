@@ -117,8 +117,13 @@ server_client_t *server_alloc_client(void)
         }
     }
 
+    /* Close old TCP fd before evicting, then memset */
+    int old_tcp_fd = server_clients[oldest].tcp_fd;
     memset(&server_clients[oldest], 0, sizeof(server_clients[oldest]));
     server_clients[oldest].tcp_fd = -1;
+    if (old_tcp_fd >= 0) {
+        close(old_tcp_fd);
+    }
     if (get_random_bytes(
             server_clients[oldest].send_nonce_prefix,
             sizeof(server_clients[oldest].send_nonce_prefix)) != 0) {

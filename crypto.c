@@ -58,6 +58,12 @@ int crypto_init(const char *psk)
     return 0;
 }
 
+void crypto_wipe_ctx(void)
+{
+    crypto_wipe(&crypto_ctx, sizeof(crypto_ctx));
+    crypto_ctx.ready = 0U;
+}
+
 int crypto_encrypt_packet(uint8_t type, uint64_t seq,
                           const uint8_t nonce_prefix[4],
                           const uint8_t *key,

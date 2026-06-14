@@ -47,9 +47,16 @@
 #ifdef _WIN32
 #include "wintun.h"
 #include <process.h>   /* _beginthreadex */
+#if !defined(EWOULDBLOCK) && defined(WSAEWOULDBLOCK)
+#define EWOULDBLOCK WSAEWOULDBLOCK
+#endif
 #endif
 
+#ifdef _WIN32
+intptr_t tun_fd = -1;
+#else
 int tun_fd = -1;
+#endif
 char tun_name[IFNAMSIZ];
 static int tun_from_env = 0; /* 1 = fd was passed via CAMEX_TUN_FD */
 
@@ -238,7 +245,7 @@ static unsigned int __stdcall wintun_reader_thread(void *arg)
     WINTUN_SESSION_HANDLE sess = a->sess;
     SOCKET sock = a->signal_sock;
     struct sockaddr_in dest = a->signal_dest;
-    volatile int *running = a->running;
+    volatile int *thread_running = a->running;
 
     wait_ev = pWintunGetReadWaitEvent(sess);
     if (wait_ev == NULL) {
@@ -246,12 +253,12 @@ static unsigned int __stdcall wintun_reader_thread(void *arg)
         return 1;
     }
 
-    while (*running) {
+    while (*thread_running) {
         ret = WaitForSingleObject(wait_ev, 1000);
         if (ret == WAIT_TIMEOUT) {
             continue;
         }
-        if (!*running) {
+        if (!*thread_running) {
             break;
         }
         /* Drain all available packets */
@@ -281,7 +288,7 @@ static int set_ip_windows(const char *adapter_name,
     int prefix_len = 0;
     struct in_addr mask;
 
-    (void)adapter_name;
+    (void)adapter_name;  /* currently unused; see netsh command below */
 
     /* Parse netmask to prefix length */
     if (inet_pton(AF_INET, netmask_str, &mask) != 1) {
@@ -462,10 +469,10 @@ int tun_create_device(const char *local_ip, const char *netmask,
     }
     g_wintun_thread = thread_h;
 
-    tun_fd = (int)signal_sock;
+    tun_fd = (intptr_t)signal_sock;
     snprintf(tun_name, sizeof(tun_name), "wintun0");
-    log_message(LOG_INFO, "TUN backend: wintun (session %p, signal fd %d)",
-                (void *)g_wintun_sess, (int)tun_fd);
+    log_message(LOG_INFO, "TUN backend: wintun (session %p, signal fd %" PRIdPTR ")",
+                (void *)g_wintun_sess, tun_fd);
     return 0;
 #elif defined(__APPLE__)
     int fd;

@@ -42,6 +42,77 @@
 #define SEND_CAST
 #endif
 
+/*
+ * Per-fd TCP send pending buffer.
+ * When a non-blocking TCP send returns EAGAIN mid-frame, the unsent data
+ * is saved here so the next call can resume transmission rather than
+ * re-sending the 2-byte length header (which would desync the protocol).
+ */
+#define TCP_SEND_BUF_SIZE 65536U
+
+typedef struct {
+    int fd;
+    uint8_t buf[TCP_SEND_BUF_SIZE];
+    size_t len;
+    size_t offset;
+} tcp_send_pending_t;
+
+static tcp_send_pending_t tcp_pending = { -1, { 0 }, 0, 0 };
+
+/*
+ * Flush any pending TCP send data for the given fd.
+ * Returns 0 when fully flushed, 1 if still pending (EAGAIN), -1 on error.
+ */
+static int tcp_send_flush_pending(int fd)
+{
+    if (tcp_pending.fd != fd || tcp_pending.offset >= tcp_pending.len) {
+        return 0;  /* nothing pending for this fd */
+    }
+
+    while (tcp_pending.offset < tcp_pending.len) {
+        ssize_t n;
+        size_t remaining = tcp_pending.len - tcp_pending.offset;
+
+        n = send(fd, SEND_CAST tcp_pending.buf + tcp_pending.offset,
+                 remaining, MSG_NOSIGNAL);
+        if (n < 0) {
+#ifdef _WIN32
+            int e = WSAGetLastError();
+            if (e == WSAEWOULDBLOCK) {
+                return 1;  /* still pending */
+            }
+#else
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return 1;  /* still pending */
+            }
+#endif
+            /* Hard error — discard pending */
+            tcp_pending.fd = -1;
+            tcp_pending.len = 0;
+            tcp_pending.offset = 0;
+            return -1;
+        }
+        tcp_pending.offset += (size_t)n;
+    }
+
+    /* Fully flushed */
+    tcp_pending.fd = -1;
+    tcp_pending.len = 0;
+    tcp_pending.offset = 0;
+    return 0;
+}
+
+/* Cross-platform EAGAIN/EWOULDBLOCK check for socket operations */
+int net_sock_err_is_again(void)
+{
+#ifdef _WIN32
+    int e = WSAGetLastError();
+    return (e == WSAEWOULDBLOCK);
+#else
+    return (errno == EAGAIN || errno == EWOULDBLOCK);
+#endif
+}
+
 int net_fd = -1;
 int listen_fd = -1;
 struct sockaddr_in server_addr;
@@ -217,46 +288,40 @@ int net_tcp_send_frame(int fd, const uint8_t *data, size_t len)
 {
     uint8_t header[2];
     uint16_t net_len;
-    size_t total = 0, frame_size;
+    size_t frame_size;
 
     if (fd < 0 || data == NULL || len > 65535U) {
         return -1;
     }
 
+    /* Flush any pending data for this fd first */
+    {
+        int ret = tcp_send_flush_pending(fd);
+        if (ret != 0) {
+            return ret;  /* 1 = still pending (EAGAIN), -1 = error */
+        }
+    }
+
+    /* Build the frame in our pending buffer */
     net_len = htons((uint16_t)len);
     memcpy(header, &net_len, 2);
+    memcpy(tcp_pending.buf, header, 2);
+    memcpy(tcp_pending.buf + 2, data, len);
     frame_size = 2 + len;
+    tcp_pending.fd = fd;
+    tcp_pending.len = frame_size;
+    tcp_pending.offset = 0;
 
-    /*
-     * Coalesce header + data and loop on send() to handle
-     * partial writes on non-blocking TCP sockets.
-     */
-    while (total < frame_size) {
-        ssize_t n;
-        size_t offset = total;
-        size_t remaining = frame_size - total;
-
-        /* Choose which part of the frame to send */
-        if (offset < 2) {
-            size_t hdr_rem = 2 - offset;
-            size_t chunk = (hdr_rem < remaining) ? hdr_rem : remaining;
-            n = send(fd, SEND_CAST header + offset, chunk, MSG_NOSIGNAL);
-        } else {
-            n = send(fd, SEND_CAST data + (offset - 2), remaining, MSG_NOSIGNAL);
-        }
-
-        if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                /* caller will re-select after EPOLLOUT */
-                return -1;
-            }
-            return -1;
-        }
-        total += (size_t)n;
-    }
-    return 0;
+    /* Try to send immediately; flush will handle EAGAIN mid-write */
+    return tcp_send_flush_pending(fd);
 }
 
+/*
+ * TCP recv helpers: use platform-specific EAGAIN via net_sock_err_is_again().
+ * Returns:  0 = full frame received, *len set
+ *           1 = partial data / EAGAIN (caller should re-select)
+ *          -1 = hard error (connection closed, protocol error)
+ */
 int net_tcp_recv_frame(int fd, uint8_t *buffer, size_t size, size_t *len)
 {
     uint8_t header[2];
@@ -273,13 +338,12 @@ int net_tcp_recv_frame(int fd, uint8_t *buffer, size_t size, size_t *len)
     while (total < 2) {
         n = read(fd, header + total, 2 - total);
         if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                return -1;  /* caller will re-select */
+            if (net_sock_err_is_again()) {
+                return 1;  /* caller will re-select */
             }
             return -1;
         }
         if (n == 0) {
-            errno = ENOTCONN;
             return -1;  /* connection closed */
         }
         total += (size_t)n;
@@ -296,13 +360,12 @@ int net_tcp_recv_frame(int fd, uint8_t *buffer, size_t size, size_t *len)
     while (total < body_len) {
         n = read(fd, buffer + total, body_len - total);
         if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                return -1;  /* caller will re-select */
+            if (net_sock_err_is_again()) {
+                return 1;  /* caller will re-select */
             }
             return -1;
         }
         if (n == 0) {
-            errno = ENOTCONN;
             return -1;  /* connection closed */
         }
         total += (size_t)n;

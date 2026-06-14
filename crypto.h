@@ -12,6 +12,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <stdlib.h>
+
 /* crypto_wipe is defined in monocypher — forward-declare here */
 void crypto_wipe(void *secret, size_t size);
 
@@ -63,5 +65,7 @@ void crypto_log_fingerprint(void);
 const camex_crypto_t *crypto_get_ctx(void);
 
 /* crypto_wipe() is provided by monocypher.h */
+
+void crypto_wipe_ctx(void);
 
 #endif /* CAMEX_CRYPTO_H */

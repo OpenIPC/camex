@@ -589,7 +589,7 @@ static void drain_udp_packets(void)
                 continue;
             }
 
-            if (len < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            if (len < 0 && net_sock_err_is_again()) {
                 break;
             }
 
@@ -598,20 +598,22 @@ static void drain_udp_packets(void)
         return;
     }
 
-    /* Client mode */
+    /* Client mode TCP */
     if (current_config.transport == CAMEX_TRANSPORT_TCP) {
         size_t frame_len;
-        if (net_tcp_recv_frame(net_fd, buffer, sizeof(buffer),
-                               &frame_len) == 0) {
+        int rc = net_tcp_recv_frame(net_fd, buffer, sizeof(buffer),
+                                    &frame_len);
+        if (rc == 0) {
             client_state.last_recv = g_now;
             if (client_handle_net_packet(buffer, frame_len) != 0) {
                 log_message(LOG_WARNING, "Dropped packet from server");
             }
-        } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+        } else if (rc < 0) {
             log_message(LOG_WARNING,
                         "TCP read error from server — will reconnect");
             net_close();
         }
+        /* rc == 1 => EAGAIN, just return */
         return;
     }
 
@@ -626,7 +628,7 @@ static void drain_udp_packets(void)
             continue;
         }
 
-        if (len < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        if (len < 0 && net_sock_err_is_again()) {
             break;
         }
 
@@ -664,6 +666,12 @@ static void drain_tcp_server_accept(void)
                 server_clients[i].addr = peer;
                 server_clients[i].last_seen = g_now;
                 server_clients[i].active = 1U;
+                if (get_random_bytes(
+                        server_clients[i].send_nonce_prefix,
+                        sizeof(server_clients[i].send_nonce_prefix)) != 0) {
+                    log_message(LOG_WARNING,
+                                "TCP: getrandom failed, weak nonce prefix");
+                }
                 net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
                 log_message(LOG_INFO, "TCP client connected: %s (fd=%d)",
                             peer_str, client_fd);
@@ -685,11 +693,13 @@ static void drain_tcp_client_read(int fd)
     size_t frame_len;
     size_t i;
     char peer_str[64];
+    int rc;
 
-    if (net_tcp_recv_frame(fd, buffer, sizeof(buffer), &frame_len) != 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return;  /* partial data; will re-select */
-        }
+    rc = net_tcp_recv_frame(fd, buffer, sizeof(buffer), &frame_len);
+    if (rc == 1) {
+        return;  /* EAGAIN — partial data; will re-select */
+    }
+    if (rc < 0) {
         /* Connection closed or error — find and remove this client */
         for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
             if (server_clients[i].active &&
@@ -753,7 +763,7 @@ static void handle_tun_packet(void)
             continue;
         }
 
-        if (len < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        if (len < 0 && net_sock_err_is_again()) {
             break;
         }
 
@@ -921,6 +931,27 @@ void camex_stop(void)
                                   current_config.gateway_ip);
         }
     }
+
+    /* Wipe all key material from memory */
+    crypto_wipe_ctx();
+    {
+        /* Wipe per-client keys */
+        extern camex_keystore_entry_t server_keystore[];
+        extern size_t server_keystore_count;
+        for (i = 0; i < server_keystore_count; ++i) {
+            crypto_wipe(server_keystore[i].psk_key,
+                        sizeof(server_keystore[i].psk_key));
+        }
+        server_keystore_count = 0;
+    }
+    {
+        extern server_client_t server_clients[];
+        for (i = 0; i < (size_t)CAMEX_MAX_CLIENTS; ++i) {
+            crypto_wipe(server_clients[i].psk_key,
+                        sizeof(server_clients[i].psk_key));
+        }
+    }
+    crypto_wipe(current_config.psk, sizeof(current_config.psk));
 
     tun_close_device();
     net_close();

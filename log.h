@@ -28,7 +28,7 @@
 
 #ifdef __MINGW32__
 void log_message(int priority, const char *fmt, ...)
-    __attribute__((format(__mingw_printf__, 2, 3)));
+    __attribute__((format(printf, 2, 3)));
 #else
 void log_message(int priority, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));

@@ -11,10 +11,19 @@
 
 #ifdef _WIN32
 
+/* Require Vista+ SDK for MIB_UNICASTIPADDRESS_ROW, MIB_IPINTERFACE_ROW etc. */
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
+#ifndef NTDDI_VERSION
+#define NTDDI_VERSION 0x06010000
+#endif
+
 #include <windows.h>
 #include <winternl.h>
 #include <iphlpapi.h>
 #include <netioapi.h>
+#include <ws2tcpip.h>   /* inet_pton on MinGW */
 
 #ifdef __GNUC__
 #pragma GCC diagnostic push

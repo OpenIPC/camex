@@ -18,8 +18,14 @@
  * On POSIX: native fd (int).
  * On Windows: Winsock SOCKET stored as int (signal socket for WinTUN).
  * Windows socket handles are typically small integers; the cast is safe.
+ * For Win64, SOCKET is 64-bit, so we use intptr_t for portability.
  */
+#include <stdint.h>
+#ifndef _WIN32
 extern int tun_fd;
+#else
+extern intptr_t tun_fd;
+#endif
 extern char tun_name[];
 
 /* More verbose crypto error logging */
