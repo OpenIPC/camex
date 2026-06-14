@@ -37,6 +37,7 @@
 #include <netinet/in.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/sys_control.h>
 #include <sys/kern_control.h>
 #endif
 
@@ -176,7 +177,7 @@ static int tun_configure_macos(int fd)
     }
 
     copy_ifreq_name(&cfg, tun_name);
-    sin = (struct sockaddr_in *)&cfg.ifr_netmask;
+    sin = (struct sockaddr_in *)&cfg.ifr_addr;
     sin->sin_family = AF_INET;
     if (inet_pton(AF_INET, netmask, &sin->sin_addr) != 1 ||
         ioctl(sock, SIOCSIFNETMASK, &cfg) < 0) {
@@ -379,7 +380,9 @@ void tun_close_device(void)
         close(tun_fd);
         tun_fd = -1;
     }
+#if !defined(_WIN32)
     reset_tun_backend();
+#endif
 }
 
 ssize_t tun_read_packet(uint8_t *buffer, size_t size)

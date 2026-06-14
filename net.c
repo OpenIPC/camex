@@ -34,6 +34,12 @@
 #define close(fd) closesocket(fd)
 /* On Windows, read() does not work on SOCKET handles */
 #define read(s, buf, len) recv(s, (char *)(buf), (len), 0)
+/* Winsock setsockopt/send/sendto expect const char* */
+#define OPTVAL_CAST (const char *)
+#define SEND_CAST   (const char *)
+#else
+#define OPTVAL_CAST
+#define SEND_CAST
 #endif
 
 int net_fd = -1;
@@ -112,10 +118,10 @@ int net_tune_udp_socket(int fd)
     int bufsize;
 
     bufsize = 4 * 1024 * 1024;
-    if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &bufsize, sizeof(bufsize)) < 0) {
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, OPTVAL_CAST &bufsize, sizeof(bufsize)) < 0) {
         print_errno_message(LOG_WARNING, "setsockopt(SO_RCVBUF)");
     }
-    if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &bufsize, sizeof(bufsize)) < 0) {
+    if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, OPTVAL_CAST &bufsize, sizeof(bufsize)) < 0) {
         print_errno_message(LOG_WARNING, "setsockopt(SO_SNDBUF)");
     }
     return set_fd_nonblocking(fd);
@@ -181,9 +187,9 @@ int net_send_payload(int fd, const struct sockaddr_in *to,
     }
 
     if (to == NULL) {
-        sent = send(fd, data, len, 0);
+        sent = send(fd, SEND_CAST data, len, 0);
     } else {
-        sent = sendto(fd, data, len, 0,
+        sent = sendto(fd, SEND_CAST data, len, 0,
                       (const struct sockaddr *)to, sizeof(*to));
     }
 
@@ -234,9 +240,9 @@ int net_tcp_send_frame(int fd, const uint8_t *data, size_t len)
         if (offset < 2) {
             size_t hdr_rem = 2 - offset;
             size_t chunk = (hdr_rem < remaining) ? hdr_rem : remaining;
-            n = send(fd, header + offset, chunk, MSG_NOSIGNAL);
+            n = send(fd, SEND_CAST header + offset, chunk, MSG_NOSIGNAL);
         } else {
-            n = send(fd, data + (offset - 2), remaining, MSG_NOSIGNAL);
+            n = send(fd, SEND_CAST data + (offset - 2), remaining, MSG_NOSIGNAL);
         }
 
         if (n < 0) {
@@ -321,7 +327,7 @@ int net_tcp_listen(const char *bind_ip, int port)
         return -1;
     }
 
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, OPTVAL_CAST &reuse, sizeof(reuse)) < 0) {
         print_errno_message(LOG_WARNING, "setsockopt(SO_REUSEADDR)");
     }
 
@@ -401,9 +407,9 @@ int net_tcp_connect(const char *host, int port)
     {
         int bufsize = 4 * 1024 * 1024;
         (void)setsockopt(fd, SOL_SOCKET, SO_RCVBUF,
-                         &bufsize, sizeof(bufsize));
+                         OPTVAL_CAST &bufsize, sizeof(bufsize));
         (void)setsockopt(fd, SOL_SOCKET, SO_SNDBUF,
-                         &bufsize, sizeof(bufsize));
+                         OPTVAL_CAST &bufsize, sizeof(bufsize));
     }
 
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {

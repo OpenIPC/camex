@@ -22,13 +22,15 @@
 #include <time.h>
 
 #ifndef _WIN32
+#include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/time.h>
-#include <unistd.h>
 #else
 #include <winsock2.h>
+#include <ws2tcpip.h>
+#define close(fd) closesocket(fd)
 #endif
 
 client_state_t client_state;
@@ -194,7 +196,7 @@ int client_wait_for_config(void)
             }
             ready = (int)frame_len;
         } else {
-            ready = recv(net_fd, buffer, sizeof(buffer), 0);
+            ready = recv(net_fd, (char *)buffer, sizeof(buffer), 0);
             if (ready <= 0) {
                 continue;
             }

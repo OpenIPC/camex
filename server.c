@@ -17,7 +17,9 @@
 #include "config.h"
 #include "camex.h"
 
+#ifndef _WIN32
 #include <arpa/inet.h>
+#endif
 #include <errno.h>
 #include <string.h>
 #include <strings.h>
@@ -32,6 +34,8 @@
 #include <unistd.h>
 #else
 #include <winsock2.h>
+#include <ws2tcpip.h>
+#define close(fd) closesocket(fd)
 #endif
 
 server_client_t server_clients[CAMEX_MAX_CLIENTS];
