@@ -412,6 +412,10 @@ static void drain_udp_packets(void)
             if (client_handle_net_packet(buffer, frame_len) != 0) {
                 log_message(LOG_WARNING, "Dropped packet from server");
             }
+        } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            log_message(LOG_WARNING,
+                        "TCP read error from server — will reconnect");
+            net_close();
         }
         return;
     }
@@ -453,6 +457,11 @@ static void drain_tcp_server_accept(void)
             break;
         }
 
+        if (set_fd_nonblocking(client_fd) != 0) {
+            close(client_fd);
+            continue;
+        }
+
         for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
             if (!server_clients[i].active) {
                 memset(&server_clients[i], 0, sizeof(server_clients[i]));
@@ -483,6 +492,9 @@ static void drain_tcp_client_read(int fd)
     char peer_str[64];
 
     if (net_tcp_recv_frame(fd, buffer, sizeof(buffer), &frame_len) != 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return;  /* partial data; will re-select */
+        }
         /* Connection closed or error — find and remove this client */
         for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
             if (server_clients[i].active &&

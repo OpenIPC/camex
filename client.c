@@ -353,7 +353,7 @@ void client_tick(void)
 int client_socket_create(const char *host, int port, const char *bind_dev)
 {
     int fd;
-    (void)bind_dev;
+    (void)bind_dev;  /* bind_dev applied via current_config.bind_dev in net_configure_socket */
 
     if (current_config.transport == CAMEX_TRANSPORT_TCP) {
         fd = net_tcp_connect(host, port);

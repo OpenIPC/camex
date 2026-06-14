@@ -234,8 +234,14 @@ int net_tcp_recv_frame(int fd, uint8_t *buffer, size_t size, size_t *len)
     /* Read 2-byte header */
     while (total < 2) {
         n = read(fd, header + total, 2 - total);
-        if (n <= 0) {
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return -1;  /* caller will re-select */
+            }
             return -1;
+        }
+        if (n == 0) {
+            return -1;  /* connection closed */
         }
         total += (size_t)n;
     }
@@ -250,8 +256,14 @@ int net_tcp_recv_frame(int fd, uint8_t *buffer, size_t size, size_t *len)
     total = 0;
     while (total < body_len) {
         n = read(fd, buffer + total, body_len - total);
-        if (n <= 0) {
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return -1;  /* caller will re-select */
+            }
             return -1;
+        }
+        if (n == 0) {
+            return -1;  /* connection closed */
         }
         total += (size_t)n;
     }
@@ -277,6 +289,11 @@ int net_tcp_listen(const char *bind_ip, int port)
 
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
         print_errno_message(LOG_WARNING, "setsockopt(SO_REUSEADDR)");
+    }
+
+    if (net_configure_socket(fd) != 0) {
+        close(fd);
+        return -1;
     }
 
     memset(&addr, 0, sizeof(addr));
@@ -322,8 +339,31 @@ int net_tcp_connect(const char *host, int port)
         return -1;
     }
 
+    /* Set bind_dev and buffer sizes before connect */
+    if (current_config.bind_dev[0] != '\0') {
+        if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE,
+                       current_config.bind_dev,
+                       strlen(current_config.bind_dev) + 1U) < 0) {
+            print_errno_message(LOG_WARNING,
+                                "setsockopt(SO_BINDTODEVICE)");
+        }
+    }
+    {
+        int bufsize = 4 * 1024 * 1024;
+        (void)setsockopt(fd, SOL_SOCKET, SO_RCVBUF,
+                         &bufsize, sizeof(bufsize));
+        (void)setsockopt(fd, SOL_SOCKET, SO_SNDBUF,
+                         &bufsize, sizeof(bufsize));
+    }
+
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         print_errno_message(LOG_ERR, "connect(TCP)");
+        close(fd);
+        return -1;
+    }
+
+    /* Set nonblocking after connect completes */
+    if (set_fd_nonblocking(fd) != 0) {
         close(fd);
         return -1;
     }

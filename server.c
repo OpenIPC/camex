@@ -558,7 +558,7 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
 int server_socket_create(const char *bind_ip, int port,
                          const char *bind_dev)
 {
-    (void)bind_dev;
+    (void)bind_dev;  /* bind_dev applied via current_config.bind_dev in net_configure_socket */
 
     if (current_config.transport == CAMEX_TRANSPORT_TCP) {
         listen_fd = net_tcp_listen(bind_ip, port);
