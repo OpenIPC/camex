@@ -7,20 +7,20 @@ cmake_minimum_required(VERSION 3.22)
 project("camex" C)
 
 # Collect all camex sources (relative to android/app/src/main/jni/)
-# 5 levels up = repo root
+# 5 levels up = repo root/src
 set(CAMEX_SRCS
-    ../../../../../main.c
-    ../../../../../camex.c
-    ../../../../../monocypher.c
-    ../../../../../util.c
-    ../../../../../log.c
-    ../../../../../crypto.c
-    ../../../../../tun.c
-    ../../../../../net.c
-    ../../../../../proto.c
-    ../../../../../config.c
-    ../../../../../client.c
-    ../../../../../server.c
+    ../../../../../src/main.c
+    ../../../../../src/camex.c
+    ../../../../../src/monocypher.c
+    ../../../../../src/util.c
+    ../../../../../src/log.c
+    ../../../../../src/crypto.c
+    ../../../../../src/tun.c
+    ../../../../../src/net.c
+    ../../../../../src/proto.c
+    ../../../../../src/config.c
+    ../../../../../src/client.c
+    ../../../../../src/server.c
 )
 
 # Build the shared library
@@ -35,7 +35,7 @@ target_compile_definitions(camex PRIVATE
 )
 
 target_include_directories(camex PRIVATE
-    ../../../../../../   # camex headers
+    ../../../../../../src   # camex headers
 )
 
 target_link_libraries(camex log)
