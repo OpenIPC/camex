@@ -75,7 +75,7 @@ jobs:
           make clean
           make -j$(nproc) \
             CROSS_COMPILE=${{ matrix.platform.triple }}- \
-            CPPFLAGS="-I. -DCAMEX_VERSION=\"$(git describe --tags --always --dirty 2>/dev/null || echo dev)\""
+            'CPPFLAGS=-I. -DCAMEX_VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"'
           mkdir -p "${{ env.BUILD_DIR }}"
           cp "${{ env.TARGET }}" "${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.platform.name }}"
         if: matrix.platform.name != 'x86_64'
@@ -135,7 +135,7 @@ jobs:
           make -j$(nproc) \
             CC=aarch64-linux-android21-clang \
             STRIP=llvm-strip \
-            CPPFLAGS="-I. -DCAMEX_VERSION=\"$(git describe --tags --always --dirty 2>/dev/null || echo dev)\""
+            'CPPFLAGS=-I. -DCAMEX_VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"'
           mkdir -p build
           cp camex build/camex-aarch64-android
           llvm-strip --strip-unneeded build/camex-aarch64-android 2>/dev/null || true
@@ -168,9 +168,9 @@ jobs:
           make -j$(nproc) \
             CC=x86_64-w64-mingw32-gcc \
             STRIP=x86_64-w64-mingw32-strip \
-            CPPFLAGS="-I. -D_GNU_SOURCE -DCAMEX_VERSION=\"$(git describe --tags --always --dirty 2>/dev/null || echo dev)\"" \
             LDFLAGS="-lws2_32" \
-            TARGET=camex.exe
+            TARGET=camex.exe \
+            'CPPFLAGS=-I. -D_GNU_SOURCE -DCAMEX_VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"'
           mkdir -p build
           cp camex.exe build/
           x86_64-w64-mingw32-strip --strip-unneeded build/camex.exe 2>/dev/null || true
@@ -199,7 +199,7 @@ jobs:
           make clean
           make -j$(sysctl -n hw.logicalcpu) \
             CC=clang \
-            CPPFLAGS="-I. -D_GNU_SOURCE -DCAMEX_VERSION=\"$(git describe --tags --always --dirty 2>/dev/null || echo dev)\""
+            'CPPFLAGS=-I. -D_GNU_SOURCE -DCAMEX_VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"'
           mkdir -p build
           cp camex build/camex-darwin
           strip --strip-unneeded build/camex-darwin 2>/dev/null || true
