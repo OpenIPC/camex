@@ -316,11 +316,11 @@ int validate_and_prepare_client(camex_config_t *config)
 
 void print_usage(const char *progname)
 {
-    printf("camex %s — minimal dependency-free UDP/TUN tunnel"
+    printf("camex %s — minimal dependency-free UDP/TCP tunnel"
            " for embedded Linux\n\n", CAMEX_VERSION);
 
     printf("Features:\n");
-    printf("  * Client/server architecture over UDP\n");
+    printf("  * Client/server architecture over UDP or TCP\n");
     printf("  * ChaCha20-Poly1305 authenticated encryption (optional)\n");
     printf("  * Auto-config: server pushes IP/route/MTU to the client\n");
     printf("  * Per-client pre-shared keys alongside a global PSK\n");
@@ -348,17 +348,17 @@ void print_usage(const char *progname)
            " between clients\n\n");
 
     printf("Client options:\n");
-    printf("  -a, --auto           "
+    printf("  -a, --auto              "
            "Fetch tunnel parameters from the server\n");
-    printf("  -n, --name <id>      Client ID used in auto mode\n");
-    printf("  -l, --local-cidr     Local tunnel address in CIDR form\n");
-    printf("  -g, --gateway-ip     Gateway inside the tunnel\n");
-    printf("  -s, --server-host    Tunnel server host or address\n");
-    printf("  -p, --port <port>    Tunnel server port\n");
-    printf("  -c, --route-cidr     Route to install through the tunnel"
-           " (repeatable)\n");
-    printf("  -T, --tun-dev <path> "
-           "TUN device path (default: auto-detect)\n\n");
+    printf("  -n, --name <id>         Client ID used in auto mode\n");
+    printf("  -l, --local-cidr <cidr>  Local tunnel address in CIDR form\n");
+    printf("  -g, --gateway-ip <addr>  Gateway inside the tunnel\n");
+    printf("  -s, --server-host <addr> Tunnel server host or address\n");
+    printf("  -p, --port <port>       Tunnel server port\n");
+    printf("  -c, --route-cidr <cidr>  Route to install through the"
+           " tunnel (repeatable)\n");
+    printf("  -T, --tun-dev <path>   TUN device path"
+           " (default: auto-detect)\n\n");
 
     printf("Server options:\n");
     printf("  -f, --config <path>  Server config file path"
@@ -371,9 +371,9 @@ void print_usage(const char *progname)
 
     printf("Common options:\n");
     printf("  -t, --mtu <size>     Tunnel MTU, 576-9000 (default: 1500)\n");
-    printf("  -k, --psk <key>      Passphrase used to derive key\n");
+    printf("  -k, --psk <pass>     Passphrase used to derive encryption key\n");
     printf("  -e, --encrypt        Enable ChaCha20-Poly1305 encryption\n");
-    printf("  -P, --pid-file       Write PID to file on startup\n");
+    printf("  -P, --pid-file <path> Write PID to file on startup\n");
     printf("  -R, --transport <t>  Transport protocol: udp (default) or tcp\n");
     printf("  -v, --version        Show version and exit\n");
     printf("  -h, --help           Show this help message and exit\n\n");

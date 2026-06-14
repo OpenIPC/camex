@@ -2,7 +2,7 @@
  *
  * Copyright (c) OpenIPC  https://openipc.org  MIT License
  *
- * camex.c — client/server UDP/TUN tunnel (main entry point)
+ * camex.c — client/server UDP/TCP tunnel (main entry point)
  *
  */
 

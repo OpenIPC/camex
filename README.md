@@ -1,12 +1,11 @@
-# Camex — v2.1.0
+# Camex — v2.2.0
 
 [![camex CI](https://github.com/OpenIPC/camex/actions/workflows/build.yml/badge.svg)](https://github.com/OpenIPC/camex/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/OpenIPC/camex)](https://github.com/OpenIPC/camex/releases)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20(beta)-blue)](PLATFORM.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Code size](https://img.shields.io/github/languages/code-size/OpenIPC/camex)](https://github.com/OpenIPC/camex)
 
-Minimal dependency-free Linux UDP/TCP tunnel for embedded targets.
+Minimal dependency-free UDP/TCP tunnel for embedded Linux targets.
 
 Ships as a userspace daemon and an optional standalone kernel module.
 
@@ -193,19 +192,19 @@ sudo ./camex \
 
 | Option | Short | Description |
 |---|---|---|
-| `--mode <mode>` | `-M` | `client` or `server` |
+| `--mode <mode>` | `-M` | Operation mode: `client` or `server` (required) |
 | `--auto` | `-a` | Fetch tunnel parameters from the server |
 | `--name <id>` | `-n` | Client ID used in auto mode |
 | `--local-cidr <cidr>` | `-l` | Tunnel address in `address/prefix` form |
 | `--gateway-ip <addr>` | `-g` | Client gateway inside the tunnel |
 | `--server-host <addr>` | `-s` | Server hostname or IP for client mode |
 | `--port <port>` | `-p` | Server port for client or listen port for server |
-| `--bind-ip <addr>` | `-b` | Optional server bind address |
+| `--bind-ip <addr>` | `-b` | Server bind address (default: 0.0.0.0) |
 | `--config <path>` | `-f` | Server config file path |
 | `--route-cidr <cidr>` | `-c` | Extra route to install on the client; repeatable |
-| `--mtu <size>` | `-t` | Tunnel MTU, 576–9000 |
-| `--psk <passphrase>` | `-k` | Passphrase stretched into a 32-byte key |
-| `--encrypt` | `-e` | Enable ChaCha20-Poly1305 transport |
+| `--mtu <size>` | `-t` | Tunnel MTU, 576–9000 (default: 1500) |
+| `--psk <pass>` | `-k` | Passphrase stretched into a 32-byte key |
+| `--encrypt` | `-e` | Enable ChaCha20-Poly1305 encryption |
 | `--tun-dev <path>` | `-T` | TUN device path (default: auto-detect `/dev/net/tun` then `/dev/camex`) |
 | `--pid-file <path>` | `-P` | Write PID to file on startup |
 | `--bind-dev <iface>` | `-d` | Bind socket to a specific network interface (`SO_BINDTODEVICE`) |
@@ -213,10 +212,20 @@ sudo ./camex \
 | `--version` | `-v` | Print version and exit |
 | `--help` | `-h` | Print usage and exit |
 
+## Examples
+
+Ready-to-use configuration files are available in the `examples/` directory:
+
+| File | Description |
+|------|-------------|
+| `examples/camex.conf` | Server-side configuration file format reference |
+| `examples/camex.service` | systemd service unit for camex daemon |
+| `examples/README.md` | Usage instructions for all examples |
+
 ## Server Configuration
 
 The server reads a flat key=value config file with one client record per block.
-See `camex.conf.example` for the full format.
+See `examples/camex.conf` for the full format.
 
 ```sh
 sudo ./camex --mode server --port 7000 --config /etc/camex/camex.conf
@@ -539,4 +548,4 @@ memory is unavailable in this context the packet is dropped
 - The server relays packets based on the inner IPv4 destination address.
 - Client sockets are outbound only; no listening port is opened on the client side.
 - In auto mode, `-l`, `-g`, and `-c` are supplied by the server.
-- `camex.conf.example` shows the server-side parameter database format.
+- `examples/camex.conf` shows the server-side parameter database format.
