@@ -69,6 +69,7 @@ int tun_accept_fd(void)
     return tun_fd;
 }
 
+#if !defined(_WIN32)
 static void copy_ifreq_name(struct ifreq *req, const char *name)
 {
     memset(req, 0, sizeof(*req));
@@ -90,6 +91,7 @@ static void close_tun_creation(int sock, int fd)
     }
     reset_tun_backend();
 }
+#endif /* !_WIN32 */
 
 #if defined(__APPLE__)
 /* macOS: create utun interface via kernel control API */

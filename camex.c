@@ -31,11 +31,31 @@
 #ifndef __APPLE__
 #include <net/route.h>
 #endif
+#if !defined(__APPLE__)  /* macOS has BSD types, no arp.h needed */
 #include <net/if_arp.h>
+#endif
 #endif
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+/* Windows (MinGW) compatibility */
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+/* MinGW may not define socklen_t with older headers */
+#if !defined(socklen_t)
+typedef int socklen_t;
+#endif
+/* close() does not work on sockets under Windows */
+#define close(fd) closesocket(fd)
+/* usleep → Sleep (milliseconds) */
+#define usleep(us) Sleep((us) / 1000)
+/* Windows recvfrom/recv expect char* buffer */
+#define RECV_BUF_CAST (char *)
+#else
+#define RECV_BUF_CAST
+#endif
 #include <string.h>
 #ifndef _WIN32
 #include <sys/ioctl.h>
@@ -558,7 +578,7 @@ static void drain_udp_packets(void)
         while (1) {
             socklen_t fromlen = sizeof(from);
 
-            len = recvfrom(net_fd, buffer, sizeof(buffer), 0,
+            len = recvfrom(net_fd, RECV_BUF_CAST buffer, sizeof(buffer), 0,
                            (struct sockaddr *)&from, &fromlen);
             if (len > 0) {
                 if (server_handle_packet(buffer, (size_t)len, &from) != 0) {
@@ -597,7 +617,7 @@ static void drain_udp_packets(void)
 
     /* UDP client: drain all available packets */
     while (1) {
-        len = recv(net_fd, buffer, sizeof(buffer), 0);
+        len = recv(net_fd, RECV_BUF_CAST buffer, sizeof(buffer), 0);
         if (len > 0) {
             client_state.last_recv = g_now;
             if (client_handle_net_packet(buffer, (size_t)len) != 0) {

@@ -133,17 +133,20 @@ jobs:
 
       - name: Install Android SDK
         run: |
-          mkdir -p $HOME/android-sdk/cmdline-tools
-          cd /tmp
-          curl -fsSOL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
-          unzip -q commandlinetools-linux-11076708_latest.zip
-          mv cmdline-tools $HOME/android-sdk/cmdline-tools/latest
-          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> "$GITHUB_ENV"
-          export ANDROID_SDK_ROOT=$HOME/android-sdk
-          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager \
-            --sdk_root=$ANDROID_SDK_ROOT \
-            "platforms;android-34" "build-tools;34.0.0" \
-            2>&1 | tail -5
+          # Use the pre-installed ANDROID_HOME on ubuntu-latest runner.
+          ANDROID_HOME=/usr/local/lib/android/sdk
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          # Set ANDROID_SDK_ROOT to same path to avoid Gradle 8.5 conflict
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          # Ensure needed platform and build-tools are present
+          SDKMANAGER=$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager
+          if [ -x "$SDKMANAGER" ]; then
+            yes | $SDKMANAGER --sdk_root=$ANDROID_HOME \
+              "platforms;android-34" "build-tools;34.0.0" \
+              2>&1 | tail -5
+          else
+            echo "Warning: sdkmanager not found at $SDKMANAGER"
+          fi
 
       - name: Set up Gradle wrapper
         run: |
@@ -158,7 +161,6 @@ jobs:
 
       - name: Build APK
         run: |
-          export ANDROID_SDK_ROOT=$HOME/android-sdk
           cd android
           ./gradlew assembleRelease
           ls -lh app/build/outputs/apk/release/
@@ -215,7 +217,7 @@ jobs:
         run: |
           make clean
           make -j$(sysctl -n hw.logicalcpu) \
-            CC=clang STD=gnu99 2>&1
+            CC=clang STD=gnu99 POSIX_SRC= 2>&1
           mkdir -p build
           cp camex build/camex-darwin
           strip --strip-unneeded build/camex-darwin 2>/dev/null || true

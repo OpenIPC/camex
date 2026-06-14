@@ -32,6 +32,8 @@
 
 #ifdef _WIN32
 #define close(fd) closesocket(fd)
+/* On Windows, read() does not work on SOCKET handles */
+#define read(s, buf, len) recv(s, (char *)(buf), (len), 0)
 #endif
 
 int net_fd = -1;

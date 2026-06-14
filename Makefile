@@ -14,7 +14,23 @@ VERSION ?= $(shell git -C $(dir $(abspath $(lastword $(MAKEFILE_LIST)))) \
 
 CPPFLAGS += -I.
 STD      ?= c99
-CFLAGS   += -std=$(STD) -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L \
+# macOS: -D_POSIX_C_SOURCE suppresses BSD types (u_short, u_char etc.).
+# _DARWIN_C_SOURCE exposes them while keeping POSIX conformance.
+# Set from CI via STD=gnu99 + POSIX_SRC=.
+POSIX_SRC ?= -D_POSIX_C_SOURCE=200809L
+# Detect macOS and add _DARWIN_C_SOURCE automatically when POSIX_SRC is in use.
+ifneq ($(shell uname -s 2>/dev/null),Darwin)
+  DARWIN_CFLAGS =
+else
+  DARWIN_CFLAGS = -D_DARWIN_C_SOURCE=1
+endif
+# Windows (MinGW): need modern WINVER for socklen_t and Winsock2.
+ifneq ($(findstring mingw,$(CC)),)
+  WIN32_CFLAGS = -D_WIN32_WINNT=0x0601
+else
+  WIN32_CFLAGS =
+endif
+CFLAGS   += -std=$(STD) -D_GNU_SOURCE $(POSIX_SRC) $(DARWIN_CFLAGS) $(WIN32_CFLAGS) \
             -Wall -Wextra -Wshadow -Wstrict-prototypes \
             -Os -ffunction-sections -fdata-sections
 LDFLAGS  += -Wl,--gc-sections

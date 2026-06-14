@@ -24,9 +24,9 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #else
+#include <ws2tcpip.h>  /* must come before windows.h */
 #include <windows.h>
 #include <bcrypt.h>
-#include <ws2tcpip.h>
 #endif
 #if defined(__APPLE__)
 #include <CommonCrypto/CommonRandom.h>
