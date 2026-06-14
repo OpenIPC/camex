@@ -53,7 +53,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -98,14 +98,14 @@ jobs:
             awk '{print "- `" $5 "`  " $9}' | tee -a sizes.md
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: camex-${{ matrix.platform.name }}
           path: ${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.platform.name }}
           if-no-files-found: error
 
       - name: Upload size report
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: sizes-${{ matrix.platform.name }}
           path: sizes.md
@@ -118,7 +118,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install NDK
         run: |
@@ -141,7 +141,7 @@ jobs:
           ls -lh build/camex-aarch64-android
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: camex-aarch64-android
           path: build/camex-aarch64-android
@@ -154,7 +154,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install MinGW
         run: |
@@ -175,7 +175,7 @@ jobs:
           x86_64-w64-mingw32-strip --strip-unneeded build/camex.exe 2>/dev/null || true
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: camex-x86_64-mingw
           path: build/camex.exe
@@ -188,7 +188,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -211,7 +211,7 @@ jobs:
           fi
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: camex-darwin
           path: build/camex-darwin
@@ -224,10 +224,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Download x86_64 binary
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: camex-x86_64
           path: docker/
@@ -248,7 +248,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           path: artifacts
 
@@ -266,7 +266,7 @@ jobs:
           cat sizes-table.md
 
       - name: Upload size table
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: sizes-table
           path: sizes-table.md
@@ -282,7 +282,7 @@ jobs:
 
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           path: artifacts
 
