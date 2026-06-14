@@ -284,6 +284,11 @@ int proto_parse_config(char *message, camex_config_t *config)
             }
             continue;
         }
+        /* Protocol version — silently skip for forward compat */
+        if (token_value(token, "VER", value, sizeof(value)) == 0) {
+            log_message(LOG_DEBUG, "Peer protocol version: %s", value);
+            continue;
+        }
 
         log_message(LOG_ERR, "Unknown config token: %s", token);
         return -1;
