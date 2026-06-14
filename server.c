@@ -304,11 +304,19 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
             entry->addr = *from;
             entry->last_seen = g_now;
         } else {
-            entry = server_alloc_client();
-            if (entry == NULL) {
-                log_message(LOG_WARNING, "No free slots for client %s",
-                            client_id);
-                return -1;
+            /* TCP clients already have a slot allocated by drain_tcp_server_accept.
+             * Reuse it instead of creating a second entry — otherwise tcp_fd
+             * is lost and the config response goes via UDP. */
+            server_client_t *by_addr = server_find_by_addr(from);
+            if (by_addr != NULL && by_addr->tcp_fd >= 0) {
+                entry = by_addr;
+            } else {
+                entry = server_alloc_client();
+                if (entry == NULL) {
+                    log_message(LOG_WARNING, "No free slots for client %s",
+                                client_id);
+                    return -1;
+                }
             }
             entry->addr = *from;
             entry->last_seen = g_now;
@@ -318,6 +326,22 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
         entry->last_register_time = g_now;
         if (used_key != NULL) {
             memcpy(entry->psk_key, used_key, 32);
+        }
+        /* Set ip_be from profile's local_cidr so server_find_by_ip()
+         * works even when NAT changes the client's UDP source port. */
+        {
+            camex_profile_t profile;
+            if (config_db_lookup_profile(client_id, &profile) == 0 &&
+                profile.local_cidr[0] != '\0') {
+                char ip[16], mask[16];
+                if (parse_local_cidr(profile.local_cidr, ip, sizeof(ip),
+                                     mask, sizeof(mask)) == 0) {
+                    struct in_addr a;
+                    if (inet_pton(AF_INET, ip, &a) == 1) {
+                        entry->ip_be = a.s_addr;
+                    }
+                }
+            }
         }
         if (server_send_config_response(from, entry, client_id) != 0) {
             return -1;
