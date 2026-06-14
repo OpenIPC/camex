@@ -27,7 +27,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#ifdef __linux__
 #include <sys/prctl.h>
+#endif
 #include <sys/syslog.h>
 #include <unistd.h>
 
@@ -406,7 +408,9 @@ int main(int argc, char *argv[])
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);
     openlog("camex", LOG_PID, LOG_DAEMON);
+#ifdef PR_SET_DUMPABLE
     prctl(PR_SET_DUMPABLE, 0);
+#endif
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     signal(SIGPIPE, SIG_IGN);

@@ -24,6 +24,9 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <getopt.h>
+#if defined(__APPLE__)
+#include <sys/types.h>
+#endif
 #include <net/route.h>
 #include <net/if_arp.h>
 #include <signal.h>
@@ -34,7 +37,9 @@
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/mman.h>
+#ifdef __linux__
 #include <sys/prctl.h>
+#endif
 #include <sys/time.h>
 #include <sys/syslog.h>
 #include <sys/stat.h>

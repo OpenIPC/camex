@@ -18,8 +18,10 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <linux/if_tun.h>
-#includes
 #ifndef _WIN32
+#if defined(__APPLE__)
+#include <sys/types.h>
+#endif
 #include <net/if.h>
 #endif
 #include <net/if_arp.h>
