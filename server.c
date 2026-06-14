@@ -253,6 +253,12 @@ int server_send_config_response(const struct sockaddr_in *from,
         return net_tcp_send_frame(entry->tcp_fd,
                                   (const uint8_t *)message, strlen(message));
     }
+    if (current_config.transport == CAMEX_TRANSPORT_TCP) {
+        log_message(LOG_WARNING,
+                    "Cannot send config to %s: no TCP fd (check server_find_by_addr)",
+                    client_id != NULL ? client_id : "(null)");
+        return -1;
+    }
     return net_send_text(net_fd, from, message);
 }
 

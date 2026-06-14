@@ -33,7 +33,11 @@ endif
 CFLAGS   += -std=$(STD) -D_GNU_SOURCE $(POSIX_SRC) $(DARWIN_CFLAGS) $(WIN32_CFLAGS) \
             -Wall -Wextra -Wshadow -Wstrict-prototypes \
             -Os -ffunction-sections -fdata-sections
-LDFLAGS  += -Wl,--gc-sections
+ifneq ($(shell uname -s),Darwin)
+  LDFLAGS  += -Wl,--gc-sections
+else
+  LDFLAGS  += -Wl,-dead_strip
+endif
 
 SRCS = main.c camex.c monocypher.c util.c log.c crypto.c tun.c net.c proto.c config.c client.c server.c
 OBJS = $(SRCS:.c=.o)

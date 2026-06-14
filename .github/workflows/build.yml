@@ -156,7 +156,6 @@ jobs:
             curl -fsSL "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" \
               -o /tmp/gradle.zip
             sudo unzip -q /tmp/gradle.zip -d /opt/
-            sudo mv /opt/gradle-${GRADLE_VERSION} "$GRADLE_DIR"
             rm /tmp/gradle.zip
           fi
           echo "GRADLE_HOME=$GRADLE_DIR" >> "$GITHUB_ENV"
