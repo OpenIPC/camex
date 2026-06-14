@@ -278,67 +278,36 @@ static unsigned int __stdcall wintun_reader_thread(void *arg)
 #endif /* _WIN32 */
 
 #ifdef _WIN32
+/* Use netsh for IP/MTU config — avoids dependency on MIB_* structs
+ * that are missing in older MinGW-w64 headers. */
 static int set_ip_windows(const char *adapter_name,
                           const char *local_ip, const char *netmask_str,
                           int mtu)
 {
-    NET_LUID luid;
-    MIB_UNICASTIPADDRESS_ROW addr_row;
-    ULONG status;
-    int prefix_len = 0;
-    struct in_addr mask;
+    char cmd[512];
+    int ret;
 
-    (void)adapter_name;  /* currently unused; see netsh command below */
-
-    /* Parse netmask to prefix length */
-    if (inet_pton(AF_INET, netmask_str, &mask) != 1) {
-        log_message(LOG_ERR, "WinTUN: invalid netmask '%s'", netmask_str);
-        return -1;
-    }
-    {
-        ULONG mask_bits = ntohl(mask.s_addr);
-        while (mask_bits & 0x80000000) { ++prefix_len; mask_bits <<= 1; }
+    /* Set IP, netmask, and bring interface up */
+    snprintf(cmd, sizeof(cmd),
+             "netsh interface ip set address name=\"%s\" "
+             "static %s %s >nul 2>&1",
+             adapter_name, local_ip, netmask_str);
+    ret = system(cmd);
+    if (ret != 0) {
+        log_message(LOG_ERR,
+                    "WinTUN: netsh set address failed (%d)", ret);
+        /* Continue anyway — interface may already have an address */
     }
 
-    pWintunGetAdapterLUID(g_wintun_adapter, &luid);
-
-    /* Set IP address via IP Helper API */
-    InitializeUnicastIpAddressEntry(&addr_row);
-    addr_row.Address.Ipv4.sin_family = AF_INET;
-    inet_pton(AF_INET, local_ip, &addr_row.Address.Ipv4.sin_addr);
-    addr_row.OnLinkPrefixLength = (UINT8)prefix_len;
-    addr_row.DadState = IpDadStatePreferred;
-    memcpy(&addr_row.InterfaceLuid, &luid, sizeof(luid));
-
-    status = CreateUnicastIpAddressEntry(&addr_row);
-    if (status != NO_ERROR && status != ERROR_OBJECT_ALREADY_EXISTS) {
-        log_message(LOG_ERR, "WinTUN: CreateUnicastIpAddressEntry failed (%lu)",
-                    status);
-        return -1;
-    }
-
-    /* Set MTU via netsh */
-    {
-        char cmd[512];
-        snprintf(cmd, sizeof(cmd),
-                 "netsh interface ipv4 set subinterface \"%S\" mtu=%d "
-                 "store=persist >nul 2>&1",
-                 L"Camex", mtu);
-        system(cmd);
-    }
-
-    /* Bring interface up */
-    {
-        MIB_IPINTERFACE_ROW iface;
-        InitializeIpInterfaceEntry(&iface);
-        iface.Family = AF_INET;
-        iface.InterfaceLuid = luid;
-        status = GetIpInterfaceEntry(&iface);
-        if (status == NO_ERROR) {
-            iface.InterfaceMetric = 0;
-            iface.SitePrefixLength = 0;
-            status = SetIpInterfaceEntry(&iface);
-        }
+    /* Set MTU */
+    snprintf(cmd, sizeof(cmd),
+             "netsh interface ipv4 set subinterface \"%s\" mtu=%d "
+             "store=persist >nul 2>&1",
+             adapter_name, mtu);
+    ret = system(cmd);
+    if (ret != 0) {
+        log_message(LOG_WARNING,
+                    "WinTUN: netsh set MTU failed (%d)", ret);
     }
 
     return 0;

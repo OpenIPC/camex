@@ -11,20 +11,10 @@
 
 #ifdef _WIN32
 
-/* Require Vista+ SDK for MIB_UNICASTIPADDRESS_ROW, MIB_IPINTERFACE_ROW etc. */
-#ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x0601
-#endif
-#ifndef NTDDI_VERSION
-#define NTDDI_VERSION 0x06010000
-#endif
-
 /* winsock2.h MUST come before windows.h (MinGW requirement) */
 #include <winsock2.h>
 #include <windows.h>
-#include <winternl.h>
 #include <iphlpapi.h>
-#include <netioapi.h>
 #include <ws2tcpip.h>   /* inet_pton on MinGW */
 
 #ifdef __GNUC__
@@ -61,10 +51,6 @@ typedef void (WINAPI *WintunDeleteAdapter_t)(
 /* Type: WintunDeletePoolDriver — uninstall driver for a given pool */
 typedef void (WINAPI *WintunDeletePoolDriver_t)(
     LPCWSTR Pool);
-
-/* Type: WintunGetAdapterLUID — get LUID (for IP configuration) */
-typedef void (WINAPI *WintunGetAdapterLUID_t)(
-    WINTUN_ADAPTER_HANDLE Adapter, NET_LUID *Luid);
 
 /* Type: WintunGetRunningDriverVersion — get installed driver version */
 typedef DWORD (WINAPI *WintunGetRunningDriverVersion_t)(void);
@@ -129,7 +115,6 @@ extern WintunOpenAdapter_t               pWintunOpenAdapter;
 extern WintunCloseAdapter_t              pWintunCloseAdapter;
 extern WintunDeleteAdapter_t             pWintunDeleteAdapter;
 extern WintunDeletePoolDriver_t          pWintunDeletePoolDriver;
-extern WintunGetAdapterLUID_t            pWintunGetAdapterLUID;
 extern WintunGetRunningDriverVersion_t   pWintunGetRunningDriverVersion;
 extern WintunSetAdapterLogging_t         pWintunSetAdapterLogging;
 extern WintunStartSession_t              pWintunStartSession;

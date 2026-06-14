@@ -19,7 +19,6 @@ WintunOpenAdapter_t             pWintunOpenAdapter             = NULL;
 WintunCloseAdapter_t            pWintunCloseAdapter            = NULL;
 WintunDeleteAdapter_t           pWintunDeleteAdapter           = NULL;
 WintunDeletePoolDriver_t        pWintunDeletePoolDriver        = NULL;
-WintunGetAdapterLUID_t          pWintunGetAdapterLUID          = NULL;
 WintunGetRunningDriverVersion_t pWintunGetRunningDriverVersion = NULL;
 WintunSetAdapterLogging_t       pWintunSetAdapterLogging       = NULL;
 WintunStartSession_t            pWintunStartSession            = NULL;
@@ -105,7 +104,6 @@ int wintun_load_dll(void)
     RESOLVE(WintunCloseAdapter);
     RESOLVE(WintunDeleteAdapter);
     RESOLVE(WintunDeletePoolDriver);
-    RESOLVE(WintunGetAdapterLUID);
     RESOLVE(WintunGetRunningDriverVersion);
     RESOLVE(WintunSetAdapterLogging);
     RESOLVE(WintunStartSession);
@@ -132,7 +130,6 @@ void wintun_unload_dll(void)
     pWintunCloseAdapter            = NULL;
     pWintunDeleteAdapter           = NULL;
     pWintunDeletePoolDriver        = NULL;
-    pWintunGetAdapterLUID          = NULL;
     pWintunGetRunningDriverVersion = NULL;
     pWintunSetAdapterLogging       = NULL;
     pWintunStartSession            = NULL;
