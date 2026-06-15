@@ -327,30 +327,48 @@ jobs:
       - name: Collect release binaries
         run: |
           mkdir release-binaries
+          VERSION="${{ steps.tag.outputs.tag }}"
+          VERSION="${VERSION#v}"
+          [ -z "$VERSION" ] && VERSION="0.0.0"
+
           # Collect all camex-* and camex.exe binaries and .apk files
           find artifacts -type f \( -name 'camex-*' -o -name 'camex.exe' -o -name '*.apk' \) \
             -exec cp -v {} release-binaries/ \;
+
+          # Rename Linux binaries: camex-<arch> → camex-<version>-<arch>
+          for f in release-binaries/camex-aarch64 release-binaries/camex-arm \
+                   release-binaries/camex-mipsel  release-binaries/camex-x86_64; do
+            [ -f "$f" ] || continue
+            arch="${f#release-binaries/camex-}"
+            mv -v "$f" "release-binaries/camex-${VERSION}-${arch}"
+          done
+
+          # Rename APK: app-release-unsigned.apk → camex-<version>-android-unsigned.apk
+          if [ -f release-binaries/app-release-unsigned.apk ]; then
+            mv -v release-binaries/app-release-unsigned.apk \
+                 "release-binaries/camex-${VERSION}-android-unsigned.apk"
+          fi
+
           echo "=== Release binaries ==="
           ls -lh release-binaries/
 
       - name: Package .zip archives for macOS and Windows
         run: |
+          VERSION="${{ steps.tag.outputs.tag }}"
+          VERSION="${VERSION#v}"
+          [ -z "$VERSION" ] && VERSION="0.0.0"
           # macOS .zip
           if [ -f release-binaries/camex-darwin ]; then
-            VERSION="${{ steps.tag.outputs.tag }}"
-            VERSION="${VERSION#v}"
-            [ -z "$VERSION" ] && VERSION="0.0.0"
             mkdir -p pkg-macos
             cp release-binaries/camex-darwin pkg-macos/camex
             cp LICENSE README.md pkg-macos/ 2>/dev/null || true
             cd pkg-macos && zip -9 "../release-binaries/camex-${VERSION}-macos.zip" * && cd ..
             rm -rf pkg-macos
+            # Remove raw darwin binary — only .zip remains
+            rm -f release-binaries/camex-darwin
           fi
           # Windows .zip — download wintun.dll (AMD64) and bundle
           if [ -f release-binaries/camex.exe ]; then
-            VERSION="${{ steps.tag.outputs.tag }}"
-            VERSION="${VERSION#v}"
-            [ -z "$VERSION" ] && VERSION="0.0.0"
             mkdir -p pkg-windows
             cp release-binaries/camex.exe pkg-windows/
             cp LICENSE README.md pkg-windows/ 2>/dev/null || true
@@ -360,6 +378,8 @@ jobs:
             find /tmp/wintun-extract -name 'wintun.dll' -path '*/amd64/*' -exec cp {} pkg-windows/wintun.dll \;
             cd pkg-windows && zip -9 "../release-binaries/camex-${VERSION}-windows.zip" * && cd ..
             rm -rf pkg-windows /tmp/wintun.zip /tmp/wintun-extract
+            # Remove raw .exe — only .zip remains
+            rm -f release-binaries/camex.exe
           fi
           echo "=== Release binaries (final) ==="
           ls -lh release-binaries/
