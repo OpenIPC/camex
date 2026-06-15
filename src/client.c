@@ -382,7 +382,7 @@ void client_tick(void)
             if (current_config.transport == CAMEX_TRANSPORT_TCP) {
                 sent = net_tcp_send_frame(net_fd, plain, 5);
             } else {
-                sent = (int)send(net_fd, plain, 5, 0);
+                sent = (int)send(net_fd, (const char *)plain, 5, 0);
             }
         }
 

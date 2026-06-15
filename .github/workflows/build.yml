@@ -176,8 +176,25 @@ jobs:
 
   # ---------------------------------------------------------------- windows
   windows:
-    name: Windows (MinGW)
+    name: Windows / ${{ matrix.arch }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, i686]
+        include:
+          - arch: x86_64
+            cc: x86_64-w64-mingw32-gcc
+            strip: x86_64-w64-mingw32-strip
+            mingw-pkg: gcc-mingw-w64-x86-64
+            pe-type: PE32+
+            wintun-arch: amd64
+          - arch: i686
+            cc: i686-w64-mingw32-gcc
+            strip: i686-w64-mingw32-strip
+            mingw-pkg: gcc-mingw-w64-i686
+            pe-type: PE32
+            wintun-arch: x86
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -185,52 +202,83 @@ jobs:
       - name: Install MinGW
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq gcc-mingw-w64-x86-64
+          sudo apt-get install -y -qq ${{ matrix.mingw-pkg }}
 
-      - name: Build for x86_64-w64-mingw32
+      - name: Build (${{ matrix.cc }})
         run: |
-          make clean
+          rm -rf build
+          make clean CC=${{ matrix.cc }} STRIP=${{ matrix.strip }} TARGET=camex.exe
           make -j$(nproc) \
-            CC=x86_64-w64-mingw32-gcc \
-            STRIP=x86_64-w64-mingw32-strip \
-            TARGET=camex.exe 2>&1
-          mkdir -p build
-          cp camex.exe build/
-          x86_64-w64-mingw32-strip --strip-unneeded build/camex.exe 2>/dev/null || true
+            CC=${{ matrix.cc }} \
+            STRIP=${{ matrix.strip }} \
+            TARGET=camex.exe
+          # Rename so artifacts don't collide when merged
+          mv camex.exe camex-${{ matrix.arch }}.exe
+          echo "=== Verifying PE format ==="
+          file camex-${{ matrix.arch }}.exe
+          file camex-${{ matrix.arch }}.exe | grep -q "${{ matrix.pe-type }}" || {
+            echo "ERROR: camex-${{ matrix.arch }}.exe is not a valid ${{ matrix.pe-type }} executable"
+            exit 1
+          }
+          echo "PE verification OK"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: camex-x86_64-mingw
-          path: build/camex.exe
-          if-no-files-found: ignore
+          name: camex-${{ matrix.arch }}-mingw
+          path: camex-${{ matrix.arch }}.exe
+          if-no-files-found: error
 
   # ---------------------------------------------------------- wine smoke
   wine-smoke:
-    name: Wine smoke (camex.exe)
+    name: Wine smoke / ${{ matrix.arch }}
     needs: [windows]
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, i686]
+        include:
+          - arch: x86_64
+            winearch: win64
+          - arch: i686
+            winearch: win32
     steps:
-      - name: Download camex.exe
+      - name: Download camex-${{ matrix.arch }}.exe
         uses: actions/download-artifact@v7
         with:
-          name: camex-x86_64-mingw
+          name: camex-${{ matrix.arch }}-mingw
           path: .
+
+      - name: Verify downloaded binary
+        run: |
+          echo "=== Verifying downloaded artifact ==="
+          ls -la camex-${{ matrix.arch }}.exe
+          file camex-${{ matrix.arch }}.exe
+          file camex-${{ matrix.arch }}.exe | grep -q "PE32" || {
+            echo "ERROR: downloaded artifact is not a valid Windows PE"
+            exit 1
+          }
 
       - name: Install Wine
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends wine wine32 2>/dev/null || \
+          sudo apt-get install -y -qq --no-install-recommends wine wine32 wine64 2>/dev/null || \
+            sudo apt-get install -y -qq --no-install-recommends wine wine64 2>/dev/null || \
             sudo apt-get install -y -qq --no-install-recommends wine 2>/dev/null || true
 
       - name: Smoke test (--help and --version)
         run: |
-          echo "=== camex.exe --help ==="
-          wine camex.exe --help 2>&1 | head -10
+          export WINEARCH=${{ matrix.winearch }} WINEPREFIX="${RUNNER_TEMP}/.wine-${{ matrix.arch }}"
+          # Create a clean prefix for this architecture
+          wineboot --init 2>&1 | grep -v "^[0-9a-f]\{4\}:err:" | grep -v '^[0-9a-f]\{4\}:fixme:' || true
+          echo "Using Wine: $(wine --version 2>&1 | head -1)  WINEARCH=${WINEARCH}"
+          echo "=== camex-${{ matrix.arch }}.exe --version ==="
+          wine camex-${{ matrix.arch }}.exe --version 2>&1 | grep -v "^[0-9a-f]\{4\}:err:"
           echo ""
-          echo "=== camex.exe --version ==="
-          wine camex.exe --version 2>&1
+          echo "=== camex-${{ matrix.arch }}.exe --help ==="
+          wine camex-${{ matrix.arch }}.exe --help 2>&1 | head -20
           echo ""
           echo "✅ Wine smoke test completed"
 
@@ -360,7 +408,7 @@ jobs:
           VERSION="${VERSION#v}"
           [ -z "$VERSION" ] && VERSION="0.0.0"
 
-          # Collect all camex-* and camex.exe binaries and .apk files
+          # Collect all camex-* (Linux), camex-*.exe (Windows), and .apk (Android)
           find artifacts -type f \( -name 'camex-*' -o -name 'camex.exe' -o -name '*.apk' \) \
             -exec cp -v {} release-binaries/ \;
 
@@ -396,19 +444,35 @@ jobs:
             # Remove raw darwin binary — only .zip remains
             rm -f release-binaries/camex-darwin
           fi
-          # Windows .zip — download wintun.dll (AMD64) and bundle
-          if [ -f release-binaries/camex.exe ]; then
-            mkdir -p pkg-windows
-            cp release-binaries/camex.exe pkg-windows/
-            cp LICENSE README.md pkg-windows/ 2>/dev/null || true
-            # Download wintun.dll (AMD64) from official release
+          # Windows .zip — download wintun.dll once, package per arch
+          if ls release-binaries/camex-*.exe >/dev/null 2>&1; then
+            # Download wintun.dll once
             curl -fsSL "https://www.wintun.net/builds/wintun-0.14.1.zip" -o /tmp/wintun.zip
             unzip -q -o /tmp/wintun.zip -d /tmp/wintun-extract
-            find /tmp/wintun-extract -name 'wintun.dll' -path '*/amd64/*' -exec cp {} pkg-windows/wintun.dll \;
-            cd pkg-windows && zip -9 "../release-binaries/camex-${VERSION}-windows.zip" * && cd ..
-            rm -rf pkg-windows /tmp/wintun.zip /tmp/wintun-extract
-            # Remove raw .exe — only .zip remains
-            rm -f release-binaries/camex.exe
+
+            # x86_64 package
+            if [ -f release-binaries/camex-x86_64.exe ]; then
+              mkdir -p pkg-win64
+              cp release-binaries/camex-x86_64.exe pkg-win64/camex.exe
+              cp LICENSE README.md pkg-win64/ 2>/dev/null || true
+              find /tmp/wintun-extract -name 'wintun.dll' -path '*/amd64/*' -exec cp {} pkg-win64/wintun.dll \;
+              cd pkg-win64 && zip -9 "../release-binaries/camex-${VERSION}-windows-x86_64.zip" * && cd ..
+              rm -rf pkg-win64
+            fi
+
+            # i686 package
+            if [ -f release-binaries/camex-i686.exe ]; then
+              mkdir -p pkg-win32
+              cp release-binaries/camex-i686.exe pkg-win32/camex.exe
+              cp LICENSE README.md pkg-win32/ 2>/dev/null || true
+              find /tmp/wintun-extract -name 'wintun.dll' -path '*/x86/*' -exec cp {} pkg-win32/wintun.dll \;
+              cd pkg-win32 && zip -9 "../release-binaries/camex-${VERSION}-windows-i686.zip" * && cd ..
+              rm -rf pkg-win32
+            fi
+
+            rm -rf /tmp/wintun.zip /tmp/wintun-extract
+            # Remove raw .exe files — only .zip remains
+            rm -f release-binaries/camex-x86_64.exe release-binaries/camex-i686.exe
           fi
           echo "=== Release binaries (final) ==="
           ls -lh release-binaries/
