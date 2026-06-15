@@ -1,8 +1,4 @@
-#
-# Copyright (c) OpenIPC  https://openipc.org  MIT License
-#
-# examples/ — reference configurations, service units, and helpers
-#
+# Camex
 
 This directory contains example files for deploying and configuring
 camex in various environments.
