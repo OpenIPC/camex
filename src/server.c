@@ -40,6 +40,32 @@
 
 server_client_t server_clients[CAMEX_MAX_CLIENTS];
 
+/* Dynamic IP pool for auto-config clients when no config file is loaded.
+ * Server uses 10.200.0.1, clients get 10.200.0.2 .. 10.200.0.254 */
+#define AUTO_POOL_BASE "10.200.0"
+#define AUTO_POOL_GATEWAY "10.200.0.1"
+static uint8_t auto_pool_next = 2U;
+
+/* Look up a client by its auto-assigned tunnel IP and return the IP octet */
+static int server_find_auto_ip_octet(uint32_t ip_be, uint8_t *octet)
+{
+    struct in_addr a;
+    a.s_addr = ip_be;
+    {
+        const char *s = inet_ntoa(a);
+        int o1, o2, o3, o4;
+        if (s && sscanf(s, "%d.%d.%d.%d", &o1, &o2, &o3, &o4) == 4) {
+            char base[32];
+            snprintf(base, sizeof(base), "%d.%d.%d", o1, o2, o3);
+            if (strcmp(base, "10.200.0") == 0) {
+                *octet = (uint8_t)o4;
+                return 0;
+            }
+        }
+    }
+    return -1;
+}
+
 server_client_t *server_find_by_ip(uint32_t ip_be)
 {
     size_t i;
@@ -227,9 +253,43 @@ int server_send_config_response(const struct sockaddr_in *from,
     }
 
     if (profile.local_cidr[0] == '\0' || profile.gateway_ip[0] == '\0') {
-        log_message(LOG_ERR, "Incomplete config for client %s",
-                    client_id != NULL ? client_id : "(null)");
-        return -1;
+        /* No config file loaded — auto-assign dynamic IP for auto-config client */
+        if (entry != NULL && client_id != NULL && client_id[0] != '\0') {
+            uint8_t octet;
+
+            /* Reuse existing auto-IP if client already has one */
+            if (entry->ip_be != 0U &&
+                server_find_auto_ip_octet(entry->ip_be, &octet) == 0) {
+                /* Keep the same IP */
+            } else {
+                octet = auto_pool_next++;
+                if (auto_pool_next < 2U) {
+                    auto_pool_next = 2U; /* wrap */
+                }
+            }
+            snprintf(profile.local_cidr, sizeof(profile.local_cidr),
+                     AUTO_POOL_BASE ".%u/24", (unsigned)octet);
+            snprintf(profile.gateway_ip, sizeof(profile.gateway_ip),
+                     "%s", AUTO_POOL_GATEWAY);
+            log_message(LOG_INFO,
+                        "Auto-assigned %s to client %s (no config file)",
+                        profile.local_cidr, client_id);
+
+            /* Store assigned IP in client entry for packet forwarding */
+            {
+                struct in_addr a;
+                char ip[16];
+                snprintf(ip, sizeof(ip), AUTO_POOL_BASE ".%u",
+                         (unsigned)octet);
+                if (inet_pton(AF_INET, ip, &a) == 1) {
+                    entry->ip_be = a.s_addr;
+                }
+            }
+        } else {
+            log_message(LOG_ERR, "Incomplete config for client %s",
+                        client_id != NULL ? client_id : "(null)");
+            return -1;
+        }
     }
 
     if (proto_build_config(client_id, &profile,

@@ -30,6 +30,7 @@ void log_message(int priority, const char *fmt, ...)
     syslog(priority, "%s", message);
 #endif
     fprintf(stream, "%s\n", message);
+    fflush(stream);
 }
 
 void print_errno_message(int priority, const char *what)

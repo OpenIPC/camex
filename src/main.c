@@ -438,10 +438,11 @@ int main(int argc, char *argv[])
             " — sensitive key material may be swapped to disk\n",
             strerror(errno));
     }
+    /* Line-buffered output for predictable log ordering */
+    setlinebuf(stdout);
+    setlinebuf(stderr);
 #endif
 
-    setvbuf(stdout, NULL, _IOLBF, 0);
-    setvbuf(stderr, NULL, _IOLBF, 0);
 #ifndef _WIN32
     openlog("camex", LOG_PID, LOG_DAEMON);
 #endif

@@ -182,7 +182,8 @@ int client_wait_for_config(void)
                 log_message(LOG_INFO,
                             "Still waiting for server config (%us)...", probe);
             }
-            if (client_send_register() != 0) {
+            /* Retry register every 5s — matches server rate-limit window */
+            if (probe % 5 == 0 && client_send_register() != 0) {
                 return -1;
             }
             continue;
