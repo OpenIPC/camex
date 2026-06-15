@@ -180,6 +180,9 @@ int replay_check(uint64_t *seq_max, uint64_t *window, uint64_t seq)
 
     if (seq > *seq_max) {
         diff = seq - *seq_max;
+        /* NOTE: diff MUST be < 64 here — shifting a uint64_t by 64 bits
+         * (or more) is undefined behaviour in C.  The check on the next
+         * line is load-bearing; do not change '<' to '<='. */
         *window = (diff < 64U) ? ((*window << diff) | 1U) : 1U;
         *seq_max = seq;
         return 0;

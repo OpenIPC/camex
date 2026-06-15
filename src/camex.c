@@ -566,6 +566,7 @@ int camex_init(camex_config_t *config)
     log_message(LOG_INFO, "  Transport: %s",
                 current_config.transport == CAMEX_TRANSPORT_TCP
                     ? "TCP" : "UDP");
+    g_now = time(NULL);
     return 0;
 }
 
@@ -821,8 +822,8 @@ void camex_run(void)
 
             if (tun_fd >= 0) {
                 FD_SET(tun_fd, &readset);
-                if (tun_fd > maxfd) {
-                    maxfd = tun_fd;
+                if ((int)tun_fd > maxfd) {
+                    maxfd = (int)tun_fd;
                 }
             }
 
@@ -927,8 +928,8 @@ void camex_run(void)
         tv.tv_usec = 0;
 
         maxfd = net_fd;
-        if (tun_fd > maxfd) {
-            maxfd = tun_fd;
+        if ((int)tun_fd > maxfd) {
+            maxfd = (int)tun_fd;
         }
         if (pending_fd > maxfd) {
             maxfd = pending_fd;
@@ -964,8 +965,11 @@ void camex_stop(void)
 
     if (client_mode && current_config.gateway_ip[0] != '\0') {
         for (i = 0; i < current_config.route_count; ++i) {
-            (void)camex_del_route(current_config.route_cidrs[i],
-                                  current_config.gateway_ip);
+            if (camex_del_route(current_config.route_cidrs[i],
+                                current_config.gateway_ip) != 0) {
+                log_message(LOG_WARNING, "Failed to delete route for %s",
+                            current_config.route_cidrs[i]);
+            }
         }
     }
 

@@ -247,6 +247,9 @@ static unsigned int __stdcall wintun_reader_thread(void *arg)
     struct sockaddr_in dest = a->signal_dest;
     volatile int *thread_running = a->running;
 
+    /* All values copied — free the malloc'd argument immediately */
+    free(a);
+
     wait_ev = pWintunGetReadWaitEvent(sess);
     if (wait_ev == NULL) {
         log_message(LOG_ERR, "WinTUN: WintunGetReadWaitEvent failed");

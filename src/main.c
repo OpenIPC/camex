@@ -20,6 +20,7 @@
 
 #include <errno.h>
 #include <getopt.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -217,7 +218,15 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
             break;
         case 'K':
             {
-                long val = atol(optarg);
+                char *end = NULL;
+                long val = strtol(optarg, &end, 10);
+                if (end == optarg || *end != '\0' ||
+                    ((val == LONG_MAX || val == LONG_MIN) && errno == ERANGE)) {
+                    log_message(LOG_ERR,
+                                "Keepalive must be an integer 0..3600, got: %s",
+                                optarg);
+                    return -1;
+                }
                 if (val < 0 || val > 3600) {
                     log_message(LOG_ERR,
                                 "Keepalive must be 0..3600 seconds, got: %s",
@@ -229,7 +238,15 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
             break;
         case 'W':
             {
-                long val = atol(optarg);
+                char *end = NULL;
+                long val = strtol(optarg, &end, 10);
+                if (end == optarg || *end != '\0' ||
+                    ((val == LONG_MAX || val == LONG_MIN) && errno == ERANGE)) {
+                    log_message(LOG_ERR,
+                                "Server timeout must be an integer 5..3600, got: %s",
+                                optarg);
+                    return -1;
+                }
                 if (val < 5 || val > 3600) {
                     log_message(LOG_ERR,
                                 "Server timeout must be 5..3600 seconds, got: %s",
@@ -260,7 +277,8 @@ int validate_config(camex_config_t *config)
         return -1;
     }
 
-    if (config->transport > 1) {
+    if (config->transport != CAMEX_TRANSPORT_UDP &&
+        config->transport != CAMEX_TRANSPORT_TCP) {
         log_message(LOG_ERR, "Transport must be 0 (udp) or 1 (tcp)");
         return -1;
     }
@@ -462,18 +480,6 @@ int main(int argc, char *argv[])
 #endif
 
 #ifndef _WIN32
-    if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
-        fprintf(stderr,
-            "SECURITY WARNING: mlockall failed (%s)"
-            " — sensitive key material may be swapped to disk\n",
-            strerror(errno));
-    }
-    /* Line-buffered output for predictable log ordering */
-    setlinebuf(stdout);
-    setlinebuf(stderr);
-#endif
-
-#ifndef _WIN32
     openlog("camex", LOG_PID, LOG_DAEMON);
 #endif
 #ifdef __linux__
@@ -525,6 +531,20 @@ int main(int argc, char *argv[])
 #endif
         return 1;
     }
+
+    /* Lock pages now that we are in real operation mode
+     * (skip for --help/--version which never reach here). */
+#ifndef _WIN32
+    if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+        fprintf(stderr,
+            "SECURITY WARNING: mlockall failed (%s)"
+            " — sensitive key material may be swapped to disk\n",
+            strerror(errno));
+    }
+    /* Line-buffered output for predictable log ordering */
+    setlinebuf(stdout);
+    setlinebuf(stderr);
+#endif
 
     if (camex_init(&config) != 0) {
         log_message(LOG_ERR, "Initialization failed");

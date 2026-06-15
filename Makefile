@@ -5,6 +5,7 @@
 #
 
 TARGET ?= camex
+BUILD_DIR ?= .
 
 .PHONY: all clean distclean run help kmod kmod-clean kmod-install apk
 
@@ -25,11 +26,16 @@ ifeq ($(origin TARGET),command line)
 else
   MAKE_TARGET_ARG =
 endif
-MAKE_ARGS = $(MAKE_CC_ARG) $(MAKE_STRIP_ARG) $(MAKE_TARGET_ARG)
+ifeq ($(origin BUILD_DIR),command line)
+  MAKE_BUILDDIR_ARG = BUILD_DIR='$(BUILD_DIR)'
+else
+  MAKE_BUILDDIR_ARG =
+endif
+MAKE_ARGS = $(MAKE_CC_ARG) $(MAKE_STRIP_ARG) $(MAKE_TARGET_ARG) $(MAKE_BUILDDIR_ARG)
 
 all:
 	$(MAKE) -C src all $(MAKE_ARGS)
-	cp -f src/$(TARGET) $(TARGET) 2>/dev/null || true
+	cp -f src/$(BUILD_DIR)/$(TARGET) $(TARGET) 2>/dev/null || true
 
 clean:
 	$(MAKE) -C src clean $(MAKE_ARGS)

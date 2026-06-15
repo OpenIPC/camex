@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 #
 # Copyright (c) OpenIPC  https://openipc.org  MIT License
 #

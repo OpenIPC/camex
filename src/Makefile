@@ -12,6 +12,10 @@ TARGET  ?= camex
 VERSION ?= $(shell git -C $(dir $(abspath $(lastword $(MAKEFILE_LIST)))) \
                 describe --tags --always --dirty 2>/dev/null || echo "unknown")
 
+# Out-of-tree build directory: make BUILD_DIR=../build/x86_64
+BUILD_DIR ?= .
+objdir = $(BUILD_DIR)/obj
+
 CPPFLAGS += -I.
 STD      ?= c99
 # macOS: -D_POSIX_C_SOURCE suppresses BSD types (u_short, u_char etc.).
@@ -43,7 +47,10 @@ endif
 
 SRCS = main.c camex.c monocypher.c util.c log.c crypto.c tun.c net.c proto.c config.c client.c server.c
 SRCS += wintun.c
-OBJS = $(SRCS:.c=.o)
+OBJS = $(addprefix $(objdir)/, $(SRCS:.c=.o))
+
+# Ensure object directory exists
+$(shell mkdir -p $(objdir))
 
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
@@ -58,13 +65,14 @@ endif
 
 .PHONY: all clean distclean run help kmod kmod-clean kmod-install apk
 
-all: $(TARGET)
+all: $(BUILD_DIR)/$(TARGET)
 
-$(TARGET): $(OBJS)
+$(BUILD_DIR)/$(TARGET): $(OBJS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(OBJS) $(LDFLAGS) $(LDLIBS)
 	$(STRIP) --strip-unneeded $@ 2>/dev/null || true
 
-%.o: %.c
+$(objdir)/%.o: %.c
+	mkdir -p $(objdir)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 # Kernel module (Linux only)
@@ -85,8 +93,9 @@ apk:
 	@echo "Created camex-$(VERSION).apk"
 
 clean:
-	rm -f $(TARGET) $(OBJS) $(TARGET).exe
+	rm -f $(BUILD_DIR)/$(TARGET) $(OBJS) $(BUILD_DIR)/$(TARGET).exe
 	rm -rf camex_*.apk
+	rm -rf $(objdir)
 
 distclean: clean kmod-clean
 

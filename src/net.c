@@ -157,7 +157,7 @@ int net_resolve_endpoint(const char *host, int port,
         return -1;
     }
 
-    memcpy(addr, result->ai_addr, sizeof(*addr));
+    memcpy(addr, result->ai_addr, result->ai_addrlen);
     freeaddrinfo(result);
     return 0;
 }

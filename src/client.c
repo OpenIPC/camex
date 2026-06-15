@@ -33,6 +33,9 @@
 #define close(fd) closesocket(fd)
 #endif
 
+/* Exponential backoff for reconnection attempts (seconds). */
+static unsigned int reconnect_backoff = 0;
+
 client_state_t client_state;
 
 void client_state_init(client_state_t *state)
@@ -120,7 +123,17 @@ int client_handle_net_packet(const uint8_t *buffer, size_t len)
                             seq, client_state.recv_seq_max);
                 return -1;
             }
-            return client_apply_config_response(plain, plain_len);
+            int ret = client_apply_config_response(plain, plain_len);
+            if (ret == 0) {
+                reconnect_backoff = 0;
+            }
+            return ret;
+        }
+
+        if (type == CAMEX_PACKET_KEEPALIVE) {
+            client_state.last_recv = g_now;
+            reconnect_backoff = 0;
+            return 0;
         }
 
         if (type != CAMEX_PACKET_DATA) {
@@ -140,9 +153,24 @@ int client_handle_net_packet(const uint8_t *buffer, size_t len)
         len = plain_len;
     } else if (current_config.auto_config && len >= 4U &&
                memcmp(buffer, CAMEX_MAGIC, 4) == 0) {
-        return client_apply_config_response(buffer, len);
+        /* Inbound keepalive from server — just update last_recv */
+        if (len >= 5U && buffer[4] == CAMEX_PACKET_KEEPALIVE) {
+            client_state.last_recv = g_now;
+            reconnect_backoff = 0;
+            return 0;
+        }
+        /* Config response from server */
+        {
+            int ret = client_apply_config_response(buffer, len);
+            if (ret == 0) {
+                reconnect_backoff = 0;
+            }
+            return ret;
+        }
     }
 
+    /* Successful data packet received — reset exponential backoff */
+    reconnect_backoff = 0;
     return tun_write_packet(buffer, len);
 }
 
@@ -274,8 +302,6 @@ int client_handle_tun_packet(const uint8_t *buffer, size_t len)
     return net_client_send(buffer, len);
 }
 
-static unsigned int reconnect_backoff = 0;
-
 void client_reconnect(void)
 {
     net_close();
@@ -298,8 +324,6 @@ void client_reconnect(void)
         client_state.last_recv = 0;
         return;
     }
-
-    reconnect_backoff = 0;
 
     client_state.registered = 0;
     client_state.last_register = 0;
