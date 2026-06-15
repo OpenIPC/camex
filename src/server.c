@@ -198,6 +198,13 @@ void server_reset_replay(server_client_t *entry)
 
     entry->recv_seq_max = 0;
     entry->recv_window = 0;
+
+    /* Rotate nonce_prefix on reconnection to prevent cross-session replay. */
+    if (get_random_bytes(entry->send_nonce_prefix,
+                         sizeof(entry->send_nonce_prefix)) != 0) {
+        log_message(LOG_WARNING,
+                    "getrandom failed: using weak nonce prefix for reconnect");
+    }
 }
 
 int server_send_config_response(const struct sockaddr_in *from,

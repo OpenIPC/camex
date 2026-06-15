@@ -308,6 +308,14 @@ void client_reconnect(void)
     client_state.last_recv = g_now;
     client_reconnect_at = 0;
 
+    /* Generate a fresh nonce_prefix for the new session to prevent
+     * cross-session replay attacks. */
+    if (get_random_bytes(client_state.send_nonce_prefix,
+                         sizeof(client_state.send_nonce_prefix)) != 0) {
+        log_message(LOG_WARNING,
+                    "getrandom failed: using weak nonce prefix for reconnect");
+    }
+
     if (client_send_register() != 0) {
         log_message(LOG_WARNING, "Failed to send register after reconnect");
     } else {

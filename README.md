@@ -203,8 +203,8 @@ sudo ./camex \
 | `--config <path>` | `-f` | Server config file path |
 | `--route-cidr <cidr>` | `-c` | Extra route to install on the client; repeatable |
 | `--mtu <size>` | `-t` | Tunnel MTU, 576–9000 (default: 1500) |
-| `--psk <pass>` | `-k` | Passphrase stretched into a 32-byte key |
-| `--encrypt` | `-e` | Enable ChaCha20-Poly1305 encryption |
+| `--psk <pass>` | `-k` | Passphrase stretched into a 32-byte key (works for both UDP and TCP) |
+| `--encrypt` | `-e` | Enable ChaCha20-Poly1305 encryption (master switch; required for all encrypted traffic) |
 | `--tun-dev <path>` | `-T` | TUN device path (default: auto-detect `/dev/net/tun` then `/dev/camex`) |
 | `--pid-file <path>` | `-P` | Write PID to file on startup |
 | `--bind-dev <iface>` | `-d` | Bind socket to a specific network interface (`SO_BINDTODEVICE`) |
@@ -549,3 +549,8 @@ memory is unavailable in this context the packet is dropped
 - Client sockets are outbound only; no listening port is opened on the client side.
 - In auto mode, `-l`, `-g`, and `-c` are supplied by the server.
 - `examples/camex.conf` shows the server-side parameter database format.
+- Encryption (`--encrypt`) works transparently over both UDP and TCP transport.
+  Add `--encrypt --psk <key>` to both server and client commands.
+- The server supports per-client PSKs: add `psk=<key>` inside a `[client ID]` block
+  in the config file. Clients that authenticate with a per-client key ignore the
+  global `--psk` value on the server side.
