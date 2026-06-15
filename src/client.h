@@ -21,6 +21,7 @@ typedef struct {
     uint64_t recv_window;
     time_t last_register;
     time_t last_recv;
+    time_t last_keepalive;
     uint8_t registered;
     uint8_t config_received;
     uint8_t send_nonce_prefix[4];

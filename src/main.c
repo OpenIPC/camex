@@ -97,13 +97,15 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         { "bind-dev", required_argument, NULL, 'd' },
         { "tun-dev",  required_argument, NULL, 'T' },
         { "transport", required_argument, NULL, 'R' },
+        { "keepalive", required_argument, NULL, 'K' },
+        { "server-timeout", required_argument, NULL, 'W' },
         { NULL, 0, NULL, 0 }
     };
     int opt;
     int option_index = 0;
 
     opterr = 0;
-    while ((opt = getopt_long(argc, argv, "M:b:an:f:l:g:p:s:c:t:k:evhP:d:T:R:",
+    while ((opt = getopt_long(argc, argv, "M:b:an:f:l:g:p:s:c:t:k:evhP:d:T:R:K:W:",
                              long_options, &option_index)) != -1) {
         switch (opt) {
         case 'M':
@@ -211,6 +213,30 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
                 log_message(LOG_ERR, "Invalid transport: %s (use tcp or udp)",
                             optarg);
                 return -1;
+            }
+            break;
+        case 'K':
+            {
+                long val = atol(optarg);
+                if (val < 0 || val > 3600) {
+                    log_message(LOG_ERR,
+                                "Keepalive must be 0..3600 seconds, got: %s",
+                                optarg);
+                    return -1;
+                }
+                config->keepalive = (int)val;
+            }
+            break;
+        case 'W':
+            {
+                long val = atol(optarg);
+                if (val < 5 || val > 3600) {
+                    log_message(LOG_ERR,
+                                "Server timeout must be 5..3600 seconds, got: %s",
+                                optarg);
+                    return -1;
+                }
+                config->server_timeout = (int)val;
             }
             break;
         case '?':
@@ -388,6 +414,10 @@ void print_usage(const char *progname)
     printf("  -e, --encrypt        Enable ChaCha20-Poly1305 encryption\n");
     printf("  -P, --pid-file <path> Write PID to file on startup\n");
     printf("  -R, --transport <t>  Transport protocol: udp (default) or tcp\n");
+    printf("  -K, --keepalive <s>  Keepalive interval in seconds, 0=off"
+           " (default: 10)\n");
+    printf("  -W, --server-timeout <s> Connection timeout in seconds"
+           " (default: 20)\n");
     printf("  -v, --version        Show version and exit\n");
     printf("  -h, --help           Show this help message and exit\n\n");
 
@@ -459,6 +489,8 @@ int main(int argc, char *argv[])
     memset(&config, 0, sizeof(config));
     config.mode = CAMEX_MODE_CLIENT;
     config.mtu = 1500;
+    config.server_timeout = 20;
+    config.keepalive = 10;
     snprintf(config.config_path, sizeof(config.config_path), "%s",
              CAMEX_DEFAULT_CONFIG_PATH);
 

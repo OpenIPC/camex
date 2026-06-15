@@ -21,9 +21,10 @@ void crypto_wipe(void *secret, size_t size);
 #define CAMEX_MAGIC "CX2P"
 
 /* Packet types */
-#define CAMEX_PACKET_REGISTER 1U
-#define CAMEX_PACKET_DATA     2U
-#define CAMEX_PACKET_CONFIG   3U
+#define CAMEX_PACKET_REGISTER  1U
+#define CAMEX_PACKET_DATA      2U
+#define CAMEX_PACKET_CONFIG    3U
+#define CAMEX_PACKET_KEEPALIVE 4U
 
 /* Protocol version */
 #define CAMEX_PROTO_VER 1U

@@ -1,4 +1,4 @@
-# Camex — v2.3.3
+# Camex — v2.3.4
 
 [![camex CI](https://github.com/OpenIPC/camex/actions/workflows/build.yml/badge.svg)](https://github.com/OpenIPC/camex/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/OpenIPC/camex)](https://github.com/OpenIPC/camex/releases)

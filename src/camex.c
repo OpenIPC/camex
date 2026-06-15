@@ -473,6 +473,7 @@ int camex_init(camex_config_t *config)
         }
 
         client_state.last_recv = time(NULL);
+        client_state.last_keepalive = time(NULL);
 
         if (current_config.auto_config) {
             if (client_send_register() != 0) {

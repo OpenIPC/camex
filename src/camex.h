@@ -55,6 +55,8 @@ typedef struct {
     char pid_file[256];
     char bind_dev[IFNAMSIZ];
     char tun_dev[256];  /* explicit TUN device path; empty = auto-detect */
+    int server_timeout;  /* seconds before declaring connection lost (default 20) */
+    int keepalive;       /* keepalive interval in seconds, 0=disabled (default 10) */
 } camex_config_t;
 
 /* Global state shared across modules */

@@ -307,6 +307,7 @@ void client_reconnect(void)
     client_state.recv_seq_max = 0;
     client_state.recv_window = 0;
     client_state.last_recv = g_now;
+    client_state.last_keepalive = g_now;
     client_reconnect_at = 0;
 
     /* Generate a fresh nonce_prefix for the new session to prevent
@@ -343,15 +344,57 @@ void client_tick(void)
     if (current_config.auto_config &&
         client_state.last_recv > 0 &&
         difftime(g_now, client_state.last_recv) >=
-            (double)CAMEX_SERVER_TIMEOUT) {
+            (double)current_config.server_timeout) {
         log_message(LOG_ERR,
                     "Connection lost: no data from server %s:%d for %ds",
                     current_config.server_host, current_config.port,
-                    CAMEX_SERVER_TIMEOUT);
+                    current_config.server_timeout);
         client_link_up = 0U;
         client_state.last_recv = 0;
         client_reconnect();
         return;
+    }
+
+    /* Send keepalive to prevent idle timeout */
+    if (current_config.keepalive > 0 &&
+        client_state.last_keepalive > 0 &&
+        difftime(g_now, client_state.last_keepalive) >=
+            (double)current_config.keepalive) {
+        uint8_t packet[CAMEX_HDR_LEN + 1 + 1 + 16U];
+        size_t packet_len = 0;
+        int sent = 0;
+
+        if (current_config.encrypt) {
+            uint64_t seq = client_state.send_seq;
+            if (crypto_encrypt_packet(CAMEX_PACKET_KEEPALIVE, seq,
+                    client_state.send_nonce_prefix,
+                    NULL,
+                    NULL, 0,
+                    packet, sizeof(packet), &packet_len) == 0) {
+                client_state.send_seq = seq + 1U;
+                sent = net_client_send(packet, packet_len);
+            }
+        } else {
+            /* Unencrypted keepalive: single magic+type byte */
+            uint8_t plain[5];
+            memcpy(plain, CAMEX_MAGIC, 4);
+            plain[4] = CAMEX_PACKET_KEEPALIVE;
+            if (current_config.transport == CAMEX_TRANSPORT_TCP) {
+                sent = net_tcp_send_frame(net_fd, plain, 5);
+            } else {
+                sent = (int)send(net_fd, plain, 5, 0);
+            }
+        }
+
+        if (sent < 0) {
+            log_message(LOG_WARNING,
+                        "Failed to send keepalive to %s:%d",
+                        current_config.server_host, current_config.port);
+        } else {
+            /* Successful keepalive send keeps the connection alive */
+            client_state.last_recv = g_now;
+        }
+        client_state.last_keepalive = g_now;
     }
 
     if (!client_state.registered ||

@@ -608,6 +608,19 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
             return 0;
         }
 
+        if (type == CAMEX_PACKET_KEEPALIVE) {
+            /* Update last_seen on the client entry to prevent expiry */
+            if (decrypt_src != NULL) {
+                decrypt_src->last_seen = g_now;
+            } else {
+                server_client_t *ka = server_find_by_addr(from);
+                if (ka != NULL) {
+                    ka->last_seen = g_now;
+                }
+            }
+            return 0;
+        }
+
         if (type != CAMEX_PACKET_DATA) {
             char peer[64];
             net_sockaddr_to_string(from, peer, sizeof(peer));
@@ -623,6 +636,14 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
 
     if (!current_config.encrypt && len >= 4U &&
         memcmp(buffer, CAMEX_MAGIC, 4) == 0) {
+        if (len >= 5U && buffer[4] == CAMEX_PACKET_KEEPALIVE) {
+            /* Plaintext keepalive: update client last_seen */
+            server_client_t *ka = server_find_by_addr(from);
+            if (ka != NULL) {
+                ka->last_seen = g_now;
+            }
+            return 0;
+        }
         if (server_handle_plain_register(buffer, len, from, NULL) != 0) {
             char peer[64];
             net_sockaddr_to_string(from, peer, sizeof(peer));
