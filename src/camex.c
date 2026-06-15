@@ -651,7 +651,11 @@ static void drain_tcp_server_accept(void)
         addrlen = sizeof(peer);
         client_fd = accept(listen_fd, (struct sockaddr *)&peer, &addrlen);
         if (client_fd < 0) {
-            break;
+            if (net_sock_err_is_again()) {
+                break;  /* no pending connections */
+            }
+            /* Retry on transient errors (EINTR, ECONNABORTED, EPROTO) */
+            continue;
         }
 
         if (set_fd_nonblocking(client_fd) != 0) {

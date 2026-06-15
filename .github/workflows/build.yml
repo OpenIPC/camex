@@ -205,6 +205,35 @@ jobs:
           path: build/camex.exe
           if-no-files-found: ignore
 
+  # ---------------------------------------------------------- wine smoke
+  wine-smoke:
+    name: Wine smoke (camex.exe)
+    needs: [windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download camex.exe
+        uses: actions/download-artifact@v7
+        with:
+          name: camex-x86_64-mingw
+          path: .
+
+      - name: Install Wine
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends wine wine32 2>/dev/null || \
+            sudo apt-get install -y -qq --no-install-recommends wine 2>/dev/null || true
+
+      - name: Smoke test (--help and --version)
+        run: |
+          echo "=== camex.exe --help ==="
+          wine camex.exe --help 2>&1 | head -10
+          echo ""
+          echo "=== camex.exe --version ==="
+          wine camex.exe --version 2>&1
+          echo ""
+          echo "✅ Wine smoke test completed"
+
   # ------------------------------------------------------------- macos (utun)
   macos:
     name: macOS (clang + utun)
@@ -265,7 +294,7 @@ jobs:
   # ------------------------------------------------------------- consolidated
   sizes:
     name: Collect sizes
-    needs: [linux, smoke, android, windows, macos]
+    needs: [linux, smoke, android, windows, wine-smoke, macos]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -296,7 +325,7 @@ jobs:
   # ----------------------------------------------------------------- release
   release:
     name: GitHub Release
-    needs: [linux, smoke, android, windows, macos]
+    needs: [linux, smoke, android, windows, wine-smoke, macos]
     runs-on: ubuntu-latest
     # Runs on tag push (auto) OR manual workflow_dispatch
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'

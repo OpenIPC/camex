@@ -530,9 +530,7 @@ int main(int argc, char *argv[])
     camex_run();
     camex_stop();
     if (config.pid_file[0] != '\0') {
-#ifndef _WIN32
         unlink(config.pid_file);
-#endif
     }
 #ifndef _WIN32
     closelog();

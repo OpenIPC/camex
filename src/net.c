@@ -78,11 +78,11 @@ static int tcp_send_flush_pending(int fd)
         if (n < 0) {
 #ifdef _WIN32
             int e = WSAGetLastError();
-            if (e == WSAEWOULDBLOCK) {
+            if (e == WSAEWOULDBLOCK || e == WSAEINTR) {
                 return 1;  /* still pending */
             }
 #else
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
                 return 1;  /* still pending */
             }
 #endif
@@ -124,9 +124,9 @@ int net_sock_err_is_again(void)
 {
 #ifdef _WIN32
     int e = WSAGetLastError();
-    return (e == WSAEWOULDBLOCK);
+    return (e == WSAEWOULDBLOCK || e == WSAEINTR);
 #else
-    return (errno == EAGAIN || errno == EWOULDBLOCK);
+    return (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR);
 #endif
 }
 
