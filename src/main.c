@@ -234,6 +234,11 @@ int validate_config(camex_config_t *config)
         return -1;
     }
 
+    if (config->transport > 1) {
+        log_message(LOG_ERR, "Transport must be 0 (udp) or 1 (tcp)");
+        return -1;
+    }
+
     if (config->encrypt && config->psk[0] == '\0') {
         log_message(LOG_ERR, "Encryption requested but PSK is empty");
         return -1;
@@ -373,7 +378,9 @@ void print_usage(const char *progname)
            " (default: 0.0.0.0)\n");
     printf("  -p, --port <port>    Port to listen on\n");
     printf("  -d, --bind-dev <iface>  Bind socket to a"
-           " specific network interface\n\n");
+           " specific network interface\n");
+    printf("  -T, --tun-dev <path> TUN device path"
+           " (default: auto-detect)\n\n");
 
     printf("Common options:\n");
     printf("  -t, --mtu <size>     Tunnel MTU, 576-9000 (default: 1500)\n");
@@ -385,12 +392,22 @@ void print_usage(const char *progname)
     printf("  -h, --help           Show this help message and exit\n\n");
 
     printf("Examples:\n");
-    printf("  # Server\n");
+    printf("  # Server (UDP)\n");
     printf("  %s --mode server --port 5800"
            " --config /etc/camex/camex.conf"
            " --encrypt --psk secret\n\n", progname);
-    printf("  # Client (auto-config)\n");
+    printf("  # Server (TCP)\n");
+    printf("  %s --mode server --port 5800"
+           " --transport tcp"
+           " --config /etc/camex/camex.conf"
+           " --encrypt --psk secret\n\n", progname);
+    printf("  # Client (auto-config, UDP)\n");
     printf("  %s --mode client --auto --name 0203A104B5AE"
+           " --server-host cloud.openipc.org"
+           " --port 5800 --encrypt --psk secret\n\n", progname);
+    printf("  # Client (auto-config, TCP)\n");
+    printf("  %s --mode client --auto --name 0203A104B5AE"
+           " --transport tcp"
            " --server-host cloud.openipc.org"
            " --port 5800 --encrypt --psk secret\n\n", progname);
     printf("  # Client (manual)\n");

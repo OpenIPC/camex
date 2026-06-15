@@ -105,9 +105,26 @@ int get_random_bytes(void *buf, size_t len)
         print_errno_message(LOG_ERR, "open(/dev/urandom)");
         return -1;
     }
-    ret = read(fd, buf, (size_t)len);
+    {
+        size_t total = 0;
+        while (total < len) {
+            ret = read(fd, (uint8_t *)buf + total, len - total);
+            if (ret < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                close(fd);
+                return -1;
+            }
+            if (ret == 0) {
+                close(fd);
+                return -1;
+            }
+            total += (size_t)ret;
+        }
+    }
     close(fd);
-    return (ret == (ssize_t)len) ? 0 : -1;
+    return 0;
 #endif
 }
 

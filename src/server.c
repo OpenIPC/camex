@@ -309,7 +309,7 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
         server_client_t *existing = server_find_by_addr(from);
         if (existing != NULL && existing->last_register_time != 0 &&
             difftime(g_now, existing->last_register_time) < 5.0) {
-            return 0;
+            return -2;  /* rate-limited: caller must ignore, not treat as success */
         }
     }
 
@@ -565,7 +565,13 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
 
     if (!current_config.encrypt && len >= 4U &&
         memcmp(buffer, CAMEX_MAGIC, 4) == 0) {
-        server_handle_plain_register(buffer, len, from, NULL);
+        if (server_handle_plain_register(buffer, len, from, NULL) != 0) {
+            char peer[64];
+            net_sockaddr_to_string(from, peer, sizeof(peer));
+            log_message(LOG_WARNING,
+                        "Failed to handle plaintext register from %s",
+                        peer);
+        }
         return 0;
     }
 

@@ -102,6 +102,23 @@ static int tcp_send_flush_pending(int fd)
     return 0;
 }
 
+/* Return the fd that has pending TCP send data, or -1 if none.
+ * Used by the event loop to add write-FD monitoring via select(). */
+int net_tcp_get_pending_fd(void)
+{
+    if (tcp_pending.fd != -1 && tcp_pending.offset < tcp_pending.len) {
+        return tcp_pending.fd;
+    }
+    return -1;
+}
+
+/* Public wrapper: try to flush pending data for the given fd.
+ * Returns 0 = fully flushed, 1 = still pending (EAGAIN), -1 = error. */
+int net_tcp_flush_pending(int fd)
+{
+    return tcp_send_flush_pending(fd);
+}
+
 /* Cross-platform EAGAIN/EWOULDBLOCK check for socket operations */
 int net_sock_err_is_again(void)
 {
@@ -290,7 +307,7 @@ int net_tcp_send_frame(int fd, const uint8_t *data, size_t len)
     uint16_t net_len;
     size_t frame_size;
 
-    if (fd < 0 || data == NULL || len > 65535U) {
+    if (fd < 0 || data == NULL || len > (TCP_SEND_BUF_SIZE - 2U)) {
         return -1;
     }
 
@@ -299,6 +316,12 @@ int net_tcp_send_frame(int fd, const uint8_t *data, size_t len)
         int ret = tcp_send_flush_pending(fd);
         if (ret != 0) {
             return ret;  /* 1 = still pending (EAGAIN), -1 = error */
+        }
+        /* Guard: don't overwrite pending data belonging to another fd.
+         * With a single global buffer, simultaneous pending sends to
+         * different fds would corrupt data.  Return "try again later". */
+        if (tcp_pending.fd != -1 && tcp_pending.fd != fd) {
+            return 1;
         }
     }
 

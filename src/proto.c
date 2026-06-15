@@ -92,7 +92,17 @@ int proto_parse_register(char *message,
         char value[CAMEX_CLIENT_TOKEN_LEN];
 
         if (token_value(token, "VER", value, sizeof(value)) == 0) {
-            proto_ver = (unsigned int)atoi(value);
+            {
+                char *end = NULL;
+                unsigned long pv = strtoul(value, &end, 10);
+                if (end == value || *end != '\0') {
+                    log_message(LOG_WARNING,
+                                "Rejecting client: invalid protocol version '%s'",
+                                value);
+                    return -1;
+                }
+                proto_ver = (unsigned int)pv;
+            }
             if (proto_ver > CAMEX_PROTO_VER) {
                 log_message(LOG_WARNING,
                             "Rejecting client: protocol version %u > server %u",

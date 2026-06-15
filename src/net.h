@@ -79,6 +79,12 @@ int net_tcp_send_frame(int fd, const uint8_t *data, size_t len);
 /* TCP framing: recv 2-byte length prefix + payload (blocks until full frame) */
 int net_tcp_recv_frame(int fd, uint8_t *buffer, size_t size, size_t *len);
 
+/* Return fd that has pending TCP send data, or -1 if none (for select() writefds) */
+int net_tcp_get_pending_fd(void);
+
+/* Try to flush pending TCP send data for the given fd */
+int net_tcp_flush_pending(int fd);
+
 /* Cross-platform EAGAIN/EWOULDBLOCK check for socket operations.
  * On POSIX: checks errno.  On Windows: checks WSAGetLastError(). */
 int net_sock_err_is_again(void);

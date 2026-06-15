@@ -421,7 +421,7 @@ int camex_init(camex_config_t *config)
             if (!current_config.encrypt && g->encrypt_set) {
                 current_config.encrypt = g->encrypt;
             }
-            if (current_config.mtu == 1500 && g->mtu > 0) {
+            if (current_config.mtu == CAMEX_DEFAULT_MTU && g->mtu > 0) {
                 current_config.mtu = g->mtu;
             }
         }
@@ -777,6 +777,7 @@ static void handle_tun_packet(void)
 void camex_run(void)
 {
     fd_set readset;
+    fd_set writeset;
     struct timeval tv;
     int maxfd;
     int ready;
@@ -785,9 +786,11 @@ void camex_run(void)
         log_message(LOG_INFO, "Server started. Press Ctrl+C to stop.");
         while (running) {
             size_t si;
+            int pending_fd;
 
             g_now = time(NULL);
             FD_ZERO(&readset);
+            FD_ZERO(&writeset);
 
             if (current_config.transport == CAMEX_TRANSPORT_UDP) {
                 if (net_fd >= 0) {
@@ -818,11 +821,24 @@ void camex_run(void)
                 }
             }
 
+            /* Monitor TCP socket writability for pending sends */
+            pending_fd = net_tcp_get_pending_fd();
+            if (pending_fd >= 0) {
+                FD_SET(pending_fd, &writeset);
+                if (pending_fd > maxfd) {
+                    maxfd = pending_fd;
+                }
+            }
+
             tv.tv_sec = 1;
             tv.tv_usec = 0;
 
-            ready = select(maxfd + 1, &readset, NULL, NULL, &tv);
+            ready = select(maxfd + 1, &readset, &writeset, NULL, &tv);
             if (ready > 0) {
+                /* Retry pending TCP sends when socket becomes writable */
+                if (pending_fd >= 0 && FD_ISSET(pending_fd, &writeset)) {
+                    net_tcp_flush_pending(pending_fd);
+                }
                 if (current_config.transport == CAMEX_TRANSPORT_UDP) {
                     if (net_fd >= 0 && FD_ISSET(net_fd, &readset)) {
                         drain_udp_packets();
@@ -879,6 +895,8 @@ void camex_run(void)
 
     log_message(LOG_INFO, "Client started. Press Ctrl+C to stop.");
     while (running) {
+        int pending_fd;
+
         g_now = time(NULL);
 
         if (net_fd < 0) {
@@ -888,9 +906,16 @@ void camex_run(void)
         }
 
         FD_ZERO(&readset);
+        FD_ZERO(&writeset);
         FD_SET(net_fd, &readset);
         if (tun_fd >= 0) {
             FD_SET(tun_fd, &readset);
+        }
+
+        /* Monitor TCP socket writability for pending sends */
+        pending_fd = net_tcp_get_pending_fd();
+        if (pending_fd >= 0) {
+            FD_SET(pending_fd, &writeset);
         }
 
         tv.tv_sec = 1;
@@ -900,9 +925,16 @@ void camex_run(void)
         if (tun_fd > maxfd) {
             maxfd = tun_fd;
         }
+        if (pending_fd > maxfd) {
+            maxfd = pending_fd;
+        }
 
-        ready = select(maxfd + 1, &readset, NULL, NULL, &tv);
+        ready = select(maxfd + 1, &readset, &writeset, NULL, &tv);
         if (ready > 0) {
+            /* Retry pending TCP sends when socket becomes writable */
+            if (pending_fd >= 0 && FD_ISSET(pending_fd, &writeset)) {
+                net_tcp_flush_pending(pending_fd);
+            }
             if (FD_ISSET(net_fd, &readset)) {
                 drain_udp_packets();
             }

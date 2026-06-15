@@ -28,6 +28,7 @@
 #define CAMEX_CLIENT_ID_LEN 32
 #define CAMEX_CONFIG_PATH_LEN 256
 #define CAMEX_DEFAULT_CONFIG_PATH "/etc/camex/camex.conf"
+#define CAMEX_DEFAULT_MTU 1500
 
 typedef enum {
     CAMEX_MODE_CLIENT = 0,
