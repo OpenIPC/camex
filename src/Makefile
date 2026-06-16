@@ -91,7 +91,9 @@ apk:
 	@echo "Syncing Android version from version.h ..."
 	../scripts/sync-android-version.sh
 	cd ../android && ./gradlew assembleRelease
-	cp ../android/app/build/outputs/apk/release/app-release-unsigned.apk camex-$(VERSION).apk
+	APK=$$(ls ../android/app/build/outputs/apk/release/app-release.apk ../android/app/build/outputs/apk/release/app-release-unsigned.apk 2>/dev/null | head -1); \
+	if [ -z "$$APK" ]; then echo "ERROR: APK not found" >&2; exit 1; fi; \
+	cp "$$APK" camex-$(VERSION).apk
 	@echo "Created camex-$(VERSION).apk"
 
 clean:

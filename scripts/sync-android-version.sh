@@ -42,10 +42,14 @@ echo "Computed   → versionCode   = ${VERSION_CODE}"
 # --- Update AndroidManifest.xml ---
 if [ -f "$MANIFEST" ]; then
     echo "Updating $MANIFEST ..."
-    sed -i \
-        -e "s|android:versionCode=\"[0-9]*\"|android:versionCode=\"${VERSION_CODE}\"|" \
-        -e "s|android:versionName=\"[^\"]*\"|android:versionName=\"${CAMEX_VERSION}\"|" \
-        "$MANIFEST"
+    if grep -q 'android:versionCode=' "$MANIFEST" 2>/dev/null; then
+        sed -i \
+            -e "s|android:versionCode=\"[0-9]*\"|android:versionCode=\"${VERSION_CODE}\"|" \
+            -e "s|android:versionName=\"[^\"]*\"|android:versionName=\"${CAMEX_VERSION}\"|" \
+            "$MANIFEST"
+    else
+        echo "  (version attributes not in manifest — build.gradle.kts is authoritative)"
+    fi
 else
     echo "WARNING: $MANIFEST not found, skipping" >&2
 fi
