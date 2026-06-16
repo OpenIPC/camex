@@ -161,17 +161,31 @@ jobs:
           echo "GRADLE_HOME=$GRADLE_DIR" >> "$GITHUB_ENV"
           echo "$GRADLE_DIR/bin" >> "$GITHUB_PATH"
 
+      - name: Decode release keystore
+        if: ${{ secrets.CAMEX_KEYSTORE_B64 != '' }}
+        run: echo "${{ secrets.CAMEX_KEYSTORE_B64 }}" | base64 -d > "$RUNNER_TEMP/camex-release.jks"
+
       - name: Build APK
+        env:
+          # When the secret is absent these stay empty and gradle builds unsigned.
+          CAMEX_KEYSTORE_FILE: ${{ secrets.CAMEX_KEYSTORE_B64 != '' && format('{0}/camex-release.jks', runner.temp) || '' }}
+          CAMEX_KEYSTORE_PASSWORD: ${{ secrets.CAMEX_KEYSTORE_PASSWORD }}
+          CAMEX_KEY_ALIAS: ${{ secrets.CAMEX_KEY_ALIAS }}
+          CAMEX_KEY_PASSWORD: ${{ secrets.CAMEX_KEY_PASSWORD }}
         run: |
           cd android
           gradle assembleRelease
-          ls -lh app/build/outputs/apk/release/
+          OUT=app/build/outputs/apk/release
+          ls -lh "$OUT/"
+          # Output is app-release.apk when signed, app-release-unsigned.apk otherwise.
+          APK=$(ls "$OUT"/app-release.apk "$OUT"/app-release-unsigned.apk 2>/dev/null | head -1)
+          cp "$APK" "$OUT/camex-android.apk"
 
       - name: Upload artifact (APK)
         uses: actions/upload-artifact@v7
         with:
           name: camex-aarch64-apk
-          path: android/app/build/outputs/apk/release/app-release-unsigned.apk
+          path: android/app/build/outputs/apk/release/camex-android.apk
           if-no-files-found: error
 
   # ---------------------------------------------------------------- windows
@@ -420,10 +434,10 @@ jobs:
             mv -v "$f" "release-binaries/camex-${VERSION}-${arch}"
           done
 
-          # Rename APK: app-release-unsigned.apk → camex-<version>-android-unsigned.apk
-          if [ -f release-binaries/app-release-unsigned.apk ]; then
-            mv -v release-binaries/app-release-unsigned.apk \
-                 "release-binaries/camex-${VERSION}-android-unsigned.apk"
+          # Rename APK: camex-android.apk → camex-<version>-android.apk
+          if [ -f release-binaries/camex-android.apk ]; then
+            mv -v release-binaries/camex-android.apk \
+                 "release-binaries/camex-${VERSION}-android.apk"
           fi
 
           echo "=== Release binaries ==="

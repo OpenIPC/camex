@@ -5,5 +5,7 @@
     themes.xml — camex app theme (dark Material3)
 -->
 <resources>
-    <style name="Theme.Camex" parent="Theme.AppCompat.DayNight.DarkActionBar" />
+    <!-- MaterialComponents theme is required by the settings bottom sheet
+         (BottomSheetDialogFragment, TextInputLayout, SwitchMaterial). -->
+    <style name="Theme.Camex" parent="Theme.MaterialComponents.DayNight.DarkActionBar" />
 </resources>
