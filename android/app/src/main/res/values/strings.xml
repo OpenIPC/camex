@@ -10,4 +10,14 @@
     <string name="status_disconnected">Disconnected</string>
     <string name="btn_start">Start VPN</string>
     <string name="btn_stop">Stop VPN</string>
+    <string name="btn_settings">Settings</string>
+
+    <!-- Settings bottom sheet -->
+    <string name="settings_title">Connection settings</string>
+    <string name="server_host">Server host</string>
+    <string name="server_port">Server port</string>
+    <string name="client_name">Client name</string>
+    <string name="encrypt">Encrypt traffic</string>
+    <string name="psk">Pre-shared key</string>
+    <string name="save">Save</string>
 </resources>

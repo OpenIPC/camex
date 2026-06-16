@@ -9,11 +9,14 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
-import android.app.Service;
 import android.content.Intent;
+import android.content.pm.ServiceInfo;
 import android.net.VpnService;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
+import android.text.TextUtils;
+import androidx.core.app.ServiceCompat;
+import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -40,7 +43,10 @@ public class TunnelService extends VpnService {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        startForeground(NOTIFY_ID, buildNotification("Starting..."));
+        // Android 14 (targetSdk 34) requires a foreground service type; VPN apps
+        // use systemExempted. ServiceCompat picks the right overload per API.
+        ServiceCompat.startForeground(this, NOTIFY_ID, buildNotification("Starting..."),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED);
 
         executor.execute(() -> {
             try {
@@ -58,15 +64,22 @@ public class TunnelService extends VpnService {
                     return;
                 }
 
-                // Build argv for camex
-                String[] argv = {
-                    "camex",
-                    "--mode", "client",
-                    "--auto",
-                    "--name", "android-client",
-                    "--server-host", getServerHost(),
-                    "--port", String.valueOf(getServerPort())
-                };
+                // Build argv for camex from saved settings
+                ArrayList<String> args = new ArrayList<>();
+                args.add("camex");
+                args.add("--mode"); args.add("client");
+                args.add("--auto");
+                args.add("--name"); args.add(getName());
+                args.add("--server-host"); args.add(getServerHost());
+                args.add("--port"); args.add(String.valueOf(getServerPort()));
+                if (getEncrypt()) {
+                    args.add("--encrypt");
+                    String psk = getPsk();
+                    if (!TextUtils.isEmpty(psk)) {
+                        args.add("--psk"); args.add(psk);
+                    }
+                }
+                String[] argv = args.toArray(new String[0]);
 
                 // Run camex in-process via JNI (blocks)
                 running = true;
@@ -92,6 +105,21 @@ public class TunnelService extends VpnService {
     private int getServerPort() {
         return getSharedPreferences("camex", MODE_PRIVATE)
             .getInt("server_port", 5800);
+    }
+
+    private String getName() {
+        return getSharedPreferences("camex", MODE_PRIVATE)
+            .getString("name", "android-client");
+    }
+
+    private boolean getEncrypt() {
+        return getSharedPreferences("camex", MODE_PRIVATE)
+            .getBoolean("encrypt", false);
+    }
+
+    private String getPsk() {
+        return getSharedPreferences("camex", MODE_PRIVATE)
+            .getString("psk", "");
     }
 
     @Override
