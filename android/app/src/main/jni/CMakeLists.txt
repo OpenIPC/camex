@@ -35,7 +35,7 @@ target_compile_definitions(camex PRIVATE
 )
 
 target_include_directories(camex PRIVATE
-    ../../../../../../src   # camex headers
+    ../../../../../src   # camex headers (5 levels up = repo root/src)
 )
 
 target_link_libraries(camex log)
