@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g., v2.2.0)'
+        description: 'Release version (e.g., v2.3.6)'
         required: true
-        default: 'v2.2.0'
+        default: 'v2.3.6'
 
 env:
   BUILD_DIR: build
@@ -394,6 +394,19 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Verify version.h matches git tag
+        run: |
+          FILE_VERSION=$(grep -Po '(?<=CAMEX_VERSION ")[^"]*' src/version.h)
+          TAG_VERSION="${{ steps.tag.outputs.tag }}"
+          TAG_VERSION="${TAG_VERSION#v}"
+          echo "version.h  → ${FILE_VERSION}"
+          echo "git tag    → ${TAG_VERSION}"
+          if [ "${FILE_VERSION}" != "${TAG_VERSION}" ]; then
+            echo "::error::VERSION MISMATCH: version.h says '${FILE_VERSION}' but git tag is 'v${TAG_VERSION}'"
+            exit 1
+          fi
+          echo "✅ Versions match: ${FILE_VERSION}"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v7

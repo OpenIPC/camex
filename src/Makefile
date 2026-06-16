@@ -88,6 +88,8 @@ kmod-clean:
 
 # Android .apk package (requires Android SDK + NDK)
 apk:
+	@echo "Syncing Android version from version.h ..."
+	../scripts/sync-android-version.sh
 	cd ../android && ./gradlew assembleRelease
 	cp ../android/app/build/outputs/apk/release/app-release-unsigned.apk camex-$(VERSION).apk
 	@echo "Created camex-$(VERSION).apk"

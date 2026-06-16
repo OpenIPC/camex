@@ -10,8 +10,8 @@ android {
         applicationId = "org.openipc.camex"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "2.2.0"
+        versionCode = 20306
+        versionName = "2.3.6"
         ndk { abiFilters += listOf("arm64-v8a") }
         externalNativeBuild {
             cmake { arguments("-DANDROID_STL=c++_static") }

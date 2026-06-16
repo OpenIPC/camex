@@ -542,6 +542,46 @@ forbidden. Therefore `kmalloc` for `pkt_node` uses `GFP_ATOMIC`. If
 memory is unavailable in this context the packet is dropped
 (`tx_dropped++`).
 
+## Versioning & Release Process
+
+### Single source of truth
+
+The **only** place to change the software version is `src/version.h`:
+
+```c
+#define CAMEX_VERSION "X.Y.Z"
+```
+
+All other version references (Android, CI, git tags) **must** match this value.
+The CI pipeline enforces this automatically: a release build will fail if the
+git tag does not match `CAMEX_VERSION`.
+
+### Release checklist
+
+1. **Bump `src/version.h`** — update `CAMEX_VERSION` to the new version.
+2. **Sync Android versions** — run `scripts/sync-android-version.sh` (or `make apk`
+   which calls it automatically). This updates:
+   - `android/app/build.gradle.kts` — `versionName` + `versionCode`
+   - `android/app/src/main/AndroidManifest.xml` — `android:versionName` + `android:versionCode`
+3. **Commit**: `git commit -m "chore: bump version to X.Y.Z"`
+4. **Tag**: `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
+5. **Push**: `git push origin master && git push origin vX.Y.Z`
+6. **CI creates the GitHub Release** automatically with artifacts named
+   `camex-X.Y.Z-<platform>`.
+
+### Version numbering rules
+
+- `versionName` (Android) = `CAMEX_VERSION` (e.g., `"2.3.6"`)
+- `versionCode` (Android) = `MAJOR * 10000 + MINOR * 100 + PATCH` (e.g., `20306`)
+- Git tag = `v` + `CAMEX_VERSION` (e.g., `v2.3.6`)
+- GitHub Release title = `camex vX.Y.Z`
+
+### Manual CI trigger
+
+If a release needs to be triggered manually (e.g., re-uploading artifacts),
+use the `workflow_dispatch` event in the Actions tab with the `version` input
+set to the tag name (e.g., `v2.3.6`).
+
 ## Notes
 
 - Each client should use a unique tunnel IP.
