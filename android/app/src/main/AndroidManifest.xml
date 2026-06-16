@@ -5,8 +5,8 @@
     AndroidManifest.xml — camex VPN tunnel for Android
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    android:versionCode="20306"
-    android:versionName="2.3.6">
+    android:versionCode="20307"
+    android:versionName="2.3.7">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
