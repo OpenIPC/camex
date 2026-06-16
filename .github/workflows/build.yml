@@ -162,13 +162,16 @@ jobs:
           echo "$GRADLE_DIR/bin" >> "$GITHUB_PATH"
 
       - name: Decode release keystore
-        if: ${{ secrets.CAMEX_KEYSTORE_B64 != '' }}
-        run: echo "${{ secrets.CAMEX_KEYSTORE_B64 }}" | base64 -d > "$RUNNER_TEMP/camex-release.jks"
+        env:
+          KS_B64: ${{ secrets.CAMEX_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/camex-release.jks"
+            echo "CAMEX_KEYSTORE_FILE=$RUNNER_TEMP/camex-release.jks" >> "$GITHUB_ENV"
+          fi
 
       - name: Build APK
         env:
-          # When the secret is absent these stay empty and gradle builds unsigned.
-          CAMEX_KEYSTORE_FILE: ${{ secrets.CAMEX_KEYSTORE_B64 != '' && format('{0}/camex-release.jks', runner.temp) || '' }}
           CAMEX_KEYSTORE_PASSWORD: ${{ secrets.CAMEX_KEYSTORE_PASSWORD }}
           CAMEX_KEY_ALIAS: ${{ secrets.CAMEX_KEY_ALIAS }}
           CAMEX_KEY_PASSWORD: ${{ secrets.CAMEX_KEY_PASSWORD }}
