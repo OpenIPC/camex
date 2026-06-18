@@ -72,6 +72,11 @@ public class TunnelService extends VpnService {
                 args.add("--name"); args.add(getName());
                 args.add("--server-host"); args.add(getServerHost());
                 args.add("--port"); args.add(String.valueOf(getServerPort()));
+                args.add("--transport"); args.add(getTransport());
+                args.add("--mtu"); args.add(String.valueOf(getInt("mtu", 1500)));
+                args.add("--keepalive"); args.add(String.valueOf(getInt("keepalive", 10)));
+                args.add("--server-timeout");
+                args.add(String.valueOf(getInt("server_timeout", 20)));
                 if (getEncrypt()) {
                     args.add("--encrypt");
                     String psk = getPsk();
@@ -110,6 +115,16 @@ public class TunnelService extends VpnService {
     private String getName() {
         return getSharedPreferences("camex", MODE_PRIVATE)
             .getString("name", "android-client");
+    }
+
+    private String getTransport() {
+        // udp (default) or tcp
+        return getSharedPreferences("camex", MODE_PRIVATE)
+            .getString("transport", "udp");
+    }
+
+    private int getInt(String key, int def) {
+        return getSharedPreferences("camex", MODE_PRIVATE).getInt(key, def);
     }
 
     private boolean getEncrypt() {
