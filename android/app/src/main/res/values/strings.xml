@@ -17,7 +17,26 @@
     <string name="server_host">Server host</string>
     <string name="server_port">Server port</string>
     <string name="client_name">Client name</string>
-    <string name="encrypt">Encrypt traffic</string>
+
+    <!-- Transport -->
+    <string name="transport">Transport</string>
+    <string name="transport_udp">UDP</string>
+    <string name="transport_tcp">TCP</string>
+
+    <!-- Security -->
+    <string name="encrypt">Encrypt traffic (ChaCha20-Poly1305)</string>
     <string name="psk">Pre-shared key</string>
+
+    <!-- Advanced -->
+    <string name="advanced">Advanced</string>
+    <string name="mtu">MTU (576–9000)</string>
+    <string name="keepalive">Keepalive, sec (0 = off)</string>
+    <string name="server_timeout">Server timeout, sec (5–3600)</string>
+
     <string name="save">Save</string>
+
+    <!-- Validation errors -->
+    <string name="err_mtu">MTU must be 576–9000</string>
+    <string name="err_keepalive">Keepalive must be 0–3600</string>
+    <string name="err_timeout">Timeout must be 5–3600</string>
 </resources>
