@@ -10,6 +10,7 @@
 #define CAMEX_CLIENT_H
 
 #include "camex.h"
+#include "net.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -30,6 +31,9 @@ typedef struct {
 extern client_state_t client_state;
 extern time_t client_reconnect_at;
 extern uint8_t client_link_up;
+/* Persistent partial-read tracker for the client's single TCP connection —
+ * must be reset (zeroed) on every reconnect, see tcp_recv_state_t in net.h. */
+extern tcp_recv_state_t client_recv_state;
 
 /* Initialize client state */
 void client_state_init(client_state_t *state);

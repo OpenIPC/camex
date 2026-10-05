@@ -341,60 +341,83 @@ int net_tcp_send_frame(int fd, const uint8_t *data, size_t len)
 
 /*
  * TCP recv helpers: use platform-specific EAGAIN via net_sock_err_is_again().
- * Returns:  0 = full frame received, *len set
- *           1 = partial data / EAGAIN (caller should re-select)
+ * Returns:  0 = full frame received, *len set, state reset for next frame
+ *           1 = partial data / EAGAIN (state preserved, caller re-selects)
  *          -1 = hard error (connection closed, protocol error)
+ *
+ * BUGFIX (10.09): partial-read progress now lives in *state (owned by the
+ * caller, one instance per TCP connection) instead of a function-local
+ * counter that reset to 0 every call — see tcp_recv_state_t in net.h for
+ * why that was corrupting the frame stream under any real traffic burst.
  */
-int net_tcp_recv_frame(int fd, uint8_t *buffer, size_t size, size_t *len)
+int net_tcp_recv_frame(int fd, uint8_t *buffer, size_t size, size_t *len,
+                       tcp_recv_state_t *state)
 {
-    uint8_t header[2];
-    uint16_t net_len;
-    size_t body_len;
     ssize_t n;
-    size_t total = 0;
 
-    if (fd < 0 || buffer == NULL || len == NULL) {
+    if (fd < 0 || buffer == NULL || len == NULL || state == NULL) {
         return -1;
     }
 
-    /* Read 2-byte header */
-    while (total < 2) {
-        n = read(fd, header + total, 2 - total);
+    if (!state->header_done) {
+        while (state->header_have < 2) {
+            n = read(fd, state->header + state->header_have,
+                     2 - state->header_have);
+            if (n < 0) {
+                if (net_sock_err_is_again()) {
+                    return 1;  /* caller will re-select; state preserved */
+                }
+                return -1;
+            }
+            if (n == 0) {
+                return -1;  /* connection closed */
+            }
+            state->header_have += (size_t)n;
+        }
+
+        {
+            uint16_t net_len;
+            memcpy(&net_len, state->header, 2);
+            state->body_len = (size_t)ntohs(net_len);
+        }
+
+        if (state->body_len == 0U || state->body_len > size) {
+            log_message(LOG_ERR, "net_tcp_recv_frame: bad body_len=%zu (size cap=%zu), header bytes=%02x %02x, fd=%d",
+                        state->body_len, size, state->header[0], state->header[1], fd);
+            /* Stream is desynced beyond recovery for this connection —
+             * caller treats this as a hard error and tears the connection
+             * down, so no point preserving state further. */
+            return -1;
+        }
+
+        state->header_done = 1;
+        state->body_have = 0;
+    }
+
+    while (state->body_have < state->body_len) {
+        n = read(fd, buffer + state->body_have,
+                 state->body_len - state->body_have);
         if (n < 0) {
             if (net_sock_err_is_again()) {
-                return 1;  /* caller will re-select */
+                return 1;  /* caller will re-select; state preserved */
             }
             return -1;
         }
         if (n == 0) {
             return -1;  /* connection closed */
         }
-        total += (size_t)n;
+        state->body_have += (size_t)n;
     }
 
-    memcpy(&net_len, header, 2);
-    body_len = (size_t)ntohs(net_len);
+    *len = state->body_len;
 
-    if (body_len == 0U || body_len > size) {
-        return -1;
-    }
-
-    total = 0;
-    while (total < body_len) {
-        n = read(fd, buffer + total, body_len - total);
-        if (n < 0) {
-            if (net_sock_err_is_again()) {
-                return 1;  /* caller will re-select */
-            }
-            return -1;
-        }
-        if (n == 0) {
-            return -1;  /* connection closed */
-        }
-        total += (size_t)n;
-    }
-
-    *len = body_len;
+    /* Frame complete — reset state so the NEXT call starts a fresh header,
+     * at the correct stream position (right after this frame's last byte,
+     * since we only ever read() exactly what each phase needed). */
+    state->header_have = 0;
+    state->header_done = 0;
+    state->body_len = 0;
+    state->body_have = 0;
     return 0;
 }
 

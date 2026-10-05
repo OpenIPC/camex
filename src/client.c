@@ -37,6 +37,7 @@
 static unsigned int reconnect_backoff = 0;
 
 client_state_t client_state;
+tcp_recv_state_t client_recv_state;
 
 void client_state_init(client_state_t *state)
 {
@@ -220,7 +221,7 @@ int client_wait_for_config(void)
         if (current_config.transport == CAMEX_TRANSPORT_TCP) {
             size_t frame_len;
             if (net_tcp_recv_frame(net_fd, buffer, sizeof(buffer),
-                                   &frame_len) != 0) {
+                                   &frame_len, &client_recv_state) != 0) {
                 continue;
             }
             ready = (int)frame_len;
@@ -305,6 +306,7 @@ int client_handle_tun_packet(const uint8_t *buffer, size_t len)
 void client_reconnect(void)
 {
     net_close();
+    memset(&client_recv_state, 0, sizeof(client_recv_state));
 
     log_message(LOG_INFO, "Reconnecting to server %s:%d...",
                 current_config.server_host, current_config.port);

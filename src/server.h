@@ -10,6 +10,7 @@
 #define CAMEX_SERVER_H
 
 #include "camex.h"
+#include "net.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -34,6 +35,8 @@ typedef struct {
     uint8_t send_nonce_prefix[4];
     int tcp_fd;         /* TCP socket fd for this client (-1 = UDP) */
     uint8_t psk_key[32];
+    tcp_recv_state_t recv_state;  /* per-connection partial-read tracker —
+                                    * zero on accept/reuse, see net.h */
 } server_client_t;
 
 extern server_client_t server_clients[];
@@ -57,10 +60,12 @@ int server_send_config_response(const struct sockaddr_in *from,
                                 server_client_t *entry,
                                 const char *client_id);
 
-/* Handle plaintext register */
+/* Handle plaintext register.
+ * fd: current TCP connection's fd for this packet, or -1 for UDP —
+ * used to keep server_client_t.tcp_fd in sync on reconnect (see camex.c). */
 int server_handle_plain_register(const uint8_t *buffer, size_t len,
                                  const struct sockaddr_in *from,
-                                 const uint8_t *used_key);
+                                 const uint8_t *used_key, int fd);
 
 /* Try all keystore entries to decrypt a packet */
 const uint8_t *server_try_all_keys(const uint8_t *buffer, size_t len,
@@ -72,9 +77,10 @@ const uint8_t *server_try_all_keys(const uint8_t *buffer, size_t len,
 int server_forward_packet(const uint8_t *packet, size_t len,
                           uint32_t src_ip_be, uint32_t dst_ip_be);
 
-/* Main server packet handler */
+/* Main server packet handler.
+ * fd: current TCP connection's fd for this packet, or -1 for UDP. */
 int server_handle_packet(const uint8_t *buffer, size_t len,
-                         const struct sockaddr_in *from);
+                         const struct sockaddr_in *from, int fd);
 
 /* Server socket creation */
 int server_socket_create(const char *bind_ip, int port,

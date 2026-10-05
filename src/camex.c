@@ -94,6 +94,7 @@ uint8_t server_mode = 0;
 
 time_t client_reconnect_at = 0;
 uint8_t client_link_up = 0;
+static uint8_t client_link_confirmed = 0;
 
 #ifdef _WIN32
 static void read_default_gateway(char *ifname, size_t size)
@@ -506,7 +507,8 @@ int camex_init(camex_config_t *config)
         }
 
         client_link_up = 1U;
-        log_message(LOG_NOTICE, "Connection to server %s:%d established",
+        log_message(LOG_NOTICE,
+                    "Tunnel started, awaiting response from server %s:%d",
                     current_config.server_host, current_config.port);
         log_message(LOG_INFO, "Tunnel initialized");
         log_message(LOG_INFO, "  Mode: %s", mode_to_string(current_config.mode));
@@ -583,7 +585,7 @@ static void drain_udp_packets(void)
             len = recvfrom(net_fd, RECV_BUF_CAST buffer, sizeof(buffer), 0,
                            (struct sockaddr *)&from, &fromlen);
             if (len > 0) {
-                if (server_handle_packet(buffer, (size_t)len, &from) != 0) {
+                if (server_handle_packet(buffer, (size_t)len, &from, -1) != 0) {
                     char peer[64];
                     net_sockaddr_to_string(&from, peer, sizeof(peer));
                     log_message(LOG_WARNING, "Dropped packet from %s", peer);
@@ -604,9 +606,16 @@ static void drain_udp_packets(void)
     if (current_config.transport == CAMEX_TRANSPORT_TCP) {
         size_t frame_len;
         int rc = net_tcp_recv_frame(net_fd, buffer, sizeof(buffer),
-                                    &frame_len);
+                                    &frame_len, &client_recv_state);
         if (rc == 0) {
             client_state.last_recv = g_now;
+            if (!client_link_confirmed) {
+                client_link_confirmed = 1U;
+                log_message(LOG_NOTICE,
+                    "Connection to server %s:%d established "
+                    "(first response received)",
+                    current_config.server_host, current_config.port);
+            }
             if (client_handle_net_packet(buffer, frame_len) != 0) {
                 log_message(LOG_WARNING, "Dropped packet from server");
             }
@@ -624,6 +633,13 @@ static void drain_udp_packets(void)
         len = recv(net_fd, RECV_BUF_CAST buffer, sizeof(buffer), 0);
         if (len > 0) {
             client_state.last_recv = g_now;
+            if (!client_link_confirmed) {
+                client_link_confirmed = 1U;
+                log_message(LOG_NOTICE,
+                    "Connection to server %s:%d established "
+                    "(first response received)",
+                    current_config.server_host, current_config.port);
+            }
             if (client_handle_net_packet(buffer, (size_t)len) != 0) {
                 log_message(LOG_WARNING, "Dropped packet from server");
             }
@@ -700,8 +716,22 @@ static void drain_tcp_client_read(int fd)
     size_t i;
     char peer_str[64];
     int rc;
+    tcp_recv_state_t *rstate = NULL;
 
-    rc = net_tcp_recv_frame(fd, buffer, sizeof(buffer), &frame_len);
+    /* Find this fd's own persistent partial-read tracker up front — each
+     * TCP client has its own (see server_client_t.recv_state in server.h). */
+    for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
+        if (server_clients[i].active && server_clients[i].tcp_fd == fd) {
+            rstate = &server_clients[i].recv_state;
+            break;
+        }
+    }
+    if (rstate == NULL) {
+        close(fd);
+        return;
+    }
+
+    rc = net_tcp_recv_frame(fd, buffer, sizeof(buffer), &frame_len, rstate);
     if (rc == 1) {
         return;  /* EAGAIN — partial data; will re-select */
     }
@@ -730,7 +760,7 @@ static void drain_tcp_client_read(int fd)
             server_clients[i].tcp_fd == fd) {
             server_clients[i].last_seen = g_now;
             if (server_handle_packet(buffer, frame_len,
-                                     &server_clients[i].addr) != 0) {
+                                     &server_clients[i].addr, fd) != 0) {
                 net_sockaddr_to_string(&server_clients[i].addr,
                                        peer_str, sizeof(peer_str));
                 log_message(LOG_WARNING, "Dropped TCP packet from %s",
@@ -762,6 +792,22 @@ static void handle_tun_packet(void)
                 }
             } else {
                 rc = client_handle_tun_packet(buffer, (size_t)len);
+            }
+            if (rc == 1) {
+                /* BUGFIX: rc==1 means the underlying TCP send is still
+                 * flushing a previous frame (single shared pending-send
+                 * buffer, see net_tcp_send_frame()) — NOT a real error.
+                 * The old code logged "Dropped packet" and immediately
+                 * read+attempted the NEXT TUN packet anyway, which under
+                 * any burst of real traffic (e.g. the camera's own apps
+                 * routed through this tunnel while it's the active
+                 * channel) repeatedly raced the same pending buffer and
+                 * corrupted the TCP-framed control stream — surfacing as
+                 * bogus frame lengths and forced disconnects server-side.
+                 * Fix: stop draining TUN for this cycle so the pending
+                 * send can flush; the kernel's own TUN queue holds the
+                 * rest until we come back on the next event-loop pass. */
+                break;
             }
             if (rc != 0) {
                 log_message(LOG_WARNING, "Dropped packet from tunnel device");

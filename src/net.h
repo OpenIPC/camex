@@ -76,8 +76,38 @@ int net_tcp_accept(int listen_fd, struct sockaddr_in *peer);
 /* TCP framing: send 2-byte big-endian length prefix + payload */
 int net_tcp_send_frame(int fd, const uint8_t *data, size_t len);
 
-/* TCP framing: recv 2-byte length prefix + payload (blocks until full frame) */
-int net_tcp_recv_frame(int fd, uint8_t *buffer, size_t size, size_t *len);
+/*
+ * Persistent partial-read state for TCP frame reception.
+ * BUGFIX (10.09): net_tcp_recv_frame() previously used a purely local
+ * byte-counter that reset to 0 on every call. If a read() returned EAGAIN
+ * partway through either the 2-byte length header or the frame body (which
+ * WILL happen under any real burst of traffic — TCP segment boundaries
+ * don't line up with logical frame boundaries), the NEXT call restarted
+ * "expect a fresh 2-byte header" at whatever stream position it happened
+ * to be at — usually mid-body of the frame that got interrupted — reading
+ * garbage as a length prefix and desyncing the whole connection. This
+ * struct must be OWNED PER-CONNECTION by the caller (one instance per TCP
+ * client on the server side, one global instance on the client side) and
+ * passed to every net_tcp_recv_frame() call for that connection so partial
+ * progress survives across EAGAIN. Zero-initialize on connection accept
+ * or client (re)connect — never reuse across a different connection's
+ * bytes.
+ */
+typedef struct {
+    uint8_t header[2];
+    size_t header_have;
+    int header_done;
+    size_t body_len;
+    size_t body_have;
+} tcp_recv_state_t;
+
+/* TCP framing: recv 2-byte length prefix + payload.
+ * state: this connection's persistent partial-read tracker — see
+ * tcp_recv_state_t above. Returns 0 on a complete frame (resets state for
+ * the next one), 1 on EAGAIN/partial (state preserved, call again once
+ * readable), -1 on hard error/close. */
+int net_tcp_recv_frame(int fd, uint8_t *buffer, size_t size, size_t *len,
+                       tcp_recv_state_t *state);
 
 /* Return fd that has pending TCP send data, or -1 if none (for select() writefds) */
 int net_tcp_get_pending_fd(void);

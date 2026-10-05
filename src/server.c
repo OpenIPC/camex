@@ -334,7 +334,7 @@ int server_send_config_response(const struct sockaddr_in *from,
 
 int server_handle_plain_register(const uint8_t *buffer, size_t len,
                                  const struct sockaddr_in *from,
-                                 const uint8_t *used_key)
+                                 const uint8_t *used_key, int fd)
 {
     char message[CAMEX_CONTROL_MAX];
     char local_ip[16];
@@ -383,6 +383,25 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
             }
             entry->addr = *from;
             entry->last_seen = g_now;
+            /* BUGFIX: on reconnect, this branch previously left entry->tcp_fd
+             * pointing at the OLD (now-closed) connection's fd — every reply
+             * (config response, forwarded data) kept going to a stale/wrong
+             * descriptor, causing silent corruption and periodic forced
+             * disconnects. The fresh TCP connection's own slot (allocated by
+             * drain_tcp_server_accept, matched below by tcp_fd) never got this
+             * client_id, so it leaked until CAMEX_CLIENT_TIMEOUT expired it.
+             * Fix: adopt the current fd here, and reclaim the orphaned slot. */
+            if (fd >= 0 && entry->tcp_fd != fd) {
+                size_t j;
+                for (j = 0; j < CAMEX_MAX_CLIENTS; ++j) {
+                    if (server_clients[j].active &&
+                        server_clients[j].tcp_fd == fd &&
+                        &server_clients[j] != entry) {
+                        memset(&server_clients[j], 0, sizeof(server_clients[j]));
+                    }
+                }
+                entry->tcp_fd = fd;
+            }
         } else {
             /* TCP clients already have a slot allocated by drain_tcp_server_accept.
              * Reuse it instead of creating a second entry — otherwise tcp_fd
@@ -546,7 +565,7 @@ int server_forward_packet(const uint8_t *packet, size_t len,
 }
 
 int server_handle_packet(const uint8_t *buffer, size_t len,
-                         const struct sockaddr_in *from)
+                         const struct sockaddr_in *from, int fd)
 {
     uint8_t plain[TUN_PACKET_MAX];
     uint8_t type = 0U;
@@ -601,7 +620,7 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
 
         if (type == CAMEX_PACKET_REGISTER) {
             return server_handle_plain_register(plain, plain_len, from,
-                                                used_key);
+                                                used_key, fd);
         }
 
         if (type == CAMEX_PACKET_CONFIG) {
@@ -644,7 +663,7 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
             }
             return 0;
         }
-        if (server_handle_plain_register(buffer, len, from, NULL) != 0) {
+        if (server_handle_plain_register(buffer, len, from, NULL, fd) != 0) {
             char peer[64];
             net_sockaddr_to_string(from, peer, sizeof(peer));
             log_message(LOG_WARNING,
