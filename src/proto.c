@@ -55,6 +55,13 @@ int proto_build_register(const camex_config_t *config,
                                  config->local_ip) != 0) {
             return -1;
         }
+        /* Optional in manual mode: lets the server match the client to
+         * its [client ID] profile (and its own key). */
+        if (config->client_id[0] != '\0' &&
+            append_control_field(buffer, size, &offset,
+                                 " CLIENT_ID=%s", config->client_id) != 0) {
+            return -1;
+        }
     }
 
     if (append_control_field(buffer, size, &offset, "\n") != 0) {

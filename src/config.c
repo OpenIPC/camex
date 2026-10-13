@@ -389,6 +389,9 @@ void config_build_keystore(void)
         }
         derive_psk_key(server_db.clients[i].profile.psk,
                        server_keystore[server_keystore_count].psk_key);
+        snprintf(server_keystore[server_keystore_count].owner,
+                 sizeof(server_keystore[server_keystore_count].owner),
+                 "%s", server_db.clients[i].client_id);
         server_keystore_count++;
     }
 

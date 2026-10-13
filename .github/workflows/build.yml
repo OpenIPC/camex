@@ -86,6 +86,10 @@ jobs:
         run: ./docker/test-e2e-client-liveness.sh
         if: matrix.platform.name == 'x86_64'
 
+      - name: E2E test (key binding and source addresses, issues #5 #6)
+        run: ./docker/test-e2e-key-binding.sh
+        if: matrix.platform.name == 'x86_64'
+
       - name: Build cross
         run: |
           make clean

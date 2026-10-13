@@ -17,6 +17,7 @@
 /* Keystore entry */
 typedef struct {
     uint8_t psk_key[32];
+    char owner[CAMEX_CLIENT_ID_LEN];  /* client ID; empty = global key */
 } camex_keystore_entry_t;
 
 /* Per-client profile (from [client X] or defaults) */
