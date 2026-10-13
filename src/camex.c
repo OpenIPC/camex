@@ -76,8 +76,10 @@ typedef int socklen_t;
 #include <unistd.h>
 #endif
 #if defined(__APPLE__)
+#include <fcntl.h>
 #include <ifaddrs.h>
 #include <net/if_dl.h>
+#include <sys/wait.h>
 #endif
 #ifdef _WIN32
 #include <winsock2.h>
@@ -1037,23 +1039,49 @@ static int run_ip_route(const char *verb, const char *cidr, const char *gateway)
 static int run_ip_route(const char *verb, const char *cidr, const char *gateway)
 {
     /*
-     * macOS: use /sbin/route command instead of ioctl(SIOCADDRT).
-     * ioctl routing is not supported on Darwin.
+     * macOS: use /sbin/route instead of ioctl(SIOCADDRT), which Darwin
+     * does not support. Run it directly with an argument vector, never
+     * through a shell: cidr and gateway may come from the server's CONFIG
+     * message (#12).
      */
-    char cmd[256];
-    const char *op;
-    (void)verb;
+    char *argv[7];
+    pid_t pid;
+    int status = 0;
 
-    op = (strcmp(verb, "add") == 0 || strcmp(verb, "replace") == 0)
-             ? "-n add" : "-n delete";
-
-    if (cidr == NULL || gateway == NULL) {
+    if (verb == NULL || cidr == NULL || gateway == NULL) {
         return -1;
     }
 
-    snprintf(cmd, sizeof(cmd), "/sbin/route %s -inet %s %s 2>/dev/null",
-             op, cidr, gateway);
-    return system(cmd);
+    argv[0] = "/sbin/route";
+    argv[1] = "-n";
+    argv[2] = (strcmp(verb, "add") == 0 || strcmp(verb, "replace") == 0)
+                  ? "add" : "delete";
+    argv[3] = "-inet";
+    argv[4] = (char *)cidr;
+    argv[5] = (char *)gateway;
+    argv[6] = NULL;
+
+    pid = fork();
+    if (pid < 0) {
+        print_errno_message(LOG_ERR, "fork(/sbin/route)");
+        return -1;
+    }
+    if (pid == 0) {
+        int devnull = open("/dev/null", O_WRONLY);
+
+        if (devnull >= 0) {
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+        }
+        execv(argv[0], argv);
+        _exit(127);
+    }
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            return -1;
+        }
+    }
+    return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
 }
 #else
 static int run_ip_route(const char *verb, const char *cidr, const char *gateway)

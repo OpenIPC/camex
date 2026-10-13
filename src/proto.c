@@ -304,6 +304,25 @@ int proto_parse_config(char *message, camex_config_t *config)
         return -1;
     }
 
+    /* Values from the network must be well-formed before they reach the
+     * TUN setup and route commands (#12). Routes and MTU are validated
+     * while parsing; check the address fields here. */
+    if (profile.local_cidr[0] != '\0') {
+        char ip[16];
+        char mask[16];
+
+        if (parse_local_cidr(profile.local_cidr, ip, sizeof(ip),
+                             mask, sizeof(mask)) != 0) {
+            log_message(LOG_ERR, "Invalid LOCAL_CIDR in config response");
+            return -1;
+        }
+    }
+    if (profile.gateway_ip[0] != '\0' &&
+        validate_ipv4(profile.gateway_ip, "gateway IP") != 0) {
+        log_message(LOG_ERR, "Invalid GATEWAY_IP in config response");
+        return -1;
+    }
+
     if (config_apply_profile(config, &profile) != 0) {
         log_message(LOG_ERR, "Invalid config response");
         return -1;
