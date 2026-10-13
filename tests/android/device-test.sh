@@ -94,7 +94,15 @@ fi
 
 # ---------------------------------------------------------------- app
 echo "== install $APK"
-$ADB install -r -g "$APK" >/dev/null
+# CI signs every debug build with a fresh key: replace an older install
+if ! $ADB install -r -g "$APK" >/dev/null 2>"$CTX/install.err"; then
+    if grep -q INSTALL_FAILED_UPDATE_INCOMPATIBLE "$CTX/install.err"; then
+        $ADB uninstall "$PKG" >/dev/null
+        $ADB install -g "$APK" >/dev/null
+    else
+        cat "$CTX/install.err"; exit 1
+    fi
+fi
 $ADB shell am force-stop "$PKG"
 
 # Settings: server through adb reverse, TCP, encryption, full tunnel OFF so
