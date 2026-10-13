@@ -15,6 +15,7 @@ import android.net.VpnService;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.text.TextUtils;
+import androidx.annotation.Keep;
 import androidx.core.app.ServiceCompat;
 import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
@@ -99,7 +100,7 @@ public class TunnelService extends VpnService {
      * MTU and routes are known. Returns the TUN fd, owned by camex from now
      * on, or -1.
      */
-    @SuppressWarnings("unused")
+    @Keep  // called only from native code: R8 must not remove or rename it
     private int establishTun(String localIp, int prefixLen, int mtu, String[] routes) {
         try {
             Builder builder = new Builder();
