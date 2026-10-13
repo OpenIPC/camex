@@ -608,7 +608,6 @@ static void drain_udp_packets(void)
         int rc = net_tcp_recv_frame(net_fd, buffer, sizeof(buffer),
                                     &frame_len, &client_recv_state);
         if (rc == 0) {
-            client_state.last_recv = g_now;
             if (!client_link_confirmed) {
                 client_link_confirmed = 1U;
                 log_message(LOG_NOTICE,
@@ -632,7 +631,6 @@ static void drain_udp_packets(void)
     while (1) {
         len = recv(net_fd, RECV_BUF_CAST buffer, sizeof(buffer), 0);
         if (len > 0) {
-            client_state.last_recv = g_now;
             if (!client_link_confirmed) {
                 client_link_confirmed = 1U;
                 log_message(LOG_NOTICE,

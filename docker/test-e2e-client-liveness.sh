@@ -1,0 +1,115 @@
+#!/bin/bash
+#
+# Copyright (c) OpenIPC  https://openipc.org  MIT License
+#
+# test-e2e-client-liveness.sh — regression test for issue #10
+#
+# Scenario 1 (server restart): a manual-mode encrypted UDP client must
+# recover after the server is restarted. Before the fix the restarted
+# server's sequence numbers started from 0 and the client rejected them as
+# replays until the server had sent as many packets as the client had
+# received in the old session (for a long session: effectively forever).
+#
+# Scenario 2 (server gone): the client must notice that the server stopped
+# answering (docker pause) and log "Connection lost", then recover after
+# the server comes back. Before the fix a successful UDP send counted as a
+# sign of life, so the client never noticed.
+#
+# Usage: ./test-e2e-client-liveness.sh
+#   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
+#   KEEP=1                      keep containers for debugging
+#
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+CAMEX_BINARY="${CAMEX_BINARY:-$REPO_DIR/camex}"
+IMAGE="camex:e2e-live"
+NET_NAME="camex-live-$$"
+SRV="camex-live-srv-$$"
+CLI="camex-live-cli-$$"
+BUILD_CTX="$(mktemp -d)"
+PSK="liveness-test"
+
+cleanup() {
+    docker rm -f "$SRV" "$CLI" >/dev/null 2>&1 || true
+    docker network rm "$NET_NAME" >/dev/null 2>&1 || true
+    rm -rf "$BUILD_CTX"
+}
+[ -n "$KEEP" ] || trap cleanup EXIT INT TERM
+
+fail() {
+    echo "FAIL: $*"
+    echo "--- client log (tail) ---"
+    docker logs "$CLI" 2>&1 | tail -15 || true
+    exit 2
+}
+
+[ -x "$CAMEX_BINARY" ] || { echo "camex binary not found: $CAMEX_BINARY"; exit 1; }
+
+cp "$CAMEX_BINARY" "$BUILD_CTX/camex"
+cat > "$BUILD_CTX/Dockerfile" <<'EOF'
+FROM ubuntu:24.04
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+        iputils-ping >/dev/null && rm -rf /var/lib/apt/lists/*
+COPY camex /usr/local/bin/camex
+RUN printf '#!/bin/sh\nmkdir -p /dev/net\n[ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200\nexec /usr/local/bin/camex "$@"\n' \
+        > /usr/local/bin/camex-run && chmod +x /usr/local/bin/camex-run
+ENTRYPOINT ["/usr/local/bin/camex-run"]
+EOF
+docker build -q -t "$IMAGE" "$BUILD_CTX" >/dev/null
+docker network create "$NET_NAME" >/dev/null
+
+# wait_ping <seconds>: succeed as soon as the client reaches the server
+wait_ping() {
+    local i
+    for i in $(seq 1 "$1"); do
+        if docker exec "$CLI" ping -c1 -W1 10.200.0.1 >/dev/null 2>&1; then
+            echo "   reachable after ${i}s"
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+start_server() {
+    docker run -d --name "$SRV" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+        "$IMAGE" --mode server --port 5800 --local-cidr 10.200.0.1/24 \
+        --encrypt --psk "$PSK" >/dev/null
+}
+
+echo "== start server and manual encrypted client"
+start_server
+sleep 1
+docker run -d --name "$CLI" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    "$IMAGE" --mode client --local-cidr 10.200.0.2/24 --gateway-ip 10.200.0.1 \
+    --server-host "$SRV" --port 5800 --encrypt --psk "$PSK" \
+    --keepalive 2 --server-timeout 6 >/dev/null
+wait_ping 20 || fail "client never reached the server"
+
+# Let at least one keepalive round-trip happen, and move the client's
+# receive window well ahead (a real session has received many packets).
+sleep 5
+docker exec "$CLI" ping -q -c 300 -i 0.01 10.200.0.1 >/dev/null 2>&1 || true
+
+echo "== scenario 1: restart the server"
+docker restart -t 1 "$SRV" >/dev/null
+wait_ping 60 || fail "client did not recover after a server restart"
+
+echo "== scenario 2: pause the server (it stops answering)"
+docker pause "$SRV" >/dev/null
+lost=0
+for _ in $(seq 1 30); do
+    if docker logs "$CLI" 2>&1 | grep -q "Connection lost"; then
+        lost=1; break
+    fi
+    sleep 1
+done
+docker unpause "$SRV" >/dev/null
+[ "$lost" = 1 ] || fail "client did not detect that the server stopped answering"
+echo "   client detected the lost server"
+wait_ping 60 || fail "client did not recover after the server came back"
+
+echo "PASS: client detects a lost server and recovers after a restart"

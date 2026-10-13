@@ -25,6 +25,7 @@ typedef struct {
     time_t last_keepalive;
     uint8_t registered;
     uint8_t config_received;
+    uint8_t keepalive_acked;  /* server answered a KEEPALIVE this session */
     uint8_t send_nonce_prefix[4];
 } client_state_t;
 
