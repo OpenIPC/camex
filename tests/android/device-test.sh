@@ -15,6 +15,15 @@
 #
 # Usage: tests/android/device-test.sh <adb-serial> <camex-android-debug.apk>
 #   CAMEX_BINARY=path/to/camex  server binary (default: ./camex)
+#   SERVER_HOST=<addr>          address of this host as seen from the device;
+#                               the app connects there directly (port 5800
+#                               is published on this host for the test)
+#
+# Without SERVER_HOST the app uses 127.0.0.1:5800 through `adb reverse`.
+# That only works until the VPN is up: Android then closes the sockets of
+# apps that move into the VPN, and adbd (which carries `adb reverse`) is
+# one of them, so the tunnel connection drops and reconnects are refused.
+# Use SERVER_HOST for the full test.
 #
 # The device must allow `adb shell` (uid 2000). The VPN consent is granted
 # with `appops`; if that is not possible the system dialog is confirmed by
@@ -79,7 +88,9 @@ docker create --name "$SRV" -p 5800:5800 --cap-add NET_ADMIN --cap-add MKNOD \
     --config /etc/camex/camex.conf >/dev/null
 docker cp "$CTX/etc-camex" "$SRV:/etc/camex" >/dev/null
 docker start "$SRV" >/dev/null
-$ADB reverse tcp:5800 tcp:5800 >/dev/null
+if [ -z "$SERVER_HOST" ]; then
+    $ADB reverse tcp:5800 tcp:5800 >/dev/null
+fi
 
 # ---------------------------------------------------------------- app
 echo "== install $APK"
@@ -91,7 +102,7 @@ $ADB shell am force-stop "$PKG"
 cat > "$CTX/camex.xml" <<'EOF'
 <?xml version='1.0' encoding='utf-8' standalone='yes' ?>
 <map>
-    <string name="server_host">127.0.0.1</string>
+    <string name="server_host">__SERVER_HOST__</string>
     <int name="server_port" value="5800" />
     <string name="name">DEVTEST</string>
     <string name="transport">tcp</string>
@@ -103,6 +114,7 @@ cat > "$CTX/camex.xml" <<'EOF'
     <int name="server_timeout" value="15" />
 </map>
 EOF
+sed -i "s/__SERVER_HOST__/${SERVER_HOST:-127.0.0.1}/" "$CTX/camex.xml"
 $ADB push "$CTX/camex.xml" /data/local/tmp/camex.xml >/dev/null
 $ADB shell "run-as $PKG sh -c 'mkdir -p shared_prefs && cat /data/local/tmp/camex.xml > shared_prefs/camex.xml'"
 $ADB shell rm /data/local/tmp/camex.xml
@@ -167,6 +179,9 @@ check $down "VPN interface is gone after Stop"
 if [ "$FAILS" -ne 0 ]; then
     echo "--- logcat (camex) ---"
     $ADB logcat -d | grep -iE "camex|vpn" | tail -30
+    echo "--- server log ---"
+    docker logs "$SRV" 2>&1 | tail -20
+    docker inspect -f 'server state: {{.State.Status}} exit={{.State.ExitCode}}' "$SRV" 2>&1
     echo "FAIL: $FAILS check(s) failed"
     exit 2
 fi

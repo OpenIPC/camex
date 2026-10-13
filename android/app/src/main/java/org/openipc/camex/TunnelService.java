@@ -22,6 +22,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class TunnelService extends VpnService {
+    /** Intent action that stops the tunnel (see onStartCommand). */
+    public static final String ACTION_STOP = "org.openipc.camex.STOP";
     private static final String CHANNEL_ID = "camex_vpn";
     private static final int NOTIFY_ID = 1;
     private Thread camexThread = null;
@@ -46,6 +48,17 @@ public class TunnelService extends VpnService {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null && ACTION_STOP.equals(intent.getAction())) {
+            // While the VPN is up the system keeps the service bound, so
+            // stopService() alone never reaches onDestroy(). Stop camex: it
+            // closes the TUN fd, which tears the VPN down.
+            if (running) {
+                nativeStop();
+            }
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+
         // Android 14 (targetSdk 34) requires a foreground service type; VPN apps
         // use systemExempted. ServiceCompat picks the right overload per API.
         ServiceCompat.startForeground(this, NOTIFY_ID, buildNotification("Starting..."),
