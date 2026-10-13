@@ -356,6 +356,9 @@ jobs:
         run: |
           docker/test-smoke.sh
 
+      - name: E2E test (Android TUN provider path, issues #18 #19)
+        run: docker/test-e2e-tun-provider.sh
+
   # ------------------------------------------------------------- consolidated
   sizes:
     name: Collect sizes

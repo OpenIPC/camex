@@ -80,9 +80,61 @@ int tun_accept_fd(void)
 
     tun_fd = (int)fd;
     tun_from_env = 1;
+    /* The main loop drains the TUN fd until EAGAIN: it must not block */
+    if (set_fd_nonblocking(tun_fd) != 0) {
+        print_errno_message(LOG_WARNING, "fcntl(O_NONBLOCK) on CAMEX_TUN_FD");
+    }
     snprintf(tun_name, sizeof(tun_name), "camex-android");
     log_message(LOG_INFO, "TUN backend: fd %d from environment (Android VpnService)", (int)fd);
     return tun_fd;
+}
+
+static camex_tun_provider_t tun_provider = NULL;
+static void *tun_provider_ctx = NULL;
+
+void tun_set_provider(camex_tun_provider_t provider, void *ctx)
+{
+    tun_provider = provider;
+    tun_provider_ctx = ctx;
+}
+
+int tun_open_provided(const char *local_ip, const char *netmask, int mtu,
+                      const char routes[][32], uint8_t route_count)
+{
+    struct in_addr mask;
+    uint32_t bits;
+    int prefix = 0;
+    int fd;
+
+    if (tun_provider == NULL || local_ip == NULL || netmask == NULL ||
+        inet_pton(AF_INET, netmask, &mask) != 1) {
+        return -1;
+    }
+    for (bits = ntohl(mask.s_addr); bits & 0x80000000U; bits <<= 1) {
+        ++prefix;
+    }
+
+    fd = tun_provider(local_ip, prefix, mtu, routes, route_count,
+                      tun_provider_ctx);
+    if (fd < 0) {
+        log_message(LOG_ERR, "TUN provider failed for %s/%d", local_ip, prefix);
+        return -1;
+    }
+
+    tun_fd = fd;
+    tun_from_env = 1;
+    if (set_fd_nonblocking(tun_fd) != 0) {
+        print_errno_message(LOG_WARNING, "fcntl(O_NONBLOCK) on provided TUN");
+    }
+    snprintf(tun_name, sizeof(tun_name), "camex-provided");
+    log_message(LOG_INFO, "TUN backend: fd %d from provider (%s/%d, mtu %d)",
+                fd, local_ip, prefix, mtu);
+    return tun_fd;
+}
+
+int tun_is_external(void)
+{
+    return tun_from_env;
 }
 
 #if !defined(_WIN32)

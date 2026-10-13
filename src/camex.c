@@ -493,8 +493,13 @@ int camex_init(camex_config_t *config)
             return -1;
         }
 
-        /* Try accepting TUN fd from environment (Android VpnService) */
-        if (tun_accept_fd() < 0) {
+        /* TUN from the host application (Android VpnService): through the
+         * provider, which gets the final address and routes, or as a
+         * ready fd in CAMEX_TUN_FD; otherwise create the device here. */
+        if (tun_open_provided(local_ip, local_netmask, current_config.mtu,
+                              (const char (*)[32])current_config.route_cidrs,
+                              current_config.route_count) < 0 &&
+            tun_accept_fd() < 0) {
             if (tun_create_device(local_ip, local_netmask, current_config.mtu,
                                   current_config.tun_dev) != 0) {
                 net_close();
@@ -1009,7 +1014,8 @@ void camex_stop(void)
 
     running = 0;
 
-    if (client_mode && current_config.gateway_ip[0] != '\0') {
+    if (client_mode && current_config.gateway_ip[0] != '\0' &&
+        !tun_is_external()) {
         for (i = 0; i < current_config.route_count; ++i) {
             if (camex_del_route(current_config.route_cidrs[i],
                                 current_config.gateway_ip) != 0) {
