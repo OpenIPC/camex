@@ -34,8 +34,16 @@ CTX="$(mktemp -d)"
 FAILS=0
 ADB="adb -s $SERIAL"
 
+# Activity that was in front before the test (another app may be running
+# on a shared device); brought back at the end.
+PREV=$($ADB shell dumpsys activity activities 2>/dev/null |
+    sed -nE 's/.*mResumedActivity: ActivityRecord\{[^ ]+ [^ ]+ ([^ ]+) .*/\1/p' | head -1 | tr -d '\r')
+
 cleanup() {
     $ADB shell am force-stop "$PKG" >/dev/null 2>&1 || true
+    if [ -n "$PREV" ] && [ "${PREV%%/*}" != "$PKG" ]; then
+        $ADB shell am start -n "$PREV" >/dev/null 2>&1 || true
+    fi
     $ADB reverse --remove tcp:5800 >/dev/null 2>&1 || true
     docker rm -f "$SRV" >/dev/null 2>&1 || true
     rm -rf "$CTX"
@@ -113,6 +121,8 @@ tap_text() {   # tap the UI element whose text matches $1 (regex)
     [ -n "$xy" ] || return 1
     $ADB shell input tap $xy
 }
+
+set +e   # from here on, check() reports failures
 
 echo "== start VPN"
 $ADB logcat -c
