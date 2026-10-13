@@ -19,6 +19,7 @@
 #include <linux/miscdevice.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
+#include <linux/if_arp.h>
 #include <linux/skbuff.h>
 #include <linux/uaccess.h>
 #include <linux/poll.h>
