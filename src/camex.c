@@ -677,7 +677,7 @@ static void drain_tcp_server_accept(void)
         }
 
         if (set_fd_nonblocking(client_fd) != 0) {
-            close(client_fd);
+            net_tcp_close(client_fd);
             continue;
         }
 
@@ -701,7 +701,7 @@ static void drain_tcp_server_accept(void)
             }
         }
         if (i >= CAMEX_MAX_CLIENTS) {
-            close(client_fd);
+            net_tcp_close(client_fd);
             net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
             log_message(LOG_WARNING,
                         "No free slots for TCP client: %s", peer_str);
@@ -727,7 +727,7 @@ static void drain_tcp_client_read(int fd)
         }
     }
     if (rstate == NULL) {
-        close(fd);
+        net_tcp_close(fd);
         return;
     }
 
@@ -745,12 +745,12 @@ static void drain_tcp_client_read(int fd)
                 log_message(LOG_INFO,
                             "TCP client disconnected: %s (fd=%d)",
                             peer_str, fd);
-                close(fd);
+                net_tcp_close(fd);
                 memset(&server_clients[i], 0, sizeof(server_clients[i]));
                 return;
             }
         }
-        close(fd);
+        net_tcp_close(fd);
         return;
     }
 
@@ -838,7 +838,6 @@ void camex_run(void)
         log_message(LOG_INFO, "Server started. Press Ctrl+C to stop.");
         while (running) {
             size_t si;
-            int pending_fd;
 
             g_now = time(NULL);
             FD_ZERO(&readset);
@@ -874,23 +873,15 @@ void camex_run(void)
             }
 
             /* Monitor TCP socket writability for pending sends */
-            pending_fd = net_tcp_get_pending_fd();
-            if (pending_fd >= 0) {
-                FD_SET(pending_fd, &writeset);
-                if (pending_fd > maxfd) {
-                    maxfd = pending_fd;
-                }
-            }
+            maxfd = net_tcp_pending_fdset(&writeset, maxfd);
 
             tv.tv_sec = 1;
             tv.tv_usec = 0;
 
             ready = select(maxfd + 1, &readset, &writeset, NULL, &tv);
             if (ready > 0) {
-                /* Retry pending TCP sends when socket becomes writable */
-                if (pending_fd >= 0 && FD_ISSET(pending_fd, &writeset)) {
-                    net_tcp_flush_pending(pending_fd);
-                }
+                /* Retry pending TCP sends when sockets become writable */
+                net_tcp_flush_writable(&writeset);
                 if (current_config.transport == CAMEX_TRANSPORT_UDP) {
                     if (net_fd >= 0 && FD_ISSET(net_fd, &readset)) {
                         drain_udp_packets();
@@ -947,8 +938,6 @@ void camex_run(void)
 
     log_message(LOG_INFO, "Client started. Press Ctrl+C to stop.");
     while (running) {
-        int pending_fd;
-
         g_now = time(NULL);
 
         if (net_fd < 0) {
@@ -964,12 +953,6 @@ void camex_run(void)
             FD_SET(tun_fd, &readset);
         }
 
-        /* Monitor TCP socket writability for pending sends */
-        pending_fd = net_tcp_get_pending_fd();
-        if (pending_fd >= 0) {
-            FD_SET(pending_fd, &writeset);
-        }
-
         tv.tv_sec = 1;
         tv.tv_usec = 0;
 
@@ -977,16 +960,13 @@ void camex_run(void)
         if ((int)tun_fd > maxfd) {
             maxfd = (int)tun_fd;
         }
-        if (pending_fd > maxfd) {
-            maxfd = pending_fd;
-        }
+        /* Monitor TCP socket writability for pending sends */
+        maxfd = net_tcp_pending_fdset(&writeset, maxfd);
 
         ready = select(maxfd + 1, &readset, &writeset, NULL, &tv);
         if (ready > 0) {
-            /* Retry pending TCP sends when socket becomes writable */
-            if (pending_fd >= 0 && FD_ISSET(pending_fd, &writeset)) {
-                net_tcp_flush_pending(pending_fd);
-            }
+            /* Retry pending TCP sends when sockets become writable */
+            net_tcp_flush_writable(&writeset);
             if (FD_ISSET(net_fd, &readset)) {
                 drain_udp_packets();
             }

@@ -74,6 +74,14 @@ jobs:
           "${{ env.BUILD_DIR }}/${{ env.TARGET }}-x86_64" --help 2>&1 | head -5 || true
         if: matrix.platform.name == 'x86_64'
 
+      - name: Unit tests
+        run: make test
+        if: matrix.platform.name == 'x86_64'
+
+      - name: E2E test (TCP pending data, issue #8)
+        run: ./docker/test-e2e-tcp-pending.sh
+        if: matrix.platform.name == 'x86_64'
+
       - name: Build cross
         run: |
           make clean

@@ -4,6 +4,7 @@ camex.exe
 build/
 src/camex
 *.o
+tests/test_net_tcp
 
 # IDE
 .vscode/

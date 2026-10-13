@@ -14,6 +14,7 @@
 
 #ifndef _WIN32
 #include <netinet/in.h>
+#include <sys/select.h>
 #else
 #include <winsock2.h>
 #endif
@@ -109,11 +110,23 @@ typedef struct {
 int net_tcp_recv_frame(int fd, uint8_t *buffer, size_t size, size_t *len,
                        tcp_recv_state_t *state);
 
-/* Return fd that has pending TCP send data, or -1 if none (for select() writefds) */
+/* Return an fd that has pending TCP send data, or -1 if none */
 int net_tcp_get_pending_fd(void);
+
+/* Add all fds with pending TCP send data to set (select() writefds);
+ * returns the updated max fd */
+int net_tcp_pending_fdset(fd_set *set, int maxfd);
+
+/* Flush pending TCP send data for every fd that is set in set */
+void net_tcp_flush_writable(fd_set *set);
 
 /* Try to flush pending TCP send data for the given fd */
 int net_tcp_flush_pending(int fd);
+
+/* Drop pending TCP send data for fd and close it. Use this instead of
+ * close() for every TCP socket that may have been passed to
+ * net_tcp_send_frame(). */
+void net_tcp_close(int fd);
 
 /* Cross-platform EAGAIN/EWOULDBLOCK check for socket operations.
  * On POSIX: checks errno.  On Windows: checks WSAGetLastError(). */

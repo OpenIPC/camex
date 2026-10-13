@@ -7,7 +7,7 @@
 TARGET ?= camex
 BUILD_DIR ?= .
 
-.PHONY: all clean distclean run help kmod kmod-clean kmod-install apk
+.PHONY: all clean distclean run help kmod kmod-clean kmod-install apk test
 
 # Only pass variables that were explicitly set by caller (not defaults).
 # GNU Make v4.0+ supports $(origin …) to detect command-line vs default.
@@ -39,6 +39,7 @@ all:
 
 clean:
 	$(MAKE) -C src clean $(MAKE_ARGS)
+	$(MAKE) -C tests clean
 	rm -f $(TARGET) $(TARGET).exe
 
 distclean: clean
@@ -49,6 +50,10 @@ run: all
 
 help:
 	$(MAKE) -C src help
+
+# Unit tests (host compiler, no root required)
+test:
+	$(MAKE) -C tests test
 
 kmod:
 	$(MAKE) -C src kmod
