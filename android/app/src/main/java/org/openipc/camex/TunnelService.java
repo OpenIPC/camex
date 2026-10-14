@@ -36,9 +36,12 @@ public class TunnelService extends VpnService {
     // native run slot is process-wide: this instance holds it from
     // nativeAcquire() to nativeRelease(), and only while holding it may it
     // call nativeStop(), so a Stop never hits another instance's run and a
-    // Stop before the run starts is not lost.
+    // Stop before the run starts is not lost. Starts are numbered: a Stop
+    // cancels every start issued before it, but not a later Start delivered
+    // to the same instance before it is destroyed.
     private final Object lock = new Object();
-    private boolean stopRequested = false;  // guarded by lock
+    private long startGeneration = 0;       // guarded by lock
+    private long stopGeneration = 0;        // guarded by lock
     private boolean acquired = false;       // guarded by lock
 
     // JNI: takes the run slot and arms camex; false if another run holds it
@@ -77,6 +80,10 @@ public class TunnelService extends VpnService {
         ServiceCompat.startForeground(this, NOTIFY_ID, buildNotification("Starting..."),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED);
 
+        final long generation;
+        synchronized (lock) {
+            generation = ++startGeneration;
+        }
         executor.execute(() -> {
             try {
                 // The VPN interface is created later, by establishTun(), when
@@ -105,7 +112,7 @@ public class TunnelService extends VpnService {
                 }
                 String[] argv = args.toArray(new String[0]);
 
-                if (!acquireRun()) {
+                if (!acquireRun(generation)) {
                     return;
                 }
                 try {
@@ -128,14 +135,15 @@ public class TunnelService extends VpnService {
     }
 
     /**
-     * Takes the native run slot unless a Stop came first. Waits a few
-     * seconds for a previous run (an instance that is still stopping).
+     * Takes the native run slot unless a Stop came after this start was
+     * issued. Waits a few seconds for a previous run (an instance that is
+     * still stopping).
      */
-    private boolean acquireRun() throws InterruptedException {
+    private boolean acquireRun(long generation) throws InterruptedException {
         long deadline = SystemClock.elapsedRealtime() + 5000;
         while (true) {
             synchronized (lock) {
-                if (stopRequested) {
+                if (generation <= stopGeneration) {
                     return false;
                 }
                 if (nativeAcquire()) {
@@ -153,7 +161,7 @@ public class TunnelService extends VpnService {
 
     private void requestStop() {
         synchronized (lock) {
-            stopRequested = true;
+            stopGeneration = startGeneration;
             if (acquired) {
                 nativeStop();
             }
