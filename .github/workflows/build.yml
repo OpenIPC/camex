@@ -376,6 +376,34 @@ jobs:
       - name: E2E test (Android TUN provider path, issues #18 #19)
         run: docker/test-e2e-tun-provider.sh
 
+  # ------------------------------------------------------------- kernel module
+  kmod:
+    name: Kernel module / ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 6.8, 6.1 and 4.15 headers: covers both netif_rx() variants
+        image: ['ubuntu:24.04', 'debian:bookworm', 'ubuntu:18.04']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build camex.ko against distro kernel headers
+        run: |
+          docker run --rm -v "$PWD/src:/src:ro" ${{ matrix.image }} sh -ec '
+            export DEBIAN_FRONTEND=noninteractive
+            . /etc/os-release
+            pkg=linux-headers-generic
+            [ "$ID" = debian ] && pkg=linux-headers-amd64
+            apt-get update -qq
+            apt-get install -y -qq $pkg make gcc >/dev/null
+            K=$(ls -d /usr/src/linux-headers-*-generic /usr/src/linux-headers-*-amd64 2>/dev/null | head -1)
+            echo "Kernel headers: $K"
+            cp -r /src /tmp/m
+            make -C "$K" M=/tmp/m modules
+            test -f /tmp/m/camex.ko'
+
   # ------------------------------------------------------------- consolidated
   sizes:
     name: Collect sizes

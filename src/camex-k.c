@@ -19,6 +19,7 @@
 #include <linux/miscdevice.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
+#include <linux/if_arp.h>
 #include <linux/skbuff.h>
 #include <linux/uaccess.h>
 #include <linux/poll.h>
@@ -79,6 +80,14 @@
  * skb_put() return type changed from (unsigned char *) to (void *)
  * in 4.20. Cast explicitly so both old and new compilers are happy.
  */
+/* netif_rx() may be called from process context since 5.18; before that
+ * process context (our write()) must use netif_rx_ni(). */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 18, 0)
+# define CAMEX_NETIF_RX(skb) netif_rx(skb)
+#else
+# define CAMEX_NETIF_RX(skb) netif_rx_ni(skb)
+#endif
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)
 # define CAMEX_SKB_PUT(skb, len) ((unsigned char *)skb_put((skb), (len)))
 #else
@@ -124,7 +133,9 @@ struct pkt_node {
  * @rx_count: current depth of rx_queue
  * @rx_lock:  spinlock protecting rx_queue and rx_count
  * @rx_wait:  wait queue; userspace blocks here when queue is empty
- * @attached: true while /dev/camex is held open by a process
+ * @attached: 1 while /dev/camex is held open by a process; changed only
+ *            with atomic_cmpxchg() so two concurrent open() calls cannot
+ *            both succeed
  */
 struct camex_priv {
     struct net_device *dev;
@@ -134,7 +145,7 @@ struct camex_priv {
     spinlock_t         rx_lock;
     wait_queue_head_t  rx_wait;
 
-    bool               attached;
+    atomic_t           attached;
 };
 
 /* Single global instance — one device, one user at a time. */
@@ -170,15 +181,11 @@ static netdev_tx_t camex_net_xmit(struct sk_buff *skb,
     struct pkt_node   *node;
     unsigned long      flags;
 
-    if (!priv->attached) {
-        dev->stats.tx_dropped++;
-        dev_kfree_skb(skb);
-        return NETDEV_TX_OK;
-    }
-
     spin_lock_irqsave(&priv->rx_lock, flags);
 
-    if (priv->rx_count >= QUEUE_LIMIT) {
+    /* Checked under rx_lock: release() flushes the queue and detaches
+     * under the same lock, so no packet can be left for the next open(). */
+    if (!atomic_read(&priv->attached) || priv->rx_count >= QUEUE_LIMIT) {
         spin_unlock_irqrestore(&priv->rx_lock, flags);
         dev->stats.tx_dropped++;
         dev_kfree_skb(skb);
@@ -239,12 +246,15 @@ static void camex_net_setup(struct net_device *dev)
 
 static int camex_chr_open(struct inode *inode, struct file *filp)
 {
+    /* Injecting packets into the stack and reading routed traffic is a
+     * network-admin operation, same as configuring a tun device. */
+    if (!capable(CAP_NET_ADMIN))
+        return -EPERM;
     if (!g_priv)
         return -ENODEV;
-    if (g_priv->attached)
+    if (atomic_cmpxchg(&g_priv->attached, 0, 1) != 0)
         return -EBUSY;  /* only one process may hold the fd */
 
-    g_priv->attached   = true;
     filp->private_data = g_priv;
 
     netif_carrier_on(g_priv->dev);
@@ -258,7 +268,6 @@ static int camex_chr_release(struct inode *inode, struct file *filp)
     struct pkt_node   *node, *tmp;
     unsigned long      flags;
 
-    priv->attached = false;
     netif_carrier_off(priv->dev);
 
     /* Discard any packets that were never read. */
@@ -269,6 +278,10 @@ static int camex_chr_release(struct inode *inode, struct file *filp)
         kfree(node);
     }
     priv->rx_count = 0;
+    /* Detach under the same lock as the flush: xmit checks the flag under
+     * rx_lock, so nothing is queued after this point.  A new open() can
+     * take the slot only now, after the old queue is gone. */
+    atomic_set(&priv->attached, 0);
     spin_unlock_irqrestore(&priv->rx_lock, flags);
 
     pr_info("camex: userspace detached\n");
@@ -375,7 +388,7 @@ static ssize_t camex_chr_write(struct file *filp, const char __user *buf,
     priv->dev->stats.rx_packets++;
     priv->dev->stats.rx_bytes += count;
 
-    netif_rx(skb);
+    CAMEX_NETIF_RX(skb);
     return count;
 }
 
@@ -413,7 +426,7 @@ static struct miscdevice camex_miscdev = {
     .minor = MISC_DYNAMIC_MINOR,
     .name  = DRV_NAME,   /* → /dev/camex */
     .fops  = &camex_fops,
-    .mode  = 0666,
+    .mode  = 0600,      /* root only; open() also requires CAP_NET_ADMIN */
 };
 
 /* ================================================================
@@ -437,7 +450,7 @@ static int __init camex_init(void)
     priv->rx_count = 0;
     spin_lock_init(&priv->rx_lock);
     init_waitqueue_head(&priv->rx_wait);
-    priv->attached = false;
+    atomic_set(&priv->attached, 0);
     g_priv = priv;
 
     ret = register_netdev(dev);
