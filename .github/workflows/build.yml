@@ -124,7 +124,7 @@ jobs:
 
   # ----------------------------------------------------------- android (APK)
   android:
-    name: Android (aarch64 APK)
+    name: Android (arm64 + armv7 APK)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -197,6 +197,23 @@ jobs:
         with:
           name: camex-aarch64-apk
           path: android/app/build/outputs/apk/release/camex-android.apk
+          if-no-files-found: error
+
+      # Debuggable build for testing on devices (adb install, run-as, logcat).
+      # Not uploaded for tags, so it never ends up in a release.
+      - name: Build debug APK
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          cd android
+          gradle assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/camex-android-debug.apk
+
+      - name: Upload artifact (debug APK)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: camex-android-debug-apk
+          path: android/app/build/outputs/apk/debug/camex-android-debug.apk
           if-no-files-found: error
 
   # ---------------------------------------------------------------- windows
@@ -363,6 +380,9 @@ jobs:
           CAMEX_BINARY: docker/camex-x86_64
         run: |
           docker/test-smoke.sh
+
+      - name: E2E test (Android TUN provider path, issues #18 #19)
+        run: docker/test-e2e-tun-provider.sh
 
   # ------------------------------------------------------------- kernel module
   kmod:

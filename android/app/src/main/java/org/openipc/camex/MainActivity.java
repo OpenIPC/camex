@@ -69,7 +69,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void stopVpn() {
-        stopService(new Intent(this, TunnelService.class));
+        // stopService() is not enough while the system holds the VPN binding
+        startService(new Intent(this, TunnelService.class)
+            .setAction(TunnelService.ACTION_STOP));
         updateStatus(false);
     }
 
