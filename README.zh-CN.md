@@ -63,12 +63,12 @@ sudo ./camex --mode client \
 
 ## 系统要求
 
-| 要求       | 说明                                                                    |
-|------------|-------------------------------------------------------------------------|
-| Linux 内核 | 3.10 或更高版本                                                         |
-| TUN 支持   | `CONFIG_TUN=y`（`/dev/net/tun`）**或**已加载 `camex.ko`（`/dev/camex`） |
-| 权限       | `root` 或 `CAP_NET_ADMIN` + `CAP_NET_RAW`                               |
-| C 编译器   | 兼容 C99（GCC 或 Clang）                                                |
+| 要求       | 说明                                                                                                                           |
+|------------|--------------------------------------------------------------------------------------------------------------------------------|
+| Linux 内核 | 3.10 或更高版本                                                                                                                |
+| TUN 支持   | `CONFIG_TUN=y`（`/dev/net/tun`）**或**已加载 `camex.ko`（`/dev/camex`）                                                        |
+| 权限       | `root` 或 `CAP_NET_ADMIN` + `CAP_NET_RAW`（非 root 使用 `camex.ko` 时还需要 `/dev/camex` 的访问权限，见[内核模块](#内核模块)） |
+| C 编译器   | 兼容 C99（GCC 或 Clang）                                                                                                       |
 
 ## 构建
 
@@ -280,7 +280,21 @@ Userspace                          Kernel
 使用 `misc_register()` 可以自动：
 - 动态分配次设备号（不会冲突）；
 - 通过 udev/devtmpfs 创建 `/dev/camex`，无需任何 udev 规则；
-- 将权限设为 `0666`（所有用户可读写）。
+- 将权限设为 `0600`（仅 root）。
+
+`open()` 还要求 `CAP_NET_ADMIN`：该设备会向网络协议栈注入数据包并暴露
+被路由的流量，这属于网络管理操作，与配置 tun 设备相同。
+
+以非 root 用户运行并具有 `CAP_NET_ADMIN` + `CAP_NET_RAW` 的守护进程
+还需要设备节点的文件访问权限，而 `0600` 不提供该权限。可以通过 udev
+规则把访问权限授予专用用户组（capability 检查仍然有效）：
+
+```sh
+# /etc/udev/rules.d/90-camex.rules
+KERNEL=="camex", GROUP="camex", MODE="0660"
+```
+
+或者不使用 udev，在每次 `insmod` 之后执行：`chgrp camex /dev/camex && chmod 0660 /dev/camex`。
 
 #### 3. 使用 `spinlock` + `irqsave` 保护数据包队列
 
@@ -304,9 +318,11 @@ Userspace                          Kernel
 
 #### 6. 单用户（`EBUSY`）
 
-`g_priv->attached` 是一个布尔标志。如果 `/dev/camex` 已被打开，
-后续的 `open()` 会立即返回 `-EBUSY`。这样可以避免两个进程
-同时写入同一队列时产生竞态条件。
+`g_priv->attached` 是通过 `atomic_cmpxchg()` 获取的 `atomic_t`。
+如果 `/dev/camex` 已被打开，后续的 `open()` 会立即返回 `-EBUSY`，
+两个并发的 `open()` 绝不会同时成功。`close()` 时，队列的清空和槽位的
+释放在 `camex_net_xmit()` 使用的同一把锁下完成，因此下一次 `open()`
+不会读到旧的数据包。
 
 #### 7. `ARPHRD_NONE` + `IFF_NOARP`
 
@@ -375,7 +391,7 @@ dmesg | tail -5
 # camex: loaded — /dev/camex <-> net:camex  (kernel 5.15)
 
 ls -la /dev/camex
-# crw-rw-rw- 1 root root 10, 58 ...  /dev/camex
+# crw------- 1 root root 10, 58 ...  /dev/camex
 
 ip link show camex
 # camex: <POINTOPOINT,NOARP> mtu 1500 ...
@@ -402,20 +418,21 @@ sudo rmmod camex
 
 ### 字符设备 API
 
-| 操作                    | 行为                                            |
-|-------------------------|-------------------------------------------------|
-| `open()`                | 同一时间只允许一个 fd；否则返回 `EBUSY`         |
-| `read()`                | 返回一个 IPv4 数据包。队列为空时阻塞            |
-| `read()` + `O_NONBLOCK` | 队列为空时返回 `EAGAIN`                         |
-| `write()`               | 向协议栈注入一个 IPv4 数据包。最少 20 字节      |
-| `write()` 非 IPv4       | 返回 `EINVAL`                                   |
-| `poll()`                | 有数据包可读时返回 `POLLIN`；`POLLOUT` 始终置位 |
-| `close()`               | 清空队列、清除 carrier、释放占用的槽位          |
+| 操作                    | 行为                                                          |
+|-------------------------|---------------------------------------------------------------|
+| `open()`                | 需要 `CAP_NET_ADMIN`；同一时间只允许一个 fd，否则返回 `EBUSY` |
+| `read()`                | 返回一个 IPv4 数据包。队列为空时阻塞                          |
+| `read()` + `O_NONBLOCK` | 队列为空时返回 `EAGAIN`                                       |
+| `write()`               | 向协议栈注入一个 IPv4 数据包。最少 20 字节                    |
+| `write()` 非 IPv4       | 返回 `EINVAL`                                                 |
+| `poll()`                | 有数据包可读时返回 `POLLIN`；`POLLOUT` 始终置位               |
+| `close()`               | 清空队列、清除 carrier、释放占用的槽位                        |
 
 #### 错误码
 
 | 错误码     | 原因                                              |
 |------------|---------------------------------------------------|
+| `EPERM`    | 没有 `CAP_NET_ADMIN` 时调用 `open()`              |
 | `EBUSY`    | `/dev/camex` 已被其他进程打开                     |
 | `ENODEV`   | 模块正在卸载                                      |
 | `EMSGSIZE` | `read()` 缓冲区小于数据包长度（数据包被丢弃）     |
