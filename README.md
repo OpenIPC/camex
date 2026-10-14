@@ -322,7 +322,8 @@ or non-IPv4 packets from entering the stack.
 `g_priv->attached` is an `atomic_t` taken with `atomic_cmpxchg()`. If
 `/dev/camex` is already open, a subsequent `open()` immediately returns
 `-EBUSY`, and two concurrent `open()` calls can never both succeed. On
-`close()` the queue is flushed before the slot is released.
+`close()` the queue is flushed and the slot released under the same lock
+that `camex_net_xmit()` takes, so no packet is left for the next `open()`.
 
 #### 7. `ARPHRD_NONE` + `IFF_NOARP`
 
