@@ -22,3 +22,5 @@ _DOCKER.md
 _NOTES.md
 _PLAN.md
 
+# Keenetic package files (the "camex" rule above would hide this directory)
+!packaging/keenetic/files/opt/etc/camex/
