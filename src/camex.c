@@ -771,14 +771,22 @@ static void drain_tcp_client_read(int fd)
     }
 }
 
+/* Max TUN packets handled per event-loop pass. */
+#define TUN_DRAIN_BUDGET 64U
+
 static void handle_tun_packet(void)
 {
     uint8_t buffer[TUN_PACKET_MAX];
     ssize_t len;
     uint32_t src_ip_be = 0;
     uint32_t dst_ip_be = 0;
+    unsigned int budget = TUN_DRAIN_BUDGET;
 
-    while (1) {
+    /* Bounded: under a continuous stream the loop returns to select()
+     * after TUN_DRAIN_BUDGET packets, so socket reads, pending-send
+     * flushes and client expiry still run.  The TUN fd stays readable,
+     * so the next pass picks up where this one stopped. */
+    while (budget-- > 0U) {
         len = tun_read_packet(buffer, sizeof(buffer));
         if (len > 0) {
             int rc;
@@ -794,14 +802,15 @@ static void handle_tun_packet(void)
                 rc = client_handle_tun_packet(buffer, (size_t)len);
             }
             if (rc == 1) {
-                /* rc==1: the destination connection is still flushing an
-                 * earlier frame (one pending-send buffer per TCP fd, see
-                 * net_tcp_send_frame()); this packet is dropped for it.
-                 * A client has a single connection, so stop draining TUN
-                 * and let the flush finish; the kernel's TUN queue holds
-                 * the rest until the next event-loop pass.  A server keeps
-                 * draining: other clients' sockets are not blocked, and
-                 * one stalled client must not hold up their traffic. */
+                /* rc==1: the destination TCP connection is still flushing.
+                 * Either an earlier frame was pending and this packet was
+                 * dropped, or this frame was queued and is partly sent
+                 * (net_tcp_send_frame(), one pending buffer per fd).  A
+                 * client has a single connection, so stop draining TUN and
+                 * let the flush finish; the kernel's TUN queue holds the
+                 * rest until the next event-loop pass.  A server keeps
+                 * draining: other clients' sockets are not blocked, and one
+                 * stalled client must not hold up their traffic. */
                 if (!server_mode) {
                     break;
                 }
