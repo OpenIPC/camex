@@ -76,7 +76,10 @@ int main(void)
     CHECK(fd >= 0, "open() after close() succeeds");
     close(fd);
 
-    /* Concurrent open(): at most one may succeed. */
+    /* Concurrent open(): at most one may succeed.  This is a guard, not a
+     * reproducer: the old check-then-set window is a few instructions wide
+     * and was not hit in 2000 rounds on 4 vCPUs either, so the fix
+     * (atomic_cmpxchg) is correct by construction rather than by this test. */
     for (i = 0; i < 2000; i++) {
         pthread_t a, b;
         go = 0; opened[0] = opened[1] = -1;

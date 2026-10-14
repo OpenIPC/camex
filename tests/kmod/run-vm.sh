@@ -9,10 +9,13 @@
 #
 set -e
 export DEBIAN_FRONTEND=noninteractive
+. /etc/os-release
+FLAVOUR=generic
+[ "$ID" = debian ] && FLAVOUR=amd64
 apt-get update -qq >/dev/null
-apt-get install -y -qq linux-headers-generic qemu-system-x86 busybox-static \
+apt-get install -y -qq "linux-headers-$FLAVOUR" qemu-system-x86 busybox-static \
     gcc make cpio >/dev/null 2>&1
-K=$(ls -d /usr/src/linux-headers-*-generic | head -1)
+K=$(ls -d /usr/src/linux-headers-*-"$FLAVOUR" | head -1)
 KVER=${K#/usr/src/linux-headers-}
 echo "kernel: $KVER"
 cd /tmp

@@ -181,15 +181,11 @@ static netdev_tx_t camex_net_xmit(struct sk_buff *skb,
     struct pkt_node   *node;
     unsigned long      flags;
 
-    if (!atomic_read(&priv->attached)) {
-        dev->stats.tx_dropped++;
-        dev_kfree_skb(skb);
-        return NETDEV_TX_OK;
-    }
-
     spin_lock_irqsave(&priv->rx_lock, flags);
 
-    if (priv->rx_count >= QUEUE_LIMIT) {
+    /* Checked under rx_lock: release() flushes the queue and detaches
+     * under the same lock, so no packet can be left for the next open(). */
+    if (!atomic_read(&priv->attached) || priv->rx_count >= QUEUE_LIMIT) {
         spin_unlock_irqrestore(&priv->rx_lock, flags);
         dev->stats.tx_dropped++;
         dev_kfree_skb(skb);
@@ -282,12 +278,11 @@ static int camex_chr_release(struct inode *inode, struct file *filp)
         kfree(node);
     }
     priv->rx_count = 0;
-    spin_unlock_irqrestore(&priv->rx_lock, flags);
-
-    /* Release the slot last, so a new open() never sees the old queue
-     * being flushed underneath it. */
-    smp_mb();
+    /* Detach under the same lock as the flush: xmit checks the flag under
+     * rx_lock, so nothing is queued after this point.  A new open() can
+     * take the slot only now, after the old queue is gone. */
     atomic_set(&priv->attached, 0);
+    spin_unlock_irqrestore(&priv->rx_lock, flags);
 
     pr_info("camex: userspace detached\n");
     return 0;

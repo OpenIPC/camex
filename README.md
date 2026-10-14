@@ -63,7 +63,7 @@ sudo ./camex --mode client \
 |---|---|
 | Linux kernel | 3.10 or later |
 | TUN support | `CONFIG_TUN=y` (`/dev/net/tun`) **or** `camex.ko` loaded (`/dev/camex`) |
-| Privileges | `root` or `CAP_NET_ADMIN` + `CAP_NET_RAW` |
+| Privileges | `root` or `CAP_NET_ADMIN` + `CAP_NET_RAW` (non-root with `camex.ko`: also access to `/dev/camex`, see [Kernel Module](#kernel-module)) |
 | C compiler | C99-compatible (GCC or Clang) |
 
 ## Build
@@ -281,6 +281,17 @@ Using `misc_register()` automatically:
 `open()` additionally requires `CAP_NET_ADMIN`: the device injects
 packets into the network stack and exposes routed traffic, which is a
 network-admin operation, just like configuring a tun device.
+
+A daemon that runs as a non-root user with `CAP_NET_ADMIN` + `CAP_NET_RAW`
+also needs file access to the node, which `0600` does not give it. Grant it
+to a dedicated group with a udev rule (the capability check still applies):
+
+```sh
+# /etc/udev/rules.d/90-camex.rules
+KERNEL=="camex", GROUP="camex", MODE="0660"
+```
+
+or, without udev, after each `insmod`: `chgrp camex /dev/camex && chmod 0660 /dev/camex`.
 
 #### 3. Packet queue protected by `spinlock` + `irqsave`
 
