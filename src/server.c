@@ -485,9 +485,12 @@ static int server_register_allowed(const uint8_t *key, char *client_id,
         if (client_id[0] == '\0' && !global_key) {
             snprintf(client_id, client_id_size, "%s", owner);
         }
+        /* The named client's own key always counts as its key, even when
+         * the same bytes are also the global key or another client's key
+         * (keystore_owner() only reports the first match). */
         if (client_id[0] != '\0' &&
-            (global_key ? keystore_has_owner(client_id)
-                        : !keystore_key_owned_by(key, client_id))) {
+            !keystore_key_owned_by(key, client_id) &&
+            (!global_key || keystore_has_owner(client_id))) {
             log_message(LOG_WARNING,
                         "Rejected REGISTER from %s: key does not belong "
                         "to client %s", peer, client_id);
@@ -495,7 +498,9 @@ static int server_register_allowed(const uint8_t *key, char *client_id,
         }
     }
 
-    if (!auto_request) {
+    /* Plaintext mode has no keys and no identities to protect: manual
+     * registration there stays as it was. */
+    if (current_config.encrypt && !auto_request) {
         struct in_addr claimed;
         uint32_t want;
         const char *ip_owner;
@@ -512,7 +517,7 @@ static int server_register_allowed(const uint8_t *key, char *client_id,
             return -1;
         }
         ip_owner = profile_owner_of_ip(claimed.s_addr);
-        if (current_config.encrypt && ip_owner != NULL &&
+        if (ip_owner != NULL &&
             strcasecmp(ip_owner, client_id) != 0 &&
             keystore_has_owner(ip_owner)) {
             log_message(LOG_WARNING,
@@ -662,6 +667,20 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
     {
         server_client_t *by_addr = server_find_by_addr(from);
         server_client_t *by_ip   = server_find_by_ip(addr.s_addr);
+
+        /* The address may be in use by a live session whose address came
+         * from [defaults] or the auto pool, which profile_owner_of_ip()
+         * cannot see. Do not hand it to a different keyed client. */
+        if (current_config.encrypt && by_ip != NULL && by_ip != by_addr &&
+            strcasecmp(by_ip->client_id, client_id) != 0 &&
+            keystore_has_owner(by_ip->client_id)) {
+            char peer[64];
+            net_sockaddr_to_string(from, peer, sizeof(peer));
+            log_message(LOG_WARNING,
+                        "Rejected REGISTER from %s: address %s is in use "
+                        "by client %s", peer, local_ip, by_ip->client_id);
+            return -1;
+        }
 
         if (by_addr != NULL) {
             by_addr->ip_be = addr.s_addr;

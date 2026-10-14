@@ -12,6 +12,11 @@
 #   4. CAMB cannot send packets with CAMA's tunnel address        (#6)
 #   5. A manual client with CAMB's key cannot claim CAMA's address
 #      while CAMA is offline
+#   6. A manual client with the global key cannot claim the address of
+#      CAMD, which comes from the auto pool
+#      (its section has a key but no local_cidr)
+#   7. CAME, whose own psk equals the global one, can still register
+# After each attack the victim must still reach the server.
 #
 # Usage: ./test-e2e-key-binding.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
@@ -66,6 +71,12 @@ psk=key-b
 [client CAMC]
 local_cidr=10.200.0.12/24
 gateway_ip=10.200.0.1
+[client CAMD]
+psk=key-d
+[client CAME]
+local_cidr=10.200.0.13/24
+gateway_ip=10.200.0.1
+psk=global-key
 EOF
 docker build -q -t "$IMAGE" "$BUILD_CTX" >/dev/null
 docker network create "$NET_NAME" >/dev/null
@@ -81,6 +92,10 @@ client() {  # client <name> <camex client args...>
     run "$name" --mode client --server-host "$SRV" --port 5800 --encrypt "$@"
 }
 got_config() { docker logs "$P-$1" 2>&1 | grep -q "Received config from server"; }
+still_up() {  # still_up <name> <who>: the victim keeps its session
+    docker exec "$P-$1" ping -c2 -W2 10.200.0.1 >/dev/null 2>&1
+    check $? "$2 still reaches the server"
+}
 icmp_in() {  # ICMP echo requests received by a container
     docker exec "$1" awk '/^Icmp:/ { if (n++) print $10 }' /proc/net/snmp
 }
@@ -107,12 +122,14 @@ client x1 --auto --name CAMA --psk key-b
 sleep 6
 ! got_config x1; check $? "impersonation with another client's key is rejected"
 docker rm -f "$P-x1" >/dev/null
+still_up a CAMA
 
 echo "== 3. global key registers as CAMA (which has its own key)"
 client x2 --auto --name CAMA --psk global-key
 sleep 6
 ! got_config x2; check $? "global key cannot register a client that has its own key"
 docker rm -f "$P-x2" >/dev/null
+still_up a CAMA
 
 echo "== 4. CAMB sends packets with CAMA's tunnel address"
 client b --auto --name CAMB --psk key-b
@@ -138,6 +155,7 @@ for _ in range(5):
 sleep 2
 after=$(icmp_in "$SRV")
 [ "$after" = "$before" ]; check $? "spoofed source address does not reach the server (echo requests: $before -> $after)"
+still_up a CAMA
 
 echo "== 5. manual client with CAMB's key claims CAMA's address while CAMA is offline"
 docker pause "$P-a" >/dev/null   # e.g. the camera lost its uplink
@@ -148,6 +166,32 @@ docker exec "$SRV" ping -c5 -i 0.5 -W1 10.200.0.10 >/dev/null 2>&1
 after=$(icmp_in "$P-x3")
 docker unpause "$P-a" >/dev/null
 [ "$after" = "$before" ]; check $? "CAMA's address is not taken over (server pings that reached the impostor: $((after - before)) of 5)"
+docker rm -f "$P-x3" >/dev/null
+sleep 3   # let CAMA's next keepalive go out after the pause
+still_up a CAMA
+
+echo "== 6. manual client with the global key claims CAMD's pool address while CAMD is offline"
+client d --auto --name CAMD --psk key-d
+sleep 6
+got_config d; check $? "CAMD (own key, pool address) gets its config"
+d_ip=$(docker logs "$SRV" 2>&1 | sed -n 's|.*Auto-assigned \([0-9.]*\)/.* to client CAMD.*|\1|p' | tail -1)
+echo "   CAMD has ${d_ip:-no address}"
+docker pause "$P-d" >/dev/null
+client x4 --local-cidr "${d_ip:-10.200.0.2}/24" --gateway-ip 10.200.0.1 --psk global-key
+sleep 3
+before=$(icmp_in "$P-x4")
+docker exec "$SRV" ping -c5 -i 0.5 -W1 "${d_ip:-10.200.0.2}" >/dev/null 2>&1
+after=$(icmp_in "$P-x4")
+docker unpause "$P-d" >/dev/null
+[ -n "$d_ip" ] && [ "$after" = "$before" ]; check $? "CAMD's pool address is not taken over (server pings that reached the impostor: $((after - before)) of 5)"
+docker rm -f "$P-x4" >/dev/null
+sleep 3
+still_up d CAMD
+
+echo "== 7. CAME's own key is the same as the global key"
+client e --auto --name CAME --psk global-key
+sleep 6
+got_config e; check $? "CAME (own key equal to the global key) gets its config"
 
 if [ "$FAILS" -ne 0 ]; then
     echo "--- server log (tail) ---"
