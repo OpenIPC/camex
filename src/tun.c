@@ -375,6 +375,7 @@ int tun_create_device(const char *local_ip, const char *netmask,
     (void)local_ip;
     (void)netmask;
     (void)mtu;
+    tun_from_env = 0;   /* a device created here is ours to route */
 
 #if defined(_WIN32)
     (void)tun_dev_override;
@@ -653,6 +654,7 @@ int tun_create_device(const char *local_ip, const char *netmask,
 
 void tun_close_device(void)
 {
+    tun_from_env = 0;   /* the next run may open a different backend */
 #if defined(_WIN32)
     /* Stop WinTUN reader thread */
     g_wintun_running = 0;

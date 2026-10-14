@@ -14,7 +14,9 @@ import android.content.pm.ServiceInfo;
 import android.net.VpnService;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
+import android.os.SystemClock;
 import android.text.TextUtils;
+import android.util.Log;
 import androidx.annotation.Keep;
 import androidx.core.app.ServiceCompat;
 import java.util.ArrayList;
@@ -26,14 +28,27 @@ public class TunnelService extends VpnService {
     public static final String ACTION_STOP = "org.openipc.camex.STOP";
     private static final String CHANNEL_ID = "camex_vpn";
     private static final int NOTIFY_ID = 1;
-    private Thread camexThread = null;
-    private volatile boolean running = false;
+    private static final String TAG = "camex";
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
+    // A Stop can arrive while the start is still queued on the executor, and
+    // a previous service instance may still be stopping its camex run. The
+    // native run slot is process-wide: this instance holds it from
+    // nativeAcquire() to nativeRelease(), and only while holding it may it
+    // call nativeStop(), so a Stop never hits another instance's run and a
+    // Stop before the run starts is not lost.
+    private final Object lock = new Object();
+    private boolean stopRequested = false;  // guarded by lock
+    private boolean acquired = false;       // guarded by lock
+
+    // JNI: takes the run slot and arms camex; false if another run holds it
+    private static native boolean nativeAcquire();
     // JNI: runs camex in-process, blocks until exit. tunFd < 0: camex calls
     // establishTun() once the tunnel parameters are known.
-    private native int nativeStart(int tunFd, String[] argv);
-    // JNI: asks camex to stop; nativeStart() returns shortly after
+    private native int nativeRun(int tunFd, String[] argv);
+    // JNI: gives the run slot back
+    private static native void nativeRelease();
+    // JNI: asks camex to stop; nativeRun() returns shortly after
     private static native void nativeStop();
 
     static {
@@ -52,9 +67,7 @@ public class TunnelService extends VpnService {
             // While the VPN is up the system keeps the service bound, so
             // stopService() alone never reaches onDestroy(). Stop camex: it
             // closes the TUN fd, which tears the VPN down.
-            if (running) {
-                nativeStop();
-            }
+            requestStop();
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -92,20 +105,59 @@ public class TunnelService extends VpnService {
                 }
                 String[] argv = args.toArray(new String[0]);
 
-                // Run camex in-process via JNI (blocks)
-                running = true;
-                updateNotification("Running...");
-                int ret = nativeStart(-1, argv);
-                updateNotification("Exited (code " + ret + ")");
+                if (!acquireRun()) {
+                    return;
+                }
+                try {
+                    // Run camex in-process via JNI (blocks)
+                    updateNotification("Running...");
+                    int ret = nativeRun(-1, argv);
+                    updateNotification("Exited (code " + ret + ")");
+                } finally {
+                    synchronized (lock) {
+                        acquired = false;
+                        nativeRelease();
+                    }
+                }
             } catch (Exception e) {
                 updateNotification("Error: " + e.getMessage());
-            } finally {
-                running = false;
-                cleanup();
             }
         });
 
         return START_STICKY;
+    }
+
+    /**
+     * Takes the native run slot unless a Stop came first. Waits a few
+     * seconds for a previous run (an instance that is still stopping).
+     */
+    private boolean acquireRun() throws InterruptedException {
+        long deadline = SystemClock.elapsedRealtime() + 5000;
+        while (true) {
+            synchronized (lock) {
+                if (stopRequested) {
+                    return false;
+                }
+                if (nativeAcquire()) {
+                    acquired = true;
+                    return true;
+                }
+            }
+            if (SystemClock.elapsedRealtime() > deadline) {
+                updateNotification("Previous tunnel is still running");
+                return false;
+            }
+            Thread.sleep(200);
+        }
+    }
+
+    private void requestStop() {
+        synchronized (lock) {
+            stopRequested = true;
+            if (acquired) {
+                nativeStop();
+            }
+        }
     }
 
     /**
@@ -122,15 +174,28 @@ public class TunnelService extends VpnService {
             builder.addAddress(localIp, prefixLen);
             // The tunnel subnet itself
             builder.addRoute(networkOf(localIp, prefixLen), prefixLen);
-            // Routes from the server's CONFIG (or the command line)
+            boolean fullTunnel = getFullTunnel();
+            // Routes from the server's CONFIG (or the command line). A bad
+            // entry is skipped: on Linux it only fails that one route too.
             for (String cidr : routes) {
                 int slash = cidr.indexOf('/');
-                if (slash > 0) {
-                    builder.addRoute(cidr.substring(0, slash),
-                        Integer.parseInt(cidr.substring(slash + 1)));
+                if (slash <= 0) {
+                    continue;
+                }
+                try {
+                    int prefix = Integer.parseInt(cidr.substring(slash + 1));
+                    if (prefix == 0 && !fullTunnel) {
+                        // A default route would override the split-tunnel setting
+                        Log.i(TAG, "Full tunnel is off, skipping route " + cidr);
+                        continue;
+                    }
+                    // addRoute() rejects addresses with host bits set
+                    builder.addRoute(networkOf(cidr.substring(0, slash), prefix), prefix);
+                } catch (IllegalArgumentException e) {
+                    Log.w(TAG, "Skipping route " + cidr + ": " + e.getMessage());
                 }
             }
-            if (getFullTunnel()) {
+            if (fullTunnel) {
                 builder.addRoute("0.0.0.0", 0);
             }
             // Keep this app's own sockets (the connection to the camex
@@ -165,9 +230,9 @@ public class TunnelService extends VpnService {
     }
 
     private boolean getFullTunnel() {
-        // Route all traffic through the tunnel (previous behaviour).
+        // Off by default: only the tunnel subnet and CONFIG routes (#19)
         return getSharedPreferences("camex", MODE_PRIVATE)
-            .getBoolean("full_tunnel", true);
+            .getBoolean("full_tunnel", false);
     }
 
     private String getServerHost() {
@@ -213,9 +278,7 @@ public class TunnelService extends VpnService {
 
     private void cleanup() {
         // camex owns the TUN fd and closes it itself; just ask it to stop.
-        if (running) {
-            nativeStop();
-        }
+        requestStop();
     }
 
     private void createNotificationChannel() {

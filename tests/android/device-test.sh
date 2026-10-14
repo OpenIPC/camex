@@ -8,8 +8,10 @@
 # device as 127.0.0.1:5800 through `adb reverse` (TCP transport), installs
 # the debug APK, writes the settings with run-as, starts the VPN and checks:
 #   - the VPN interface gets the address, MTU and route from CONFIG (#19)
-#   - only the tunnel subnet and the CONFIG route go through the VPN
-#     (full tunnel off), and the app itself is excluded from it (#18)
+#   - only the tunnel subnet and the CONFIG routes go through the VPN
+#     (full tunnel off: a 0.0.0.0/0 from CONFIG is skipped; a route with
+#     host bits set is installed as its network), and the app itself is
+#     excluded from it (#18)
 #   - the server reaches the device through the tunnel (ping)
 #   - stopping the service stops camex
 #
@@ -80,6 +82,8 @@ local_cidr=10.200.0.7/24
 gateway_ip=10.200.0.1
 mtu=1400
 route_cidr=192.168.77.0/24
+route_cidr=192.168.78.5/24
+route_cidr=0.0.0.0/0
 EOF
 docker build -q -t camex:devtest "$CTX" >/dev/null
 docker create --name "$SRV" -p 5800:5800 --cap-add NET_ADMIN --cap-add MKNOD \
@@ -165,6 +169,7 @@ MTU=$($ADB shell cat /sys/class/net/"$IFACE"/mtu 2>/dev/null | tr -d '\r')
 
 RULES=$($ADB shell ip route show table all 2>/dev/null | grep " dev $IFACE" || true)
 echo "$RULES" | grep -q "192.168.77.0/24"; check $? "CONFIG route 192.168.77.0/24 goes through the VPN"
+echo "$RULES" | grep -q "192.168.78.0/24"; check $? "CONFIG route with host bits (192.168.78.5/24) is installed as 192.168.78.0/24"
 ! echo "$RULES" | grep -qE "^(default|0\.0\.0\.0/0) "; check $? "no default route through the VPN (full tunnel off)"
 
 docker exec "$SRV" ping -c 5 -W 2 10.200.0.7 >/dev/null 2>&1

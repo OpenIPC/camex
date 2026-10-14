@@ -8,13 +8,20 @@
  * The TUN device is created by TunnelService through a provider callback
  * once the tunnel parameters are known: in auto mode the address, MTU and
  * routes arrive in the server's CONFIG, after camex has registered. The
- * callback runs on the same thread as nativeStart(), so the JNIEnv and the
+ * callback runs on the same thread as nativeRun(), so the JNIEnv and the
  * service object saved there stay valid.
  *
  * Legacy path: a non-negative tun_fd is passed through CAMEX_TUN_FD.
+ *
+ * camex keeps process-wide state, so only one run at a time: a service
+ * instance takes the run slot with nativeAcquire() (which also arms the
+ * `running` flag), runs camex with nativeRun() and gives the slot back with
+ * nativeRelease(). A Stop that arrives between acquire and run clears
+ * `running`, and nativeRun() does not set it again, so camex exits at once.
  */
 #include <jni.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +33,8 @@
 /* camex entry point */
 extern int camex_main(int argc, char *argv[]);
 
+static pthread_mutex_t g_slot_lock = PTHREAD_MUTEX_INITIALIZER;
+static int g_slot_busy = 0;
 static JNIEnv *g_env = NULL;
 static jobject g_service = NULL;
 
@@ -77,8 +86,38 @@ static int jni_tun_provider(const char *local_ip, int prefix_len, int mtu,
     return (int)fd;
 }
 
+/* Take the run slot and arm camex; JNI_FALSE if another run holds it. */
+JNIEXPORT jboolean JNICALL
+Java_org_openipc_camex_TunnelService_nativeAcquire(JNIEnv *env, jclass cls)
+{
+    jboolean ok = JNI_FALSE;
+
+    (void)env;
+    (void)cls;
+    pthread_mutex_lock(&g_slot_lock);
+    if (!g_slot_busy) {
+        g_slot_busy = 1;
+        running = 1;
+        ok = JNI_TRUE;
+    }
+    pthread_mutex_unlock(&g_slot_lock);
+    return ok;
+}
+
+/* Give the run slot back (after nativeRun() returned). */
+JNIEXPORT void JNICALL
+Java_org_openipc_camex_TunnelService_nativeRelease(JNIEnv *env, jclass cls)
+{
+    (void)env;
+    (void)cls;
+    pthread_mutex_lock(&g_slot_lock);
+    g_slot_busy = 0;
+    pthread_mutex_unlock(&g_slot_lock);
+}
+
+/* Run camex; the caller holds the run slot. */
 JNIEXPORT jint JNICALL
-Java_org_openipc_camex_TunnelService_nativeStart(
+Java_org_openipc_camex_TunnelService_nativeRun(
     JNIEnv *env, jobject thiz,
     jint tun_fd,
     jobjectArray jargv)
@@ -98,7 +137,6 @@ Java_org_openipc_camex_TunnelService_nativeStart(
         tun_set_provider(jni_tun_provider, NULL);
         unsetenv("CAMEX_TUN_FD");
     }
-    running = 1;
 
     /* Convert Java string array to C argv */
     argc = (*env)->GetArrayLength(env, jargv);
@@ -132,7 +170,7 @@ Java_org_openipc_camex_TunnelService_nativeStart(
     return (jint)ret;
 }
 
-/* Ask camex to stop; nativeStart() returns within about a second. */
+/* Ask camex to stop; nativeRun() returns within about a second. */
 JNIEXPORT void JNICALL
 Java_org_openipc_camex_TunnelService_nativeStop(JNIEnv *env, jclass cls)
 {

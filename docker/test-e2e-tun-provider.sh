@@ -93,6 +93,11 @@ done
 docker logs "$CLI" 2>&1 | grep -q "PROVIDER ip=10.200.0.7 prefix=24 mtu=1400 routes=1 192.168.77.0/24" ||
     fail "provider did not get the CONFIG address, MTU and routes"
 echo "   ok: provider got 10.200.0.7/24, mtu 1400, route 192.168.77.0/24 from CONFIG"
+! docker logs "$CLI" 2>&1 | grep -q "PROVIDER route failed" ||
+    fail "the provider could not install a CONFIG route"
+docker exec "$CLI" ip route show 192.168.77.0/24 | grep -q "dev prov0" ||
+    fail "route 192.168.77.0/24 is not on the provider's interface"
+echo "   ok: route 192.168.77.0/24 is installed on the provider's interface"
 ! docker logs "$CLI" 2>&1 | grep -q "Route setup failed" ||
     fail "camex tried to add routes for an external TUN"
 echo "   ok: camex left routing to the provider"

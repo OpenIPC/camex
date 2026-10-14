@@ -73,7 +73,7 @@ public class SettingsBottomSheet extends BottomSheetDialogFragment {
         pskInput.setText(prefs.getString("psk", ""));
         boolean encrypt = prefs.getBoolean("encrypt", false);
         encryptSwitch.setChecked(encrypt);
-        fullTunnelSwitch.setChecked(prefs.getBoolean("full_tunnel", true));
+        fullTunnelSwitch.setChecked(prefs.getBoolean("full_tunnel", false));
         pskLayout.setEnabled(encrypt);
 
         encryptSwitch.setOnCheckedChangeListener((b, checked) -> pskLayout.setEnabled(checked));
