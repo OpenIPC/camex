@@ -158,14 +158,15 @@ jobs:
       - name: Build static binaries
         run: |
           mkdir -p out
-          make -C src clean >/dev/null
-          make -C src -j$(nproc) all \
+          # the workflow-level BUILD_DIR=build would move the binary to src/build/
+          make -C src clean BUILD_DIR=. >/dev/null
+          make -C src -j$(nproc) all BUILD_DIR=. \
             CC="python3 -m ziglang cc -target ${{ matrix.target.zig }}" \
             LDFLAGS="-static -s -Wl,--gc-sections"
           cp src/camex out/camex-${{ matrix.target.name }}
           # native peer for the QEMU interop test
-          make -C src clean >/dev/null
-          make -C src -j$(nproc) all \
+          make -C src clean BUILD_DIR=. >/dev/null
+          make -C src -j$(nproc) all BUILD_DIR=. \
             CC="python3 -m ziglang cc -target x86_64-linux-musl" \
             LDFLAGS="-static -s -Wl,--gc-sections"
           cp src/camex camex-x86_64
