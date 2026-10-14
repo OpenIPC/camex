@@ -1,4 +1,6 @@
-# Camex — v2.3.8
+![OpenIPC logo][logo]
+
+# OpenIPC Camex
 
 [![camex CI](https://github.com/OpenIPC/camex/actions/workflows/build.yml/badge.svg)](https://github.com/OpenIPC/camex/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/OpenIPC/camex)](https://github.com/OpenIPC/camex/releases)
@@ -594,3 +596,16 @@ set to the tag name (e.g., `v2.3.6`).
 - The server supports per-client PSKs: add `psk=<key>` inside a `[client ID]` block
   in the config file. Clients that authenticate with a per-client key ignore the
   global `--psk` value on the server side.
+
+## License
+
+[MIT](LICENSE). See [LICENSE](LICENSE) for the full terms.
+
+## Support
+
+- Questions and bug reports: [GitHub Issues](https://github.com/OpenIPC/camex/issues)
+- Documentation: [openipc.org](https://openipc.org)
+
+[![Telegram](https://openipc.org/images/telegram_button.svg)](https://openipc.org/our-channels)
+
+[logo]: https://raw.githubusercontent.com/OpenIPC/.github/refs/heads/main/assets/openipc-logo-black.svg
