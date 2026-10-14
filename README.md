@@ -2,6 +2,8 @@
 
 # OpenIPC Camex
 
+**English** | [Русский](README.ru.md) | [简体中文](README.zh-CN.md)
+
 [![camex CI](https://github.com/OpenIPC/camex/actions/workflows/build.yml/badge.svg)](https://github.com/OpenIPC/camex/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/OpenIPC/camex)](https://github.com/OpenIPC/camex/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
