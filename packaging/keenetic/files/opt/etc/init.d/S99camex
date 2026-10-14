@@ -1,0 +1,20 @@
+#!/bin/sh
+#
+# Copyright (c) OpenIPC  https://openipc.org  MIT License
+#
+# S99camex — Entware init script for camex (issue #33, draft)
+#
+# Settings live in /opt/etc/camex/camex.env: set ENABLED=yes and ARGS there.
+# camex logs to syslog, so its messages show up in the KeeneticOS log.
+#
+
+ENABLED=no
+PROCS=camex
+ARGS=""
+PREARGS=""
+DESC=$PROCS
+PATH=/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+[ -f /opt/etc/camex/camex.env ] && . /opt/etc/camex/camex.env
+
+. /opt/etc/init.d/rc.func
