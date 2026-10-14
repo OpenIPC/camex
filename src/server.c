@@ -365,9 +365,17 @@ static void server_send_keepalive(server_client_t *entry)
     } else {
         rc = net_send_payload(net_fd, &entry->addr, packet, packet_len);
     }
+    /* rc > 0 on TCP: an earlier frame to this client is still queued and
+     * the reply is dropped.  That is fine for liveness: the queued frame
+     * reaches the client as soon as the socket drains, and the client
+     * counts any authenticated frame as server activity, not only
+     * keepalive replies. */
     if (rc < 0) {
         log_message(LOG_DEBUG, "Failed to answer keepalive from %s",
                     entry->client_id);
+    } else if (rc > 0) {
+        log_message(LOG_DEBUG, "Keepalive reply to %s dropped: "
+                    "send queue busy", entry->client_id);
     }
 }
 

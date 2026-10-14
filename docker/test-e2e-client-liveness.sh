@@ -99,10 +99,14 @@ docker restart -t 1 "$SRV" >/dev/null
 wait_ping 60 || fail "client did not recover after a server restart"
 
 echo "== scenario 2: pause the server (it stops answering)"
+# Count only messages logged after the pause: scenario 1 may already have
+# logged "Connection lost" during the restart.
+seen=$(docker logs "$CLI" 2>&1 | grep -c "Connection lost" || true)
 docker pause "$SRV" >/dev/null
 lost=0
 for _ in $(seq 1 30); do
-    if docker logs "$CLI" 2>&1 | grep -q "Connection lost"; then
+    now=$(docker logs "$CLI" 2>&1 | grep -c "Connection lost" || true)
+    if [ "$now" -gt "$seen" ]; then
         lost=1; break
     fi
     sleep 1
