@@ -145,10 +145,12 @@ int client_handle_net_packet(const uint8_t *buffer, size_t len)
         buffer = plain;
         len = plain_len;
     } else {
-        client_state.last_recv = g_now;
+        /* Plaintext: only recognised packets count as server activity, so
+         * stray datagrams cannot hide a dead server (#10). */
         /* Inbound keepalive from server */
         if (len == 5U && memcmp(buffer, CAMEX_MAGIC, 4) == 0 &&
             buffer[4] == CAMEX_PACKET_KEEPALIVE) {
+            client_state.last_recv = g_now;
             client_state.keepalive_acked = 1U;
             reconnect_backoff = 0;
             return 0;
@@ -158,10 +160,16 @@ int client_handle_net_packet(const uint8_t *buffer, size_t len)
             memcmp(buffer, CAMEX_MAGIC, 4) == 0) {
             int ret = client_apply_config_response(buffer, len);
             if (ret == 0) {
+                client_state.last_recv = g_now;
                 reconnect_backoff = 0;
             }
             return ret;
         }
+        /* Tunnel data must at least look like an IPv4/IPv6 header */
+        if (len < 20U || ((buffer[0] >> 4) != 4 && (buffer[0] >> 4) != 6)) {
+            return 0;
+        }
+        client_state.last_recv = g_now;
     }
 
     /* Successful data packet received — reset exponential backoff */

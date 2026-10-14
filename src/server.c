@@ -365,10 +365,33 @@ static void server_send_keepalive(server_client_t *entry)
     } else {
         rc = net_send_payload(net_fd, &entry->addr, packet, packet_len);
     }
+    /* rc > 0 on TCP: an earlier frame to this client is still queued and
+     * the reply is dropped.  That is fine for liveness: the queued frame
+     * reaches the client as soon as the socket drains, and the client
+     * counts any authenticated frame as server activity, not only
+     * keepalive replies. */
     if (rc < 0) {
         log_message(LOG_DEBUG, "Failed to answer keepalive from %s",
                     entry->client_id);
+    } else if (rc > 0) {
+        log_message(LOG_DEBUG, "Keepalive reply to %s dropped: "
+                    "send queue busy", entry->client_id);
     }
+}
+
+/* Does `used_key` (the key a packet decrypted with) belong to `entry`?
+ * An entry without its own key uses the global key. */
+static int server_entry_owns_key(const server_client_t *entry,
+                                 const uint8_t *used_key)
+{
+    const uint8_t *own;
+
+    if (entry == NULL || used_key == NULL) {
+        return 0;
+    }
+    own = is_zero_key(entry->psk_key) ? crypto_get_ctx()->psk_key
+                                      : entry->psk_key;
+    return memcmp(own, used_key, 32) == 0;
 }
 
 int server_handle_plain_register(const uint8_t *buffer, size_t len,
@@ -677,8 +700,9 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
             server_client_t *ka = (decrypt_src != NULL)
                                   ? decrypt_src : server_find_by_addr(from);
 
-            /* Refresh last_seen and answer, unless this is a replay */
-            if (ka != NULL &&
+            /* Refresh last_seen and answer, unless the packet was
+             * sealed with another client's key or is a replay */
+            if (ka != NULL && server_entry_owns_key(ka, used_key) &&
                 replay_check(&ka->recv_seq_max, &ka->recv_window,
                              seq) == 0) {
                 ka->last_seen = g_now;
