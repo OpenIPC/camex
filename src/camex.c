@@ -794,20 +794,18 @@ static void handle_tun_packet(void)
                 rc = client_handle_tun_packet(buffer, (size_t)len);
             }
             if (rc == 1) {
-                /* BUGFIX: rc==1 means the underlying TCP send is still
-                 * flushing a previous frame (single shared pending-send
-                 * buffer, see net_tcp_send_frame()) — NOT a real error.
-                 * The old code logged "Dropped packet" and immediately
-                 * read+attempted the NEXT TUN packet anyway, which under
-                 * any burst of real traffic (e.g. the camera's own apps
-                 * routed through this tunnel while it's the active
-                 * channel) repeatedly raced the same pending buffer and
-                 * corrupted the TCP-framed control stream — surfacing as
-                 * bogus frame lengths and forced disconnects server-side.
-                 * Fix: stop draining TUN for this cycle so the pending
-                 * send can flush; the kernel's own TUN queue holds the
-                 * rest until we come back on the next event-loop pass. */
-                break;
+                /* rc==1: the destination connection is still flushing an
+                 * earlier frame (one pending-send buffer per TCP fd, see
+                 * net_tcp_send_frame()); this packet is dropped for it.
+                 * A client has a single connection, so stop draining TUN
+                 * and let the flush finish; the kernel's TUN queue holds
+                 * the rest until the next event-loop pass.  A server keeps
+                 * draining: other clients' sockets are not blocked, and
+                 * one stalled client must not hold up their traffic. */
+                if (!server_mode) {
+                    break;
+                }
+                continue;
             }
             if (rc != 0) {
                 log_message(LOG_WARNING, "Dropped packet from tunnel device");

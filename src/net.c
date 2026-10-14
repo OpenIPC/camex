@@ -458,7 +458,10 @@ int net_tcp_send_frame(int fd, const uint8_t *data, size_t len)
     /* Build the frame in this fd's own pending slot */
     slot = tcp_pending_acquire(fd);
     if (slot == NULL) {
-        return 1;  /* no slot / out of memory: drop this frame, stream intact */
+        /* No free slot or out of memory: the frame is dropped, the stream
+         * stays intact.  Report it as an error, not as backpressure, so
+         * the caller counts the loss instead of waiting for a flush. */
+        return -1;
     }
     net_len = htons((uint16_t)len);
     memcpy(header, &net_len, 2);
