@@ -677,7 +677,7 @@ static void drain_tcp_server_accept(void)
         }
 
         if (set_fd_nonblocking(client_fd) != 0) {
-            close(client_fd);
+            net_tcp_close(client_fd);
             continue;
         }
 
@@ -701,7 +701,7 @@ static void drain_tcp_server_accept(void)
             }
         }
         if (i >= CAMEX_MAX_CLIENTS) {
-            close(client_fd);
+            net_tcp_close(client_fd);
             net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
             log_message(LOG_WARNING,
                         "No free slots for TCP client: %s", peer_str);
@@ -727,7 +727,7 @@ static void drain_tcp_client_read(int fd)
         }
     }
     if (rstate == NULL) {
-        close(fd);
+        net_tcp_close(fd);
         return;
     }
 
@@ -745,12 +745,12 @@ static void drain_tcp_client_read(int fd)
                 log_message(LOG_INFO,
                             "TCP client disconnected: %s (fd=%d)",
                             peer_str, fd);
-                close(fd);
+                net_tcp_close(fd);
                 memset(&server_clients[i], 0, sizeof(server_clients[i]));
                 return;
             }
         }
-        close(fd);
+        net_tcp_close(fd);
         return;
     }
 
@@ -771,14 +771,22 @@ static void drain_tcp_client_read(int fd)
     }
 }
 
+/* Max TUN packets handled per event-loop pass. */
+#define TUN_DRAIN_BUDGET 64U
+
 static void handle_tun_packet(void)
 {
     uint8_t buffer[TUN_PACKET_MAX];
     ssize_t len;
     uint32_t src_ip_be = 0;
     uint32_t dst_ip_be = 0;
+    unsigned int budget = TUN_DRAIN_BUDGET;
 
-    while (1) {
+    /* Bounded: under a continuous stream the loop returns to select()
+     * after TUN_DRAIN_BUDGET packets, so socket reads, pending-send
+     * flushes and client expiry still run.  The TUN fd stays readable,
+     * so the next pass picks up where this one stopped. */
+    while (budget-- > 0U) {
         len = tun_read_packet(buffer, sizeof(buffer));
         if (len > 0) {
             int rc;
@@ -794,20 +802,19 @@ static void handle_tun_packet(void)
                 rc = client_handle_tun_packet(buffer, (size_t)len);
             }
             if (rc == 1) {
-                /* BUGFIX: rc==1 means the underlying TCP send is still
-                 * flushing a previous frame (single shared pending-send
-                 * buffer, see net_tcp_send_frame()) — NOT a real error.
-                 * The old code logged "Dropped packet" and immediately
-                 * read+attempted the NEXT TUN packet anyway, which under
-                 * any burst of real traffic (e.g. the camera's own apps
-                 * routed through this tunnel while it's the active
-                 * channel) repeatedly raced the same pending buffer and
-                 * corrupted the TCP-framed control stream — surfacing as
-                 * bogus frame lengths and forced disconnects server-side.
-                 * Fix: stop draining TUN for this cycle so the pending
-                 * send can flush; the kernel's own TUN queue holds the
-                 * rest until we come back on the next event-loop pass. */
-                break;
+                /* rc==1: the destination TCP connection is still flushing.
+                 * Either an earlier frame was pending and this packet was
+                 * dropped, or this frame was queued and is partly sent
+                 * (net_tcp_send_frame(), one pending buffer per fd).  A
+                 * client has a single connection, so stop draining TUN and
+                 * let the flush finish; the kernel's TUN queue holds the
+                 * rest until the next event-loop pass.  A server keeps
+                 * draining: other clients' sockets are not blocked, and one
+                 * stalled client must not hold up their traffic. */
+                if (!server_mode) {
+                    break;
+                }
+                continue;
             }
             if (rc != 0) {
                 log_message(LOG_WARNING, "Dropped packet from tunnel device");
@@ -838,7 +845,6 @@ void camex_run(void)
         log_message(LOG_INFO, "Server started. Press Ctrl+C to stop.");
         while (running) {
             size_t si;
-            int pending_fd;
 
             g_now = time(NULL);
             FD_ZERO(&readset);
@@ -874,23 +880,15 @@ void camex_run(void)
             }
 
             /* Monitor TCP socket writability for pending sends */
-            pending_fd = net_tcp_get_pending_fd();
-            if (pending_fd >= 0) {
-                FD_SET(pending_fd, &writeset);
-                if (pending_fd > maxfd) {
-                    maxfd = pending_fd;
-                }
-            }
+            maxfd = net_tcp_pending_fdset(&writeset, maxfd);
 
             tv.tv_sec = 1;
             tv.tv_usec = 0;
 
             ready = select(maxfd + 1, &readset, &writeset, NULL, &tv);
             if (ready > 0) {
-                /* Retry pending TCP sends when socket becomes writable */
-                if (pending_fd >= 0 && FD_ISSET(pending_fd, &writeset)) {
-                    net_tcp_flush_pending(pending_fd);
-                }
+                /* Retry pending TCP sends when sockets become writable */
+                net_tcp_flush_writable(&writeset);
                 if (current_config.transport == CAMEX_TRANSPORT_UDP) {
                     if (net_fd >= 0 && FD_ISSET(net_fd, &readset)) {
                         drain_udp_packets();
@@ -947,8 +945,6 @@ void camex_run(void)
 
     log_message(LOG_INFO, "Client started. Press Ctrl+C to stop.");
     while (running) {
-        int pending_fd;
-
         g_now = time(NULL);
 
         if (net_fd < 0) {
@@ -964,12 +960,6 @@ void camex_run(void)
             FD_SET(tun_fd, &readset);
         }
 
-        /* Monitor TCP socket writability for pending sends */
-        pending_fd = net_tcp_get_pending_fd();
-        if (pending_fd >= 0) {
-            FD_SET(pending_fd, &writeset);
-        }
-
         tv.tv_sec = 1;
         tv.tv_usec = 0;
 
@@ -977,16 +967,13 @@ void camex_run(void)
         if ((int)tun_fd > maxfd) {
             maxfd = (int)tun_fd;
         }
-        if (pending_fd > maxfd) {
-            maxfd = pending_fd;
-        }
+        /* Monitor TCP socket writability for pending sends */
+        maxfd = net_tcp_pending_fdset(&writeset, maxfd);
 
         ready = select(maxfd + 1, &readset, &writeset, NULL, &tv);
         if (ready > 0) {
-            /* Retry pending TCP sends when socket becomes writable */
-            if (pending_fd >= 0 && FD_ISSET(pending_fd, &writeset)) {
-                net_tcp_flush_pending(pending_fd);
-            }
+            /* Retry pending TCP sends when sockets become writable */
+            net_tcp_flush_writable(&writeset);
             if (FD_ISSET(net_fd, &readset)) {
                 drain_udp_packets();
             }

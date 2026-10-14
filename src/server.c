@@ -148,7 +148,7 @@ server_client_t *server_alloc_client(void)
     memset(&server_clients[oldest], 0, sizeof(server_clients[oldest]));
     server_clients[oldest].tcp_fd = -1;
     if (old_tcp_fd >= 0) {
-        close(old_tcp_fd);
+        net_tcp_close(old_tcp_fd);
     }
     if (get_random_bytes(
             server_clients[oldest].send_nonce_prefix,
@@ -208,7 +208,7 @@ void server_expire_clients(void)
             inet_ntop(AF_INET, &addr, ipbuf, sizeof(ipbuf));
             log_message(LOG_INFO, "Expired client %s", ipbuf);
             if (server_clients[i].tcp_fd >= 0) {
-                close(server_clients[i].tcp_fd);
+                net_tcp_close(server_clients[i].tcp_fd);
                 server_clients[i].tcp_fd = -1;
             }
             memset(&server_clients[i], 0, sizeof(server_clients[i]));
@@ -400,7 +400,14 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
                         memset(&server_clients[j], 0, sizeof(server_clients[j]));
                     }
                 }
+                /* The old connection is gone: close it (it is no longer
+                 * referenced by any slot and would leak), and drop its
+                 * partial-read state, which belongs to the old byte stream. */
+                if (entry->tcp_fd >= 0) {
+                    net_tcp_close(entry->tcp_fd);
+                }
                 entry->tcp_fd = fd;
+                memset(&entry->recv_state, 0, sizeof(entry->recv_state));
             }
         } else {
             /* TCP clients already have a slot allocated by drain_tcp_server_accept.
