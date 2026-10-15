@@ -15,6 +15,15 @@
 # the server comes back. Before the fix a successful UDP send counted as a
 # sign of life, so the client never noticed.
 #
+# Scenario 3 (idle, keepalive longer than the timeout): a manual client
+# with --keepalive 10 --server-timeout 5 must stay connected while idle.
+# Without the keepalive interval capped at half the timeout it timed out
+# between probes and reconnected every few seconds.
+#
+# Scenario 2 runs right after scenario 1's reconnect: whether the server
+# answers keepalives must survive the reconnect, or silence detection
+# stays off until the next answered keepalive.
+#
 # Usage: ./test-e2e-client-liveness.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
 #   KEEP=1                      keep containers for debugging
@@ -29,11 +38,12 @@ IMAGE="camex:e2e-live"
 NET_NAME="camex-live-$$"
 SRV="camex-live-srv-$$"
 CLI="camex-live-cli-$$"
+IDLE="camex-live-idle-$$"
 BUILD_CTX="$(mktemp -d)"
 PSK="liveness-test"
 
 cleanup() {
-    docker rm -f "$SRV" "$CLI" >/dev/null 2>&1 || true
+    docker rm -f "$SRV" "$CLI" "$IDLE" >/dev/null 2>&1 || true
     docker network rm "$NET_NAME" >/dev/null 2>&1 || true
     rm -rf "$BUILD_CTX"
 }
@@ -116,4 +126,17 @@ docker unpause "$SRV" >/dev/null
 echo "   client detected the lost server"
 wait_ping 60 || fail "client did not recover after the server came back"
 
-echo "PASS: client detects a lost server and recovers after a restart"
+echo "== scenario 3: idle client, keepalive (10s) longer than the timeout (5s)"
+docker rm -f "$CLI" >/dev/null
+docker run -d --name "$IDLE" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    "$IMAGE" --mode client --local-cidr 10.200.0.3/24 --gateway-ip 10.200.0.1 \
+    --server-host "$SRV" --port 5800 --encrypt --psk "$PSK" \
+    --keepalive 10 --server-timeout 5 >/dev/null
+CLI="$IDLE"
+wait_ping 20 || fail "idle client never reached the server"
+sleep 20
+lost=$(docker logs "$IDLE" 2>&1 | grep -c "Connection lost" || true)
+[ "$lost" = 0 ] || fail "idle client timed out between keepalives ($lost times)"
+echo "   no reconnects while idle"
+
+echo "PASS: client detects a lost server and recovers after a restart; idle client stays up"

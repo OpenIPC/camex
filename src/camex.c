@@ -374,6 +374,13 @@ int camex_init(camex_config_t *config)
     client_state_init(&client_state);
     memset(server_clients, 0, (size_t)CAMEX_MAX_CLIENTS * sizeof(server_client_t));
 
+    if (client_mode && !current_config.auto_config &&
+        current_config.keepalive == 0) {
+        log_message(LOG_WARNING,
+                    "Keepalive is off: a lost server is not detected "
+                    "in manual mode (server timeout needs keepalives)");
+    }
+
     if (get_random_bytes(client_state.send_nonce_prefix,
                          sizeof(client_state.send_nonce_prefix)) != 0) {
         log_message(LOG_WARNING,
