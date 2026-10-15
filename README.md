@@ -312,14 +312,15 @@ protects before exposing it to an untrusted network.
   registrations) are rate-limited; the number suppressed is logged.
 - The auto pool hands out `10.200.0.2`–`.254` and never gives one address to two
   live clients (an expired client's address is handed out again);
-  `allow_unknown_clients=no` serves only IDs listed in the config file.
+  `allow_unknown_clients=no` serves only auto-mode IDs listed in the config file
+  (manual clients are bound by their key and address, see [Notes](#notes)).
 
 ### Recommended deployment
 
 - Always use `--encrypt` over networks you do not control, with a long random
   passphrase.
 - Give each camera its own `psk=` in a `[client ID]` block, and set
-  `allow_unknown_clients=no` when all cameras are listed.
+  `allow_unknown_clients=no` when all auto-mode cameras are listed.
 - Run the server with only the capabilities it needs (`CAP_NET_ADMIN`; with the
   kernel module also file access to `/dev/camex`, see below), and firewall the
   tunnel interface.
