@@ -73,13 +73,9 @@ int main(void)
           key_from_psk("base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
                        key) != 0,
           "all-zero raw keys are rejected");
-    {
-        uint8_t priv[KEY_LEN], pub[KEY_LEN];
-
-        check(key_server_from_b64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-                                  priv, pub) != 0,
-              "an all-zero server private key is rejected");
-    }
+    check(key_server_from_b64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                              npriv, npub) != 0,
+          "an all-zero server private key is rejected");
 
     /* Argon2id: RFC 9106 test vector (Monocypher build check) */
     {
