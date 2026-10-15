@@ -363,7 +363,8 @@ static const char *keystore_owner(const uint8_t *key)
         return "";
     }
     for (i = 0U; i < server_keystore_count; ++i) {
-        if (memcmp(server_keystore[i].psk_key, key, 32) == 0) {
+        if (!server_keystore[i].locked &&
+            memcmp(server_keystore[i].psk_key, key, 32) == 0) {
             return server_keystore[i].owner;
         }
     }
@@ -392,6 +393,7 @@ static int keystore_key_owned_by(const uint8_t *key, const char *client_id)
     }
     for (i = 0U; i < server_keystore_count; ++i) {
         if (server_keystore[i].owner[0] != '\0' &&
+            !server_keystore[i].locked &&
             strcasecmp(server_keystore[i].owner, client_id) == 0 &&
             memcmp(server_keystore[i].psk_key, key, 32) == 0) {
             return 1;
@@ -440,7 +442,8 @@ static int keystore_contains(const uint8_t *key)
     size_t i;
 
     for (i = 0U; i < server_keystore_count; ++i) {
-        if (memcmp(server_keystore[i].psk_key, key, 32) == 0) {
+        if (!server_keystore[i].locked &&
+            memcmp(server_keystore[i].psk_key, key, 32) == 0) {
             return 1;
         }
     }
@@ -453,6 +456,7 @@ static int keystore_is_global(const uint8_t *key)
 
     for (i = 0U; i < server_keystore_count; ++i) {
         if (server_keystore[i].owner[0] == '\0' &&
+            !server_keystore[i].locked &&
             memcmp(server_keystore[i].psk_key, key, 32) == 0) {
             return 1;
         }
@@ -799,6 +803,9 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
      * to name a client that key belongs to (#5) */
     memset(&hs, 0, sizeof(hs));
     for (i = 0U; i < server_keystore_count; ++i) {
+        if (server_keystore[i].locked) {
+            continue;
+        }
         hs = base;
         if (noise_read_msg1(&hs, server_keystore[i].psk_key, es,
                             buffer + V2_INIT_HDR, len - V2_INIT_HDR,

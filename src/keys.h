@@ -38,6 +38,12 @@ int key_base64_decode(const char *in, uint8_t *out, size_t out_size);
 int key_from_psk(const char *psk, uint8_t key[KEY_LEN]);
 void key_cache_clear(void);
 
+/* Around a config reload: key_cache_mark() before the keys are derived
+ * again, key_cache_sweep() after, which wipes the cached passphrase keys
+ * that the new configuration no longer uses */
+void key_cache_mark(void);
+void key_cache_sweep(void);
+
 /* 32-byte value in base64 (public key, private key) */
 int key_parse_b64(const char *text, uint8_t key[KEY_LEN]);
 

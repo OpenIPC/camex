@@ -18,7 +18,8 @@ HEADERS = $(wildcard $(SRC)/*.h)
 
 all: $(TESTS)
 
-test_net_tcp: test_net_tcp.c $(SRC)/net.c $(SRC)/util.c $(SRC)/log.c $(HEADERS)
+test_net_tcp: test_net_tcp.c $(SRC)/net.c $(SRC)/util.c $(SRC)/log.c \
+              $(SRC)/monocypher.c $(HEADERS)
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
 
 test_proto: test_proto.c $(SRC)/proto.c $(SRC)/config.c $(SRC)/util.c $(SRC)/log.c \
@@ -29,7 +30,7 @@ test_log: test_log.c $(SRC)/log.c $(HEADERS)
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
 
 test_packet: test_packet.c $(SRC)/packet.c $(SRC)/tun.c $(SRC)/util.c \
-             $(SRC)/log.c $(HEADERS)
+             $(SRC)/log.c $(SRC)/monocypher.c $(HEADERS)
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
 
 test_noise: test_noise.c noise_vectors.h $(SRC)/noise.c $(SRC)/monocypher.c $(HEADERS)

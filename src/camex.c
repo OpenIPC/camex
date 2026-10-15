@@ -1060,6 +1060,7 @@ void camex_run(void)
                 reload_config = 0;
                 log_message(LOG_INFO, "Reloading config: %s",
                             current_config.config_path);
+                key_cache_mark();
                 memcpy(saved_keystore, server_keystore,
                        sizeof(saved_keystore));
                 if (config_db_load_file(current_config.config_path) != 0) {
@@ -1091,6 +1092,7 @@ void camex_run(void)
                                     sizeof(server_db.globals.server_key));
                     }
                     config_build_keystore();
+                    key_cache_sweep();
                     server_revalidate_keys();
                     server_revalidate_unknown_clients();
                 }

@@ -148,22 +148,48 @@ static int parse_hex_key(const char *text, uint8_t key[KEY_LEN])
     return 0;
 }
 
-/* Cache of Argon2id results, by BLAKE2b of the passphrase */
+/* Cache of Argon2id results, by BLAKE2b of the passphrase keyed with a
+ * random per-process key (so the id is no fast hash of the passphrase) */
 #define KEY_CACHE_SIZE 260U
 
 typedef struct {
     uint8_t id[KEY_LEN];
     uint8_t key[KEY_LEN];
     uint8_t used;
+    uint8_t seen;    /* looked up since key_cache_mark() */
 } key_cache_entry_t;
 
 static key_cache_entry_t key_cache[KEY_CACHE_SIZE];
 static size_t key_cache_next = 0U;
+static uint8_t key_cache_id_key[KEY_LEN];
+static int key_cache_id_ready = 0;
 
 void key_cache_clear(void)
 {
     crypto_wipe(key_cache, sizeof(key_cache));
+    crypto_wipe(key_cache_id_key, sizeof(key_cache_id_key));
+    key_cache_id_ready = 0;
     key_cache_next = 0U;
+}
+
+void key_cache_mark(void)
+{
+    size_t i;
+
+    for (i = 0U; i < KEY_CACHE_SIZE; ++i) {
+        key_cache[i].seen = 0U;
+    }
+}
+
+void key_cache_sweep(void)
+{
+    size_t i;
+
+    for (i = 0U; i < KEY_CACHE_SIZE; ++i) {
+        if (key_cache[i].used && !key_cache[i].seen) {
+            crypto_wipe(&key_cache[i], sizeof(key_cache[i]));
+        }
+    }
 }
 
 /* Lock memory again after a temporary munlockall() */
@@ -241,11 +267,22 @@ int key_from_psk(const char *psk, uint8_t key[KEY_LEN])
         return 0;
     }
 
-    /* A passphrase: Argon2id, cached */
-    crypto_blake2b(id, sizeof(id), (const uint8_t *)psk, strlen(psk));
+    /* A passphrase: Argon2id, cached (not cached without a random id
+     * key) */
+    if (!key_cache_id_ready &&
+        get_random_bytes(key_cache_id_key, sizeof(key_cache_id_key)) == 0) {
+        key_cache_id_ready = 1;
+    }
+    if (!key_cache_id_ready) {
+        return argon2id(psk, key);
+    }
+    crypto_blake2b_keyed(id, sizeof(id), key_cache_id_key,
+                         sizeof(key_cache_id_key),
+                         (const uint8_t *)psk, strlen(psk));
     for (i = 0U; i < KEY_CACHE_SIZE; ++i) {
         if (key_cache[i].used && crypto_verify32(key_cache[i].id, id) == 0) {
             memcpy(key, key_cache[i].key, KEY_LEN);
+            key_cache[i].seen = 1U;
             crypto_wipe(id, sizeof(id));
             return 0;
         }
@@ -254,11 +291,21 @@ int key_from_psk(const char *psk, uint8_t key[KEY_LEN])
         crypto_wipe(id, sizeof(id));
         return -1;
     }
-    slot = &key_cache[key_cache_next];
-    key_cache_next = (key_cache_next + 1U) % KEY_CACHE_SIZE;
+    /* A free slot first, else round robin */
+    slot = NULL;
+    for (i = 0U; i < KEY_CACHE_SIZE && slot == NULL; ++i) {
+        if (!key_cache[i].used) {
+            slot = &key_cache[i];
+        }
+    }
+    if (slot == NULL) {
+        slot = &key_cache[key_cache_next];
+        key_cache_next = (key_cache_next + 1U) % KEY_CACHE_SIZE;
+    }
     memcpy(slot->id, id, KEY_LEN);
     memcpy(slot->key, key, KEY_LEN);
     slot->used = 1U;
+    slot->seen = 1U;
     crypto_wipe(id, sizeof(id));
     return 0;
 }

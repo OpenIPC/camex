@@ -9,6 +9,7 @@
 #include "util.h"
 #include "camex.h"
 #include "log.h"
+#include "monocypher.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -474,10 +475,10 @@ int read_key_file(const char *path, char *out, size_t out_size)
         p[--len] = '\0';
     }
     if (len == 0U || len >= out_size) {
-        memset(line, 0, sizeof(line));
+        crypto_wipe(line, sizeof(line));
         return -1;
     }
     memcpy(out, p, len + 1U);
-    memset(line, 0, sizeof(line));
+    crypto_wipe(line, sizeof(line));
     return 0;
 }
