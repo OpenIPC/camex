@@ -7,7 +7,12 @@
  */
 
 #include "packet.h"
+#include "log.h"
 #include "tun.h"
+
+#ifndef _WIN32
+#include <sys/select.h>
+#endif
 
 static int tun_backend_open(const camex_packet_open_t *p)
 {
@@ -70,8 +75,20 @@ int packet_open(const camex_packet_open_t *params)
         return -1;  /* already open: close it first */
     }
     rc = backend->open(params);
-    backend_open = (rc == 0);
-    return rc;
+    if (rc != 0) {
+        return rc;
+    }
+#ifndef _WIN32
+    /* The event loop watches it with select() */
+    if (backend->get_fd() >= FD_SETSIZE) {
+        log_message(LOG_ERR, "Packet backend %s: descriptor %ld is beyond "
+                    "FD_SETSIZE", backend->name, (long)backend->get_fd());
+        backend->close();
+        return -1;
+    }
+#endif
+    backend_open = 1;
+    return 0;
 }
 
 /* An unopened backend (e.g. a server without a tunnel address) is never

@@ -32,11 +32,14 @@ typedef struct {
 typedef struct {
     const char *name;
     int (*open)(const camex_packet_open_t *params);
+    /* Non-blocking: returns <= 0 when no packet is queued. The event loop
+     * reads several packets per readable event. */
     ssize_t (*read_packet)(uint8_t *buffer, size_t size);
     int (*write_packet)(const uint8_t *buffer, size_t len);
     /* Descriptor the event loop watches with select(): readable when a
      * packet can be read. Required while the backend is open (-1 only
-     * when closed), since packets are read only when it is readable. */
+     * when closed), since packets are read only when it is readable;
+     * below FD_SETSIZE on POSIX (checked by packet_open()). */
     intptr_t (*get_fd)(void);
     void (*close)(void);
     /* 1 if camex itself must add and remove the host routes for the
