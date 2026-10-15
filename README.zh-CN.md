@@ -48,6 +48,24 @@ sudo ./camex --mode client \
   --server-host vpn.example.org --port 5800
 ```
 
+### Android
+
+应用以自动模式连接：地址、路由和 MTU 由服务器下发。
+
+| 主界面 | 设置 |
+|---|---|
+| ![主界面](docs/images/android-main.png) | ![设置](docs/images/android-settings.png) |
+
+- **Server host / port** — camex 服务器。
+- **Client name** — 客户端 ID，即服务器上的 `[client ID]` 块。
+- **Transport** — UDP 或 TCP，与服务器一致。
+- **Encrypt traffic** 和 **Pre-shared key** — 对应 `--encrypt --psk`；密钥必须
+  与该客户端的 `psk=`（或全局密钥）一致。
+- **Route all traffic through the tunnel** — 关闭时，只有隧道网络和服务器下发的
+  路由经过隧道。
+- **Advanced** — MTU、keepalive 和服务器超时
+  （[截图](docs/images/android-settings-advanced.png)）。
+
 ## 二进制大小
 
 | 平台    | 大小（strip 后） | UPX 压缩后 |

@@ -48,6 +48,25 @@ sudo ./camex --mode client \
   --server-host vpn.example.org --port 5800
 ```
 
+### Android
+
+Приложение подключается в автоматическом режиме: адрес, маршруты и MTU присылает
+сервер.
+
+| Главный экран | Настройки |
+|---|---|
+| ![Главный экран](docs/images/android-main.png) | ![Настройки](docs/images/android-settings.png) |
+
+- **Server host / port** — сервер camex.
+- **Client name** — ID клиента, то есть блок `[client ID]` на сервере.
+- **Transport** — UDP или TCP, как на сервере.
+- **Encrypt traffic** и **Pre-shared key** — `--encrypt --psk`; ключ должен
+  совпадать с `psk=` клиента (или с глобальным ключом).
+- **Route all traffic through the tunnel** — если выключено, через туннель идут
+  только туннельная сеть и маршруты сервера.
+- **Advanced** — MTU, keepalive и таймаут сервера
+  ([скриншот](docs/images/android-settings-advanced.png)).
+
 ## Размер бинарных файлов
 
 | Платформа | Размер (stripped) | Со сжатием UPX |

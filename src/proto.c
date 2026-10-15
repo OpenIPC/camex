@@ -103,17 +103,17 @@ int proto_parse_register(char *message,
                 char *end = NULL;
                 unsigned long pv = strtoul(value, &end, 10);
                 if (end == value || *end != '\0') {
-                    log_message(LOG_WARNING,
-                                "Rejecting client: invalid protocol version '%s'",
-                                value);
+                    log_peer(LOG_WARNING,
+                             "Rejecting client: invalid protocol version '%s'",
+                             value);
                     return -1;
                 }
                 proto_ver = (unsigned int)pv;
             }
             if (proto_ver > CAMEX_PROTO_VER) {
-                log_message(LOG_WARNING,
-                            "Rejecting client: protocol version %u > server %u",
-                            proto_ver, (unsigned)CAMEX_PROTO_VER);
+                log_peer(LOG_WARNING,
+                         "Rejecting client: protocol version %u > server %u",
+                         proto_ver, (unsigned)CAMEX_PROTO_VER);
                 return -1;
             }
             continue;
@@ -126,7 +126,8 @@ int proto_parse_register(char *message,
             } else if (strcasecmp(value, "MANUAL") == 0) {
                 *auto_request = 0U;
             } else {
-                log_message(LOG_ERR, "Invalid register mode: %s", value);
+                log_peer(LOG_ERR,
+                         "Invalid register mode: %s", value);
                 return -1;
             }
             continue;
@@ -160,19 +161,20 @@ int proto_parse_register(char *message,
             continue;
         }
 
-        log_message(LOG_ERR, "Unknown register token: %s", token);
+        log_peer(LOG_ERR,
+                 "Unknown register token: %s", token);
         return -1;
     }
 
     if (*auto_request) {
         if (client_id == NULL || *client_id == '\0') {
-            log_message(LOG_ERR,
-                        "Missing client ID in auto register request");
+            log_peer(LOG_ERR,
+                     "Missing client ID in auto register request");
             return -1;
         }
     } else if (local_ip == NULL || *local_ip == '\0') {
-        log_message(LOG_ERR,
-                    "Missing local IP in manual register request");
+        log_peer(LOG_ERR,
+                 "Missing local IP in manual register request");
         return -1;
     }
 

@@ -265,6 +265,29 @@ int net_sock_err_is_again(void)
 #endif
 }
 
+/* Seconds to wait for a TCP connection to the server (#16 L7) */
+#define CAMEX_TCP_CONNECT_TIMEOUT 5
+
+/* A socket call was interrupted by a signal */
+static int net_sock_err_is_intr(void)
+{
+#ifdef _WIN32
+    return WSAGetLastError() == WSAEINTR;
+#else
+    return errno == EINTR;
+#endif
+}
+
+/* connect() on a non-blocking socket has started and is still going */
+static int net_connect_in_progress(void)
+{
+#ifdef _WIN32
+    return WSAGetLastError() == WSAEWOULDBLOCK;
+#else
+    return errno == EINPROGRESS;
+#endif
+}
+
 int net_fd = -1;
 int listen_fd = -1;
 struct sockaddr_in server_addr;
@@ -403,7 +426,7 @@ void net_close(void)
 int net_send_payload(int fd, const struct sockaddr_in *to,
                      const uint8_t *data, size_t len)
 {
-    int sent;
+    ssize_t sent;
 
     if (fd < 0 || data == NULL) {
         return -1;
@@ -571,6 +594,15 @@ int net_tcp_listen(const char *bind_ip, int port)
         print_errno_message(LOG_ERR, "socket(TCP)");
         return -1;
     }
+#ifndef _WIN32
+    /* The event loop watches it with select() (#16 L4) */
+    if (fd >= FD_SETSIZE) {
+        log_message(LOG_ERR, "socket(TCP): descriptor %d is beyond FD_SETSIZE",
+                    fd);
+        close(fd);
+        return -1;
+    }
+#endif
 
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, OPTVAL_CAST &reuse, sizeof(reuse)) < 0) {
         print_errno_message(LOG_WARNING, "setsockopt(SO_REUSEADDR)");
@@ -657,16 +689,75 @@ int net_tcp_connect(const char *host, int port)
                          OPTVAL_CAST &bufsize, sizeof(bufsize));
     }
 
-    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        print_errno_message(LOG_ERR, "connect(TCP)");
-        close(fd);
-        return -1;
-    }
-
-    /* Set nonblocking after connect completes */
+    /* Non-blocking connect with a timeout: a blocking connect() to an
+     * unreachable server stalled the event loop until the kernel gave up,
+     * which can take minutes (#16 L7). */
     if (set_fd_nonblocking(fd) != 0) {
         close(fd);
         return -1;
+    }
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        fd_set wset;
+        fd_set eset;
+        struct timeval tv;
+        time_t deadline;
+        int soerr = 0;
+        socklen_t soerr_len = sizeof(soerr);
+        int ready;
+
+        if (!net_connect_in_progress()) {
+            print_errno_message(LOG_ERR, "connect(TCP)");
+            close(fd);
+            return -1;
+        }
+        /* Winsock reports a failed connect in the except set, POSIX as
+         * writable with SO_ERROR set. A signal does not end the wait,
+         * unless it is a request to stop. */
+        deadline = time(NULL) + CAMEX_TCP_CONNECT_TIMEOUT;
+        do {
+            time_t left = deadline - time(NULL);
+
+            /* A clock set back must not stretch the wait */
+            if (left > CAMEX_TCP_CONNECT_TIMEOUT) {
+                left = CAMEX_TCP_CONNECT_TIMEOUT;
+            }
+
+            FD_ZERO(&wset);
+            FD_SET(fd, &wset);
+            FD_ZERO(&eset);
+            FD_SET(fd, &eset);
+            tv.tv_sec = left > 0 ? (long)left : 0;
+            tv.tv_usec = 0;
+            ready = select(fd + 1, NULL, &wset, &eset, &tv);
+        } while (ready < 0 && net_sock_err_is_intr() && running &&
+                 time(NULL) < deadline);
+        if (ready == 0) {
+            log_message(LOG_ERR, "connect(TCP): timed out");
+            close(fd);
+            return -1;
+        }
+        if (ready < 0 && !running) {
+            log_message(LOG_INFO, "connect(TCP): stopped");
+            close(fd);
+            return -1;
+        }
+        if (ready < 0) {
+            print_errno_message(LOG_ERR, "connect(TCP): select");
+            close(fd);
+            return -1;
+        }
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR,
+                       (char *)&soerr, &soerr_len) != 0 || soerr != 0) {
+#ifdef _WIN32
+            /* Winsock error codes are not C runtime errno values */
+            log_message(LOG_ERR, "connect(TCP): socket error %d", soerr);
+#else
+            log_message(LOG_ERR, "connect(TCP): %s",
+                        soerr != 0 ? strerror(soerr) : "getsockopt failed");
+#endif
+            close(fd);
+            return -1;
+        }
     }
 
     server_addr = addr;
