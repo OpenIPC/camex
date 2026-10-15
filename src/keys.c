@@ -243,6 +243,18 @@ static int argon2id(const char *pass, uint8_t key[KEY_LEN])
     return 0;
 }
 
+/* An all-zero key means "no key" in the server's tables: refuse it */
+static int raw_key_nonzero(uint8_t key[KEY_LEN])
+{
+    static const uint8_t zero[KEY_LEN];
+
+    if (crypto_verify32(key, zero) == 0) {
+        log_message(LOG_ERR, "Invalid raw key: all zero");
+        return -1;
+    }
+    return 0;
+}
+
 int key_from_psk(const char *psk, uint8_t key[KEY_LEN])
 {
     uint8_t id[KEY_LEN];
@@ -257,14 +269,14 @@ int key_from_psk(const char *psk, uint8_t key[KEY_LEN])
             log_message(LOG_ERR, "Invalid hex: key (need 64 hex digits)");
             return -1;
         }
-        return 0;
+        return raw_key_nonzero(key);
     }
     if (strncmp(psk, "base64:", 7) == 0) {
         if (key_parse_b64(psk + 7, key) != 0) {
             log_message(LOG_ERR, "Invalid base64: key (need 32 bytes)");
             return -1;
         }
-        return 0;
+        return raw_key_nonzero(key);
     }
 
     /* A passphrase: Argon2id, cached (not cached without a random id

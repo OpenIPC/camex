@@ -463,7 +463,8 @@ void print_usage(const char *progname)
 
     printf("Common options:\n");
     printf("  -t, --mtu <size>     Tunnel MTU, 576-9000 (default: 1500)\n");
-    printf("  -k, --psk <key>      Pre-shared key: hex:<64 digits>, base64:<key>,\n"
+    printf("  -k, --psk <key>      Pre-shared key: hex:<64 hex digits>,"
+           " base64:<32 bytes>,\n"
            "                       or a passphrase (stretched with Argon2id)\n");
     printf("  -e, --encrypt        Accepted for compatibility: protocol v2 is"
            " always encrypted\n");

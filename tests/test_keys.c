@@ -68,6 +68,11 @@ int main(void)
                        "101112131415161718191a1b1c1d1e1f", key) != 0 &&
           key_from_psk("base64:AAAA", key) != 0 && key_from_psk("", key) != 0,
           "malformed raw keys are rejected");
+    check(key_from_psk("hex:0000000000000000000000000000000000000000000000"
+                       "000000000000000000", key) != 0 &&
+          key_from_psk("base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                       key) != 0,
+          "all-zero raw keys are rejected");
 
     /* Argon2id: RFC 9106 test vector (Monocypher build check) */
     {
