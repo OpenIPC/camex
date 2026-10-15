@@ -12,6 +12,7 @@
 #include "util.h"
 #include "proto.h"
 #include "net.h"
+#include "packet.h"
 #include "tun.h"
 #include "config.h"
 #include "camex.h"
@@ -174,7 +175,7 @@ int client_handle_net_packet(const uint8_t *buffer, size_t len)
 
     /* Successful data packet received — reset exponential backoff */
     reconnect_backoff = 0;
-    return tun_write_packet(buffer, len);
+    return packet_write(buffer, len);
 }
 
 int client_wait_for_config(void)

@@ -16,6 +16,7 @@ set(CAMEX_SRCS
     ../../../../../src/log.c
     ../../../../../src/crypto.c
     ../../../../../src/tun.c
+    ../../../../../src/packet.c
     ../../../../../src/net.c
     ../../../../../src/proto.c
     ../../../../../src/config.c

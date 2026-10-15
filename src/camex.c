@@ -15,6 +15,7 @@
 #include "main.h"
 #include "net.h"
 #include "proto.h"
+#include "packet.h"
 #include "tun.h"
 #include "util.h"
 #include "version.h"
@@ -508,15 +509,19 @@ int camex_init(camex_config_t *config)
             return -1;
         }
 
-        /* TUN from the host application (Android VpnService): through the
-         * provider, which gets the final address and routes, or as a
-         * ready fd in CAMEX_TUN_FD; otherwise create the device here. */
-        if (tun_open_provided(local_ip, local_netmask, current_config.mtu,
-                              (const char (*)[32])current_config.route_cidrs,
-                              current_config.route_count) < 0 &&
-            tun_accept_fd() < 0) {
-            if (tun_create_device(local_ip, local_netmask, current_config.mtu,
-                                  current_config.tun_dev) != 0) {
+        {
+            camex_packet_open_t open_params;
+
+            memset(&open_params, 0, sizeof(open_params));
+            open_params.local_ip = local_ip;
+            open_params.netmask = local_netmask;
+            open_params.mtu = current_config.mtu;
+            open_params.routes =
+                (const char (*)[32])current_config.route_cidrs;
+            open_params.route_count = current_config.route_count;
+            open_params.device = current_config.tun_dev;
+            open_params.use_provider = 1U;
+            if (packet_open(&open_params) != 0) {
                 net_close();
                 return -1;
             }
@@ -565,10 +570,15 @@ int camex_init(camex_config_t *config)
             return -1;
         }
 
-        /* Try accepting TUN fd from environment (Android VpnService) */
-        if (tun_accept_fd() < 0) {
-            if (tun_create_device(local_ip, local_netmask, current_config.mtu,
-                                  current_config.tun_dev) != 0) {
+        {
+            camex_packet_open_t open_params;
+
+            memset(&open_params, 0, sizeof(open_params));
+            open_params.local_ip = local_ip;
+            open_params.netmask = local_netmask;
+            open_params.mtu = current_config.mtu;
+            open_params.device = current_config.tun_dev;
+            if (packet_open(&open_params) != 0) {
                 net_close();
                 return -1;
             }
@@ -880,7 +890,7 @@ static void handle_tun_packet(void)
      * flushes and client expiry still run.  The TUN fd stays readable,
      * so the next pass picks up where this one stopped. */
     while (budget-- > 0U) {
-        len = tun_read_packet(buffer, sizeof(buffer));
+        len = packet_read(buffer, sizeof(buffer));
         if (len > 0) {
             int rc;
             if (server_mode) {
@@ -965,10 +975,10 @@ void camex_run(void)
                 }
             }
 
-            if (tun_fd >= 0) {
-                FD_SET(tun_fd, &readset);
-                if ((int)tun_fd > maxfd) {
-                    maxfd = (int)tun_fd;
+            if (packet_fd() >= 0) {
+                FD_SET(packet_fd(), &readset);
+                if ((int)packet_fd() > maxfd) {
+                    maxfd = (int)packet_fd();
                 }
             }
 
@@ -1001,7 +1011,7 @@ void camex_run(void)
                         }
                     }
                 }
-                if (tun_fd >= 0 && FD_ISSET(tun_fd, &readset)) {
+                if (packet_fd() >= 0 && FD_ISSET(packet_fd(), &readset)) {
                     handle_tun_packet();
                 }
             } else if (ready < 0 && errno != EINTR) {
@@ -1070,16 +1080,16 @@ void camex_run(void)
         FD_ZERO(&readset);
         FD_ZERO(&writeset);
         FD_SET(net_fd, &readset);
-        if (tun_fd >= 0) {
-            FD_SET(tun_fd, &readset);
+        if (packet_fd() >= 0) {
+            FD_SET(packet_fd(), &readset);
         }
 
         tv.tv_sec = 1;
         tv.tv_usec = 0;
 
         maxfd = net_fd;
-        if ((int)tun_fd > maxfd) {
-            maxfd = (int)tun_fd;
+        if ((int)packet_fd() > maxfd) {
+            maxfd = (int)packet_fd();
         }
         /* Monitor TCP socket writability for pending sends */
         maxfd = net_tcp_pending_fdset(&writeset, maxfd);
@@ -1091,7 +1101,7 @@ void camex_run(void)
             if (FD_ISSET(net_fd, &readset)) {
                 drain_udp_packets();
             }
-            if (tun_fd >= 0 && FD_ISSET(tun_fd, &readset)) {
+            if (packet_fd() >= 0 && FD_ISSET(packet_fd(), &readset)) {
                 handle_tun_packet();
             }
         } else if (ready < 0 && errno != EINTR) {
@@ -1111,7 +1121,7 @@ void camex_stop(void)
     running = 0;
 
     if (client_mode && current_config.gateway_ip[0] != '\0' &&
-        !tun_is_external()) {
+        packet_host_routes()) {
         for (i = 0; i < current_config.route_count; ++i) {
             if (camex_del_route(current_config.route_cidrs[i],
                                 current_config.gateway_ip) != 0) {
@@ -1142,7 +1152,7 @@ void camex_stop(void)
     }
     crypto_wipe(current_config.psk, sizeof(current_config.psk));
 
-    tun_close_device();
+    packet_close();
     net_close();
 }
 

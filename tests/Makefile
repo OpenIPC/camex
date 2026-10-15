@@ -9,7 +9,7 @@ SRC     = ../src
 CFLAGS  += -I$(SRC) -std=c99 -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L \
            -Wall -Wextra -Wshadow -Wstrict-prototypes -O1 -g $(EXTRA_CFLAGS)
 
-TESTS = test_net_tcp test_proto test_log
+TESTS = test_net_tcp test_proto test_log test_packet
 
 # Rebuild the tests when any project header changes
 HEADERS = $(wildcard $(SRC)/*.h)
@@ -26,6 +26,10 @@ test_proto: test_proto.c $(SRC)/proto.c $(SRC)/config.c $(SRC)/util.c $(SRC)/log
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
 
 test_log: test_log.c $(SRC)/log.c $(HEADERS)
+	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
+
+test_packet: test_packet.c $(SRC)/packet.c $(SRC)/tun.c $(SRC)/util.c \
+             $(SRC)/log.c $(HEADERS)
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
 
 test: all

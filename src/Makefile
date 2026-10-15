@@ -45,7 +45,7 @@ else
   LDFLAGS  += -Wl,-dead_strip
 endif
 
-SRCS = main.c camex.c monocypher.c util.c log.c crypto.c tun.c net.c proto.c config.c client.c server.c
+SRCS = main.c camex.c monocypher.c util.c log.c crypto.c tun.c packet.c net.c proto.c config.c client.c server.c
 SRCS += wintun.c
 OBJS = $(addprefix $(objdir)/, $(SRCS:.c=.o))
 
