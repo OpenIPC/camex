@@ -74,6 +74,22 @@ jobs:
           "${{ env.BUILD_DIR }}/${{ env.TARGET }}-x86_64" --help 2>&1 | head -5 || true
         if: matrix.platform.name == 'x86_64'
 
+      - name: Unit tests
+        run: make test
+        if: matrix.platform.name == 'x86_64'
+
+      - name: E2E test (TCP pending data, issue #8)
+        run: ./docker/test-e2e-tcp-pending.sh
+        if: matrix.platform.name == 'x86_64'
+
+      - name: E2E test (client liveness, issue #10)
+        run: ./docker/test-e2e-client-liveness.sh
+        if: matrix.platform.name == 'x86_64'
+
+      - name: E2E test (key binding and source addresses, issues #5 #6)
+        run: ./docker/test-e2e-key-binding.sh
+        if: matrix.platform.name == 'x86_64'
+
       - name: Build cross
         run: |
           make clean
@@ -200,7 +216,7 @@ jobs:
 
   # ----------------------------------------------------------- android (APK)
   android:
-    name: Android (aarch64 APK)
+    name: Android (arm64 + armv7 APK)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -273,6 +289,23 @@ jobs:
         with:
           name: camex-aarch64-apk
           path: android/app/build/outputs/apk/release/camex-android.apk
+          if-no-files-found: error
+
+      # Debuggable build for testing on devices (adb install, run-as, logcat).
+      # Not uploaded for tags, so it never ends up in a release.
+      - name: Build debug APK
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          cd android
+          gradle assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/camex-android-debug.apk
+
+      - name: Upload artifact (debug APK)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: camex-android-debug-apk
+          path: android/app/build/outputs/apk/debug/camex-android-debug.apk
           if-no-files-found: error
 
   # ---------------------------------------------------------------- windows
@@ -439,6 +472,37 @@ jobs:
           CAMEX_BINARY: docker/camex-x86_64
         run: |
           docker/test-smoke.sh
+
+      - name: E2E test (Android TUN provider path, issues #18 #19)
+        run: docker/test-e2e-tun-provider.sh
+
+  # ------------------------------------------------------------- kernel module
+  kmod:
+    name: Kernel module / ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 6.8, 6.1 and 4.15 headers: covers both netif_rx() variants
+        image: ['ubuntu:24.04', 'debian:bookworm', 'ubuntu:18.04']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build camex.ko against distro kernel headers
+        run: |
+          docker run --rm -v "$PWD/src:/src:ro" ${{ matrix.image }} sh -ec '
+            export DEBIAN_FRONTEND=noninteractive
+            . /etc/os-release
+            pkg=linux-headers-generic
+            [ "$ID" = debian ] && pkg=linux-headers-amd64
+            apt-get update -qq
+            apt-get install -y -qq $pkg make gcc >/dev/null
+            K=$(ls -d /usr/src/linux-headers-*-generic /usr/src/linux-headers-*-amd64 2>/dev/null | head -1)
+            echo "Kernel headers: $K"
+            cp -r /src /tmp/m
+            make -C "$K" M=/tmp/m modules
+            test -f /tmp/m/camex.ko'
 
   # ------------------------------------------------------------- consolidated
   sizes:

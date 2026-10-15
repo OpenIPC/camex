@@ -25,6 +25,7 @@
 
     <!-- Security -->
     <string name="encrypt">Encrypt traffic (ChaCha20-Poly1305)</string>
+    <string name="full_tunnel">Route all traffic through the tunnel</string>
     <string name="psk">Pre-shared key</string>
 
     <!-- Advanced -->

@@ -405,7 +405,7 @@ void print_usage(const char *progname)
     printf("Client options:\n");
     printf("  -a, --auto              "
            "Fetch tunnel parameters from the server\n");
-    printf("  -n, --name <id>         Client ID used in auto mode\n");
+    printf("  -n, --name <id>         Client ID (auto mode; optional in manual mode)\n");
     printf("  -l, --local-cidr <cidr>  Local tunnel address in CIDR form\n");
     printf("  -g, --gateway-ip <addr>  Gateway inside the tunnel\n");
     printf("  -s, --server-host <addr> Tunnel server host or address\n");
@@ -568,7 +568,9 @@ int main(int argc, char *argv[])
         }
     }
 
-    if (client_mode) {
+    /* An externally provided TUN (Android) gets its routes from the host
+     * application; camex has no permission to change the routing table. */
+    if (client_mode && !tun_is_external()) {
         size_t i;
 
         for (i = 0; i < current_config.route_count; ++i) {

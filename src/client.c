@@ -114,60 +114,62 @@ int client_handle_net_packet(const uint8_t *buffer, size_t len)
                         peer, (unsigned)len);
             return -1;
         }
-
+        /* Every authenticated packet goes through the replay window before
+         * it counts as a sign of life: after a server restart its sequence
+         * numbers start again from 0, are rejected here, and the client
+         * then times out and reconnects with a fresh window (#10). */
+        if (replay_check(&client_state.recv_seq_max,
+                         &client_state.recv_window, seq) != 0) {
+            log_message(LOG_WARNING,
+                        "Replay check failed for packet type %u "
+                        "(seq=%" PRIu64 ", max=%" PRIu64 ")",
+                        (unsigned)type, seq, client_state.recv_seq_max);
+            return -1;
+        }
+        client_state.last_recv = g_now;
         if (type == CAMEX_PACKET_CONFIG && current_config.auto_config) {
-            if (replay_check(&client_state.recv_seq_max,
-                             &client_state.recv_window, seq) != 0) {
-                log_message(LOG_WARNING,
-                            "Replay check failed for CONFIG packet "
-                            "(seq=%" PRIu64 ", max=%" PRIu64 ")",
-                            seq, client_state.recv_seq_max);
-                return -1;
-            }
             int ret = client_apply_config_response(plain, plain_len);
             if (ret == 0) {
                 reconnect_backoff = 0;
             }
             return ret;
         }
-
         if (type == CAMEX_PACKET_KEEPALIVE) {
-            client_state.last_recv = g_now;
+            client_state.keepalive_acked = 1U;
             reconnect_backoff = 0;
             return 0;
         }
-
         if (type != CAMEX_PACKET_DATA) {
             return 0;
         }
-
-        if (replay_check(&client_state.recv_seq_max,
-                         &client_state.recv_window, seq) != 0) {
-            log_message(LOG_WARNING,
-                        "Replay check failed for DATA packet "
-                        "(seq=%" PRIu64 ", max=%" PRIu64 ")",
-                        seq, client_state.recv_seq_max);
-            return -1;
-        }
-
         buffer = plain;
         len = plain_len;
-    } else if (current_config.auto_config && len >= 4U &&
-               memcmp(buffer, CAMEX_MAGIC, 4) == 0) {
-        /* Inbound keepalive from server — just update last_recv */
-        if (len >= 5U && buffer[4] == CAMEX_PACKET_KEEPALIVE) {
+    } else {
+        /* Plaintext: only recognised packets count as server activity, so
+         * stray datagrams cannot hide a dead server (#10). */
+        /* Inbound keepalive from server */
+        if (len == 5U && memcmp(buffer, CAMEX_MAGIC, 4) == 0 &&
+            buffer[4] == CAMEX_PACKET_KEEPALIVE) {
             client_state.last_recv = g_now;
+            client_state.keepalive_acked = 1U;
             reconnect_backoff = 0;
             return 0;
         }
         /* Config response from server */
-        {
+        if (current_config.auto_config && len >= 4U &&
+            memcmp(buffer, CAMEX_MAGIC, 4) == 0) {
             int ret = client_apply_config_response(buffer, len);
             if (ret == 0) {
+                client_state.last_recv = g_now;
                 reconnect_backoff = 0;
             }
             return ret;
         }
+        /* Tunnel data must at least look like an IPv4/IPv6 header */
+        if (len < 20U || ((buffer[0] >> 4) != 4 && (buffer[0] >> 4) != 6)) {
+            return 0;
+        }
+        client_state.last_recv = g_now;
     }
 
     /* Successful data packet received — reset exponential backoff */
@@ -332,6 +334,11 @@ void client_reconnect(void)
     client_state.config_received = 0;
     client_state.recv_seq_max = 0;
     client_state.recv_window = 0;
+    /* keepalive_acked is kept: whether the server answers keepalives is a
+     * property of the server, not of the session.  Clearing it here left
+     * silence detection off after a reconnect until the next answered
+     * keepalive, so a server that stopped answering right after the
+     * reconnect was never detected (#10). */
     client_state.last_recv = g_now;
     client_state.last_keepalive = g_now;
     client_reconnect_at = 0;
@@ -357,6 +364,16 @@ void client_reconnect(void)
     }
 }
 
+static int client_keepalive_interval(void)
+{
+    int cap = current_config.server_timeout / 2;
+
+    if (cap < 1) {
+        cap = 1;
+    }
+    return current_config.keepalive < cap ? current_config.keepalive : cap;
+}
+
 void client_tick(void)
 {
     if (net_fd < 0 || client_reconnect_at > 0) {
@@ -367,7 +384,12 @@ void client_tick(void)
         return;
     }
 
-    if (current_config.auto_config &&
+    /* Silence detection is enforced once the server has answered a
+     * KEEPALIVE: that proves it replies to them, so a quiet link really
+     * means the server is gone. Servers that never answer keepalives
+     * (older versions) keep the previous behaviour: silence counts only
+     * in auto mode, with or without keepalives. */
+    if ((client_state.keepalive_acked || current_config.auto_config) &&
         client_state.last_recv > 0 &&
         difftime(g_now, client_state.last_recv) >=
             (double)current_config.server_timeout) {
@@ -381,11 +403,14 @@ void client_tick(void)
         return;
     }
 
-    /* Send keepalive to prevent idle timeout */
+    /* Send keepalive to prevent idle timeout.  The interval is capped at
+     * half the server timeout: otherwise an idle client with a keepalive
+     * longer than the timeout would time out before its next probe and
+     * reconnect over and over. */
     if (current_config.keepalive > 0 &&
         client_state.last_keepalive > 0 &&
         difftime(g_now, client_state.last_keepalive) >=
-            (double)current_config.keepalive) {
+            (double)client_keepalive_interval()) {
         uint8_t packet[CAMEX_HDR_LEN + 1 + 1 + 16U];
         size_t packet_len = 0;
         int sent = 0;
@@ -416,9 +441,6 @@ void client_tick(void)
             log_message(LOG_WARNING,
                         "Failed to send keepalive to %s:%d",
                         current_config.server_host, current_config.port);
-        } else {
-            /* Successful keepalive send keeps the connection alive */
-            client_state.last_recv = g_now;
         }
         client_state.last_keepalive = g_now;
     }

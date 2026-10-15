@@ -76,8 +76,10 @@ typedef int socklen_t;
 #include <unistd.h>
 #endif
 #if defined(__APPLE__)
+#include <fcntl.h>
 #include <ifaddrs.h>
 #include <net/if_dl.h>
+#include <sys/wait.h>
 #endif
 #ifdef _WIN32
 #include <winsock2.h>
@@ -374,6 +376,13 @@ int camex_init(camex_config_t *config)
     client_state_init(&client_state);
     memset(server_clients, 0, (size_t)CAMEX_MAX_CLIENTS * sizeof(server_client_t));
 
+    if (client_mode && !current_config.auto_config &&
+        current_config.keepalive == 0) {
+        log_message(LOG_WARNING,
+                    "Keepalive is off: a lost server is not detected "
+                    "in manual mode (server timeout needs keepalives)");
+    }
+
     if (get_random_bytes(client_state.send_nonce_prefix,
                          sizeof(client_state.send_nonce_prefix)) != 0) {
         log_message(LOG_WARNING,
@@ -493,8 +502,13 @@ int camex_init(camex_config_t *config)
             return -1;
         }
 
-        /* Try accepting TUN fd from environment (Android VpnService) */
-        if (tun_accept_fd() < 0) {
+        /* TUN from the host application (Android VpnService): through the
+         * provider, which gets the final address and routes, or as a
+         * ready fd in CAMEX_TUN_FD; otherwise create the device here. */
+        if (tun_open_provided(local_ip, local_netmask, current_config.mtu,
+                              (const char (*)[32])current_config.route_cidrs,
+                              current_config.route_count) < 0 &&
+            tun_accept_fd() < 0) {
             if (tun_create_device(local_ip, local_netmask, current_config.mtu,
                                   current_config.tun_dev) != 0) {
                 net_close();
@@ -608,7 +622,6 @@ static void drain_udp_packets(void)
         int rc = net_tcp_recv_frame(net_fd, buffer, sizeof(buffer),
                                     &frame_len, &client_recv_state);
         if (rc == 0) {
-            client_state.last_recv = g_now;
             if (!client_link_confirmed) {
                 client_link_confirmed = 1U;
                 log_message(LOG_NOTICE,
@@ -632,7 +645,6 @@ static void drain_udp_packets(void)
     while (1) {
         len = recv(net_fd, RECV_BUF_CAST buffer, sizeof(buffer), 0);
         if (len > 0) {
-            client_state.last_recv = g_now;
             if (!client_link_confirmed) {
                 client_link_confirmed = 1U;
                 log_message(LOG_NOTICE,
@@ -677,7 +689,7 @@ static void drain_tcp_server_accept(void)
         }
 
         if (set_fd_nonblocking(client_fd) != 0) {
-            close(client_fd);
+            net_tcp_close(client_fd);
             continue;
         }
 
@@ -701,7 +713,7 @@ static void drain_tcp_server_accept(void)
             }
         }
         if (i >= CAMEX_MAX_CLIENTS) {
-            close(client_fd);
+            net_tcp_close(client_fd);
             net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
             log_message(LOG_WARNING,
                         "No free slots for TCP client: %s", peer_str);
@@ -727,7 +739,7 @@ static void drain_tcp_client_read(int fd)
         }
     }
     if (rstate == NULL) {
-        close(fd);
+        net_tcp_close(fd);
         return;
     }
 
@@ -745,12 +757,12 @@ static void drain_tcp_client_read(int fd)
                 log_message(LOG_INFO,
                             "TCP client disconnected: %s (fd=%d)",
                             peer_str, fd);
-                close(fd);
+                net_tcp_close(fd);
                 memset(&server_clients[i], 0, sizeof(server_clients[i]));
                 return;
             }
         }
-        close(fd);
+        net_tcp_close(fd);
         return;
     }
 
@@ -771,14 +783,22 @@ static void drain_tcp_client_read(int fd)
     }
 }
 
+/* Max TUN packets handled per event-loop pass. */
+#define TUN_DRAIN_BUDGET 64U
+
 static void handle_tun_packet(void)
 {
     uint8_t buffer[TUN_PACKET_MAX];
     ssize_t len;
     uint32_t src_ip_be = 0;
     uint32_t dst_ip_be = 0;
+    unsigned int budget = TUN_DRAIN_BUDGET;
 
-    while (1) {
+    /* Bounded: under a continuous stream the loop returns to select()
+     * after TUN_DRAIN_BUDGET packets, so socket reads, pending-send
+     * flushes and client expiry still run.  The TUN fd stays readable,
+     * so the next pass picks up where this one stopped. */
+    while (budget-- > 0U) {
         len = tun_read_packet(buffer, sizeof(buffer));
         if (len > 0) {
             int rc;
@@ -794,20 +814,19 @@ static void handle_tun_packet(void)
                 rc = client_handle_tun_packet(buffer, (size_t)len);
             }
             if (rc == 1) {
-                /* BUGFIX: rc==1 means the underlying TCP send is still
-                 * flushing a previous frame (single shared pending-send
-                 * buffer, see net_tcp_send_frame()) — NOT a real error.
-                 * The old code logged "Dropped packet" and immediately
-                 * read+attempted the NEXT TUN packet anyway, which under
-                 * any burst of real traffic (e.g. the camera's own apps
-                 * routed through this tunnel while it's the active
-                 * channel) repeatedly raced the same pending buffer and
-                 * corrupted the TCP-framed control stream — surfacing as
-                 * bogus frame lengths and forced disconnects server-side.
-                 * Fix: stop draining TUN for this cycle so the pending
-                 * send can flush; the kernel's own TUN queue holds the
-                 * rest until we come back on the next event-loop pass. */
-                break;
+                /* rc==1: the destination TCP connection is still flushing.
+                 * Either an earlier frame was pending and this packet was
+                 * dropped, or this frame was queued and is partly sent
+                 * (net_tcp_send_frame(), one pending buffer per fd).  A
+                 * client has a single connection, so stop draining TUN and
+                 * let the flush finish; the kernel's TUN queue holds the
+                 * rest until the next event-loop pass.  A server keeps
+                 * draining: other clients' sockets are not blocked, and one
+                 * stalled client must not hold up their traffic. */
+                if (!server_mode) {
+                    break;
+                }
+                continue;
             }
             if (rc != 0) {
                 log_message(LOG_WARNING, "Dropped packet from tunnel device");
@@ -838,7 +857,6 @@ void camex_run(void)
         log_message(LOG_INFO, "Server started. Press Ctrl+C to stop.");
         while (running) {
             size_t si;
-            int pending_fd;
 
             g_now = time(NULL);
             FD_ZERO(&readset);
@@ -874,23 +892,15 @@ void camex_run(void)
             }
 
             /* Monitor TCP socket writability for pending sends */
-            pending_fd = net_tcp_get_pending_fd();
-            if (pending_fd >= 0) {
-                FD_SET(pending_fd, &writeset);
-                if (pending_fd > maxfd) {
-                    maxfd = pending_fd;
-                }
-            }
+            maxfd = net_tcp_pending_fdset(&writeset, maxfd);
 
             tv.tv_sec = 1;
             tv.tv_usec = 0;
 
             ready = select(maxfd + 1, &readset, &writeset, NULL, &tv);
             if (ready > 0) {
-                /* Retry pending TCP sends when socket becomes writable */
-                if (pending_fd >= 0 && FD_ISSET(pending_fd, &writeset)) {
-                    net_tcp_flush_pending(pending_fd);
-                }
+                /* Retry pending TCP sends when sockets become writable */
+                net_tcp_flush_writable(&writeset);
                 if (current_config.transport == CAMEX_TRANSPORT_UDP) {
                     if (net_fd >= 0 && FD_ISSET(net_fd, &readset)) {
                         drain_udp_packets();
@@ -947,8 +957,6 @@ void camex_run(void)
 
     log_message(LOG_INFO, "Client started. Press Ctrl+C to stop.");
     while (running) {
-        int pending_fd;
-
         g_now = time(NULL);
 
         if (net_fd < 0) {
@@ -964,12 +972,6 @@ void camex_run(void)
             FD_SET(tun_fd, &readset);
         }
 
-        /* Monitor TCP socket writability for pending sends */
-        pending_fd = net_tcp_get_pending_fd();
-        if (pending_fd >= 0) {
-            FD_SET(pending_fd, &writeset);
-        }
-
         tv.tv_sec = 1;
         tv.tv_usec = 0;
 
@@ -977,16 +979,13 @@ void camex_run(void)
         if ((int)tun_fd > maxfd) {
             maxfd = (int)tun_fd;
         }
-        if (pending_fd > maxfd) {
-            maxfd = pending_fd;
-        }
+        /* Monitor TCP socket writability for pending sends */
+        maxfd = net_tcp_pending_fdset(&writeset, maxfd);
 
         ready = select(maxfd + 1, &readset, &writeset, NULL, &tv);
         if (ready > 0) {
-            /* Retry pending TCP sends when socket becomes writable */
-            if (pending_fd >= 0 && FD_ISSET(pending_fd, &writeset)) {
-                net_tcp_flush_pending(pending_fd);
-            }
+            /* Retry pending TCP sends when sockets become writable */
+            net_tcp_flush_writable(&writeset);
             if (FD_ISSET(net_fd, &readset)) {
                 drain_udp_packets();
             }
@@ -1009,7 +1008,8 @@ void camex_stop(void)
 
     running = 0;
 
-    if (client_mode && current_config.gateway_ip[0] != '\0') {
+    if (client_mode && current_config.gateway_ip[0] != '\0' &&
+        !tun_is_external()) {
         for (i = 0; i < current_config.route_count; ++i) {
             if (camex_del_route(current_config.route_cidrs[i],
                                 current_config.gateway_ip) != 0) {
@@ -1057,23 +1057,49 @@ static int run_ip_route(const char *verb, const char *cidr, const char *gateway)
 static int run_ip_route(const char *verb, const char *cidr, const char *gateway)
 {
     /*
-     * macOS: use /sbin/route command instead of ioctl(SIOCADDRT).
-     * ioctl routing is not supported on Darwin.
+     * macOS: use /sbin/route instead of ioctl(SIOCADDRT), which Darwin
+     * does not support. Run it directly with an argument vector, never
+     * through a shell: cidr and gateway may come from the server's CONFIG
+     * message (#12).
      */
-    char cmd[256];
-    const char *op;
-    (void)verb;
+    char *argv[7];
+    pid_t pid;
+    int status = 0;
 
-    op = (strcmp(verb, "add") == 0 || strcmp(verb, "replace") == 0)
-             ? "-n add" : "-n delete";
-
-    if (cidr == NULL || gateway == NULL) {
+    if (verb == NULL || cidr == NULL || gateway == NULL) {
         return -1;
     }
 
-    snprintf(cmd, sizeof(cmd), "/sbin/route %s -inet %s %s 2>/dev/null",
-             op, cidr, gateway);
-    return system(cmd);
+    argv[0] = "/sbin/route";
+    argv[1] = "-n";
+    argv[2] = (strcmp(verb, "add") == 0 || strcmp(verb, "replace") == 0)
+                  ? "add" : "delete";
+    argv[3] = "-inet";
+    argv[4] = (char *)cidr;
+    argv[5] = (char *)gateway;
+    argv[6] = NULL;
+
+    pid = fork();
+    if (pid < 0) {
+        print_errno_message(LOG_ERR, "fork(/sbin/route)");
+        return -1;
+    }
+    if (pid == 0) {
+        int devnull = open("/dev/null", O_WRONLY);
+
+        if (devnull >= 0) {
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+        }
+        execv(argv[0], argv);
+        _exit(127);
+    }
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            return -1;
+        }
+    }
+    return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
 }
 #else
 static int run_ip_route(const char *verb, const char *cidr, const char *gateway)

@@ -10,8 +10,11 @@
 #include "log.h"
 #include "util.h"
 #include "camex.h"
+#include "crypto.h"
+#include "tun.h"
 
 #include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -43,21 +46,101 @@
 #endif
 
 /*
- * Per-fd TCP send pending buffer.
+ * Per-connection TCP send pending buffers.
  * When a non-blocking TCP send returns EAGAIN mid-frame, the unsent data
  * is saved here so the next call can resume transmission rather than
  * re-sending the 2-byte length header (which would desync the protocol).
+ *
+ * Each fd has its own slot, so a slow connection only delays itself and
+ * never blocks sends to other connections. A slot buffer is allocated on
+ * first use and kept for reuse; net_tcp_close() releases it. Pending data
+ * must never outlive its socket: a stale entry would put a closed fd into
+ * the select() write set (EBADF on every iteration) or leak the tail of an
+ * old frame into a new connection that reuses the fd number.
  */
-#define TCP_SEND_BUF_SIZE 65536U
+/* Largest frame: 2-byte length + encrypted packet of TUN_PACKET_MAX bytes */
+#define TCP_SEND_BUF_SIZE (2U + CAMEX_HDR_LEN + 1U + TUN_PACKET_MAX + 16U)
+#define TCP_PENDING_SLOTS (CAMEX_MAX_CLIENTS + 1U)
 
 typedef struct {
-    int fd;
-    uint8_t buf[TCP_SEND_BUF_SIZE];
+    int fd;            /* owner fd, -1 = slot free */
+    uint8_t *buf;      /* TCP_SEND_BUF_SIZE bytes, allocated on first use */
     size_t len;
     size_t offset;
 } tcp_send_pending_t;
 
-static tcp_send_pending_t tcp_pending = { -1, { 0 }, 0, 0 };
+static tcp_send_pending_t tcp_pending[TCP_PENDING_SLOTS];
+static int tcp_pending_ready = 0;
+
+static void tcp_pending_init(void)
+{
+    size_t i;
+
+    if (tcp_pending_ready) {
+        return;
+    }
+    for (i = 0; i < TCP_PENDING_SLOTS; ++i) {
+        tcp_pending[i].fd = -1;
+        tcp_pending[i].buf = NULL;
+        tcp_pending[i].len = 0;
+        tcp_pending[i].offset = 0;
+    }
+    tcp_pending_ready = 1;
+}
+
+static tcp_send_pending_t *tcp_pending_find(int fd)
+{
+    size_t i;
+
+    tcp_pending_init();
+    for (i = 0; i < TCP_PENDING_SLOTS; ++i) {
+        if (tcp_pending[i].fd == fd) {
+            return &tcp_pending[i];
+        }
+    }
+    return NULL;
+}
+
+/* Take a free slot for fd, preferring one that already has a buffer. */
+static tcp_send_pending_t *tcp_pending_acquire(int fd)
+{
+    tcp_send_pending_t *slot = NULL;
+    size_t i;
+
+    tcp_pending_init();
+    for (i = 0; i < TCP_PENDING_SLOTS; ++i) {
+        if (tcp_pending[i].fd != -1) {
+            continue;
+        }
+        if (tcp_pending[i].buf != NULL) {
+            slot = &tcp_pending[i];
+            break;
+        }
+        if (slot == NULL) {
+            slot = &tcp_pending[i];
+        }
+    }
+    if (slot == NULL) {
+        return NULL;
+    }
+    if (slot->buf == NULL) {
+        slot->buf = malloc(TCP_SEND_BUF_SIZE);
+        if (slot->buf == NULL) {
+            return NULL;
+        }
+    }
+    slot->fd = fd;
+    slot->len = 0;
+    slot->offset = 0;
+    return slot;
+}
+
+static void tcp_pending_release(tcp_send_pending_t *slot)
+{
+    slot->fd = -1;
+    slot->len = 0;
+    slot->offset = 0;
+}
 
 /*
  * Flush any pending TCP send data for the given fd.
@@ -65,15 +148,17 @@ static tcp_send_pending_t tcp_pending = { -1, { 0 }, 0, 0 };
  */
 static int tcp_send_flush_pending(int fd)
 {
-    if (tcp_pending.fd != fd || tcp_pending.offset >= tcp_pending.len) {
+    tcp_send_pending_t *slot = tcp_pending_find(fd);
+
+    if (fd < 0 || slot == NULL) {
         return 0;  /* nothing pending for this fd */
     }
 
-    while (tcp_pending.offset < tcp_pending.len) {
+    while (slot->offset < slot->len) {
         ssize_t n;
-        size_t remaining = tcp_pending.len - tcp_pending.offset;
+        size_t remaining = slot->len - slot->offset;
 
-        n = send(fd, SEND_CAST tcp_pending.buf + tcp_pending.offset,
+        n = send(fd, SEND_CAST slot->buf + slot->offset,
                  remaining, MSG_NOSIGNAL);
         if (n < 0) {
 #ifdef _WIN32
@@ -87,29 +172,64 @@ static int tcp_send_flush_pending(int fd)
             }
 #endif
             /* Hard error — discard pending */
-            tcp_pending.fd = -1;
-            tcp_pending.len = 0;
-            tcp_pending.offset = 0;
+            tcp_pending_release(slot);
             return -1;
         }
-        tcp_pending.offset += (size_t)n;
+        slot->offset += (size_t)n;
     }
 
     /* Fully flushed */
-    tcp_pending.fd = -1;
-    tcp_pending.len = 0;
-    tcp_pending.offset = 0;
+    tcp_pending_release(slot);
     return 0;
 }
 
-/* Return the fd that has pending TCP send data, or -1 if none.
- * Used by the event loop to add write-FD monitoring via select(). */
+/* Return an fd that has pending TCP send data, or -1 if none. */
 int net_tcp_get_pending_fd(void)
 {
-    if (tcp_pending.fd != -1 && tcp_pending.offset < tcp_pending.len) {
-        return tcp_pending.fd;
+    size_t i;
+
+    tcp_pending_init();
+    for (i = 0; i < TCP_PENDING_SLOTS; ++i) {
+        if (tcp_pending[i].fd >= 0 &&
+            tcp_pending[i].offset < tcp_pending[i].len) {
+            return tcp_pending[i].fd;
+        }
     }
     return -1;
+}
+
+/* Add every fd with pending send data to set; returns the new max fd. */
+int net_tcp_pending_fdset(fd_set *set, int maxfd)
+{
+    size_t i;
+
+    tcp_pending_init();
+    for (i = 0; i < TCP_PENDING_SLOTS; ++i) {
+        int fd = tcp_pending[i].fd;
+
+        if (fd >= 0 && tcp_pending[i].offset < tcp_pending[i].len) {
+            FD_SET(fd, set);
+            if (fd > maxfd) {
+                maxfd = fd;
+            }
+        }
+    }
+    return maxfd;
+}
+
+/* Flush pending data for every fd that select() reported writable. */
+void net_tcp_flush_writable(fd_set *set)
+{
+    size_t i;
+
+    tcp_pending_init();
+    for (i = 0; i < TCP_PENDING_SLOTS; ++i) {
+        int fd = tcp_pending[i].fd;
+
+        if (fd >= 0 && FD_ISSET(fd, set)) {
+            (void)tcp_send_flush_pending(fd);
+        }
+    }
 }
 
 /* Public wrapper: try to flush pending data for the given fd.
@@ -117,6 +237,21 @@ int net_tcp_get_pending_fd(void)
 int net_tcp_flush_pending(int fd)
 {
     return tcp_send_flush_pending(fd);
+}
+
+/* Drop any pending send data for fd and close it. */
+void net_tcp_close(int fd)
+{
+    tcp_send_pending_t *slot;
+
+    if (fd < 0) {
+        return;
+    }
+    slot = tcp_pending_find(fd);
+    if (slot != NULL) {
+        tcp_pending_release(slot);
+    }
+    close(fd);
 }
 
 /* Cross-platform EAGAIN/EWOULDBLOCK check for socket operations */
@@ -256,7 +391,7 @@ int net_open_udp_socket(void)
 void net_close(void)
 {
     if (net_fd >= 0) {
-        close(net_fd);
+        net_tcp_close(net_fd);
         net_fd = -1;
     }
     if (listen_fd >= 0) {
@@ -306,6 +441,7 @@ int net_tcp_send_frame(int fd, const uint8_t *data, size_t len)
     uint8_t header[2];
     uint16_t net_len;
     size_t frame_size;
+    tcp_send_pending_t *slot;
 
     if (fd < 0 || data == NULL || len > (TCP_SEND_BUF_SIZE - 2U)) {
         return -1;
@@ -317,23 +453,23 @@ int net_tcp_send_frame(int fd, const uint8_t *data, size_t len)
         if (ret != 0) {
             return ret;  /* 1 = still pending (EAGAIN), -1 = error */
         }
-        /* Guard: don't overwrite pending data belonging to another fd.
-         * With a single global buffer, simultaneous pending sends to
-         * different fds would corrupt data.  Return "try again later". */
-        if (tcp_pending.fd != -1 && tcp_pending.fd != fd) {
-            return 1;
-        }
     }
 
-    /* Build the frame in our pending buffer */
+    /* Build the frame in this fd's own pending slot */
+    slot = tcp_pending_acquire(fd);
+    if (slot == NULL) {
+        /* No free slot or out of memory: the frame is dropped, the stream
+         * stays intact.  Report it as an error, not as backpressure, so
+         * the caller counts the loss instead of waiting for a flush. */
+        return -1;
+    }
     net_len = htons((uint16_t)len);
     memcpy(header, &net_len, 2);
-    memcpy(tcp_pending.buf, header, 2);
-    memcpy(tcp_pending.buf + 2, data, len);
+    memcpy(slot->buf, header, 2);
+    memcpy(slot->buf + 2, data, len);
     frame_size = 2 + len;
-    tcp_pending.fd = fd;
-    tcp_pending.len = frame_size;
-    tcp_pending.offset = 0;
+    slot->len = frame_size;
+    slot->offset = 0;
 
     /* Try to send immediately; flush will handle EAGAIN mid-write */
     return tcp_send_flush_pending(fd);
