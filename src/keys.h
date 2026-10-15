@@ -14,6 +14,8 @@
 #include <stddef.h>
 
 #define KEY_LEN 32U
+#define KEY_ERR_NOMEM (-2)  /* key_from_psk(): no memory for Argon2id (the
+                             * key itself may be fine) */
 #define KEY_B64_LEN 44U   /* base64 of 32 bytes, with padding */
 
 /* Argon2id cost for passphrases: 8 MiB, 3 passes, 1 lane */
@@ -35,7 +37,8 @@ int key_base64_decode(const char *in, uint8_t *out, size_t out_size);
  * recompute unchanged keys. Returns 0, or -1 (malformed raw key, no
  * memory).
  */
-int key_from_psk(const char *psk, uint8_t key[KEY_LEN]);
+int key_from_psk(const char *psk, uint8_t key[KEY_LEN]);  /* also
+                                                            * KEY_ERR_NOMEM */
 void key_cache_clear(void);
 
 /* Around a config reload: key_cache_mark() before the keys are derived

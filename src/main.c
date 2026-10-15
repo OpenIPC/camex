@@ -320,6 +320,19 @@ int validate_config(camex_config_t *config)
         return -1;
     }
 
+    /* Each side has its own key option: a misplaced one is a mistake */
+    if (config->mode == CAMEX_MODE_CLIENT &&
+        config->server_key_file[0] != '\0') {
+        log_message(LOG_ERR, "--server-key-file is for the server; the "
+                    "client needs --server-pubkey");
+        return -1;
+    }
+    if (config->mode == CAMEX_MODE_SERVER && config->server_pubkey[0] != '\0') {
+        log_message(LOG_ERR, "--server-pubkey is for the client; the server "
+                    "needs --server-key-file");
+        return -1;
+    }
+
     switch (config->mode) {
     case CAMEX_MODE_CLIENT:
         if (config->server_host[0] == '\0' || config->port <= 0) {

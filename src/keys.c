@@ -225,7 +225,7 @@ static int argon2id(const char *pass, uint8_t key[KEY_LEN])
     if (work == NULL) {
         log_message(LOG_ERR, "Out of memory for the passphrase key");
         relock_memory(relock);
-        return -1;
+        return KEY_ERR_NOMEM;
     }
     config.algorithm = CRYPTO_ARGON2_ID;
     config.nb_blocks = KEY_ARGON2_BLOCKS;
@@ -299,9 +299,13 @@ int key_from_psk(const char *psk, uint8_t key[KEY_LEN])
             return 0;
         }
     }
-    if (argon2id(psk, key) != 0) {
-        crypto_wipe(id, sizeof(id));
-        return -1;
+    {
+        int rc = argon2id(psk, key);
+
+        if (rc != 0) {
+            crypto_wipe(id, sizeof(id));
+            return rc;
+        }
     }
     /* A free slot first, else round robin */
     slot = NULL;

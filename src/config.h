@@ -97,7 +97,9 @@ int config_db_load_file(const char *path);
 int config_db_lookup_profile(const char *client_id, camex_profile_t *profile);
 
 /* Build the keystore from global PSK and per-client PSKs */
-void config_build_keystore(void);
+/* 0, or KEY_ERR_NOMEM (no memory for Argon2id: the keystore is empty and
+ * the caller restores the previous one or fails) */
+int config_build_keystore(void);
 
 /* Apply a profile to a camex_config_t */
 int config_apply_profile(camex_config_t *config, const camex_profile_t *profile);
