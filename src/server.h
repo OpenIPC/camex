@@ -35,6 +35,8 @@ typedef struct {
     uint8_t registered;   /* a REGISTER was accepted for this entry; until
                            * then a TCP slot is pre-auth (#9) */
     uint8_t send_nonce_prefix[4];
+    uint8_t recv_nonce_prefix[4]; /* client's nonce prefix for this session */
+    uint8_t has_recv_prefix;      /* recv_nonce_prefix is set (encrypted) */
     int tcp_fd;         /* TCP socket fd for this client (-1 = UDP) */
     uint8_t psk_key[32];
     tcp_recv_state_t recv_state;  /* per-connection partial-read tracker —
@@ -57,17 +59,32 @@ void server_expire_clients(void);
 /* Reset replay protection for a client entry */
 void server_reset_replay(server_client_t *entry);
 
+/* Remember the replay state of the entry's session before the entry is
+ * cleared or starts a new session (#7). */
+void server_forget_session(server_client_t *entry);
+
 /* Send config response */
 int server_send_config_response(const struct sockaddr_in *from,
                                 server_client_t *entry,
                                 const char *client_id);
 
-/* Handle plaintext register.
+/* Replay state of an encrypted REGISTER: the client's nonce prefix, the
+ * packet's sequence number and the key it was authenticated with (#7). */
+typedef struct {
+    uint8_t nonce_prefix[4];
+    uint64_t seq;
+    const uint8_t *key;   /* key that authenticated the REGISTER */
+} server_register_seq_t;
+
+/* Handle a REGISTER message (decrypted, or plaintext).
  * fd: current TCP connection's fd for this packet, or -1 for UDP —
- * used to keep server_client_t.tcp_fd in sync on reconnect (see camex.c). */
+ * used to keep server_client_t.tcp_fd in sync on reconnect (see camex.c).
+ * rseq: nonce prefix and sequence number of an encrypted REGISTER, NULL in
+ * plaintext mode. */
 int server_handle_plain_register(const uint8_t *buffer, size_t len,
                                  const struct sockaddr_in *from,
-                                 const uint8_t *used_key, int fd);
+                                 const uint8_t *used_key, int fd,
+                                 const server_register_seq_t *rseq);
 
 /* Try all keystore entries to decrypt a packet */
 const uint8_t *server_try_all_keys(const uint8_t *buffer, size_t len,
