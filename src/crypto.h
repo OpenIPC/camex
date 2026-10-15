@@ -71,7 +71,8 @@ const camex_crypto_t *crypto_get_ctx(void);
 void crypto_wipe_ctx(void);
 
 /* Drop the global key but keep encryption working for per-client keys:
- * the global key becomes random bytes nobody knows (#16 L3). */
+ * the key is wiped and packets without an explicit key are refused
+ * (#16 L3). */
 void crypto_drop_global(void);
 
 #endif /* CAMEX_CRYPTO_H */

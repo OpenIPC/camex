@@ -453,6 +453,7 @@ int camex_init(camex_config_t *config)
             return -1;
         }
         crypto_wipe(current_config.psk, sizeof(current_config.psk));
+        crypto_wipe(server_db.globals.psk, sizeof(server_db.globals.psk));
     }
 
     if (client_mode) {
@@ -1032,6 +1033,8 @@ void camex_run(void)
                     if (global_psk_from_config && current_config.encrypt) {
                         if (server_db.globals.psk[0] != '\0') {
                             (void)crypto_init(server_db.globals.psk);
+                            crypto_wipe(server_db.globals.psk,
+                                        sizeof(server_db.globals.psk));
                         } else {
                             log_message(LOG_NOTICE,
                                         "Global key removed by the reload");
@@ -1042,6 +1045,10 @@ void camex_run(void)
                     server_revalidate_keys();
                     server_revalidate_unknown_clients();
                 }
+                /* The copies hold passphrases and keys of the previous
+                 * config */
+                crypto_wipe(&saved_db, sizeof(saved_db));
+                crypto_wipe(saved_keystore, sizeof(saved_keystore));
             }
         }
 

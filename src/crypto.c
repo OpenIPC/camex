@@ -61,9 +61,9 @@ int crypto_init(const char *psk)
 
 void crypto_drop_global(void)
 {
-    if (get_random_bytes(crypto_ctx.psk_key, sizeof(crypto_ctx.psk_key)) != 0) {
-        log_message(LOG_WARNING, "getrandom failed while dropping the global key");
-    }
+    /* Packets without an explicit key used the global one: they are
+     * refused from now on (see has_global checks below) */
+    crypto_wipe(crypto_ctx.psk_key, sizeof(crypto_ctx.psk_key));
     crypto_ctx.has_global = 0U;
 }
 
@@ -84,6 +84,9 @@ int crypto_encrypt_packet(uint8_t type, uint64_t seq,
     uint8_t nonce[12];
     uint16_t body_len;
 
+    if (key == NULL && !crypto_ctx.has_global) {
+        return -1;  /* the global key was removed by a reload */
+    }
     if (!crypto_ctx.ready || packet == NULL || packet_len == NULL ||
         (plain_len > 0U && plain == NULL)) {
         return -1;
@@ -132,6 +135,9 @@ int crypto_decrypt_packet(const uint8_t *packet, size_t packet_len,
     size_t body_len;
     size_t hdr_size;
 
+    if (key == NULL && !crypto_ctx.has_global) {
+        return -1;  /* the global key was removed by a reload */
+    }
     if (!crypto_ctx.ready || packet == NULL || type == NULL ||
         plain_len == NULL) {
         return -1;
