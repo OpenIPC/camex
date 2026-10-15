@@ -740,7 +740,7 @@ static void drain_tcp_server_accept(void)
             if (pending_ip >= CAMEX_TCP_PREAUTH_PER_IP) {
                 net_tcp_close(client_fd);
                 net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
-                log_message(LOG_WARNING,
+                log_limited(&peer_log_limit, LOG_WARNING,
                             "Refused TCP connection from %s: too many "
                             "unregistered connections from this address",
                             peer_str);
@@ -751,7 +751,7 @@ static void drain_tcp_server_accept(void)
                  * period: refuse; the client retries */
                 net_tcp_close(client_fd);
                 net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
-                log_message(LOG_WARNING,
+                log_limited(&peer_log_limit, LOG_WARNING,
                             "Refused TCP connection from %s: too many "
                             "unregistered connections", peer_str);
                 continue;
@@ -759,7 +759,7 @@ static void drain_tcp_server_accept(void)
             if (pending >= CAMEX_TCP_PREAUTH_MAX) {
                 net_sockaddr_to_string(&oldest->addr, peer_str,
                                        sizeof(peer_str));
-                log_message(LOG_WARNING,
+                log_limited(&peer_log_limit, LOG_WARNING,
                             "Closed unregistered TCP connection from %s: "
                             "too many unregistered connections", peer_str);
                 net_tcp_close(oldest->tcp_fd);

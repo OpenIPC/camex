@@ -373,7 +373,7 @@ void server_expire_clients(void)
 
                 net_sockaddr_to_string(&server_clients[i].addr, peer,
                                        sizeof(peer));
-                log_message(LOG_INFO,
+                log_limited(&peer_log_limit, LOG_INFO,
                             "Closed TCP connection from %s: no REGISTER "
                             "within %ds", peer, CAMEX_TCP_PREAUTH_TIMEOUT);
             } else {
