@@ -351,10 +351,14 @@ void server_expire_clients(void)
         int preauth = server_clients[i].tcp_fd >= 0 &&
                       !server_clients[i].registered;
 
+        /* Pre-auth: counted from the accept, so frames that are accepted
+         * without a REGISTER (plaintext keepalive or data) cannot keep an
+         * unregistered connection open. */
         if (server_clients[i].active &&
-            difftime(now, server_clients[i].last_seen) >
-                (double)(preauth ? CAMEX_TCP_PREAUTH_TIMEOUT
-                                 : CAMEX_CLIENT_TIMEOUT)) {
+            (preauth ? difftime(now, server_clients[i].connected_at) >
+                           (double)CAMEX_TCP_PREAUTH_TIMEOUT
+                     : difftime(now, server_clients[i].last_seen) >
+                           (double)CAMEX_CLIENT_TIMEOUT)) {
             char ipbuf[INET_ADDRSTRLEN];
             struct in_addr addr;
 

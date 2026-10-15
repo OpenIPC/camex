@@ -10,6 +10,8 @@
 # Before the fix every connection took a client slot at accept() and any
 # frame refreshed it, so CAMEX_MAX_CLIENTS (256) connections locked
 # legitimate clients out for as long as the attack lasted.
+# Also: on a plaintext server, unregistered connections that keep sending
+# keepalives are still closed after the pre-auth timeout.
 #
 # Usage: ./test-e2e-tcp-preauth.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
@@ -56,13 +58,16 @@ RUN printf '#!/bin/sh\nmkdir -p /dev/net\n[ -e /dev/net/tun ] || mknod /dev/net/
         > /usr/local/bin/camex-run && chmod +x /usr/local/bin/camex-run
 ENTRYPOINT ["/usr/local/bin/camex-run"]
 EOF
-# flood.py <host> <conns>: keep <conns> TCP connections open and send a
-# well-formed frame (2-byte length + "CX2P" DATA header + junk) on each one
-# every second; reconnect whatever the server closes.
+# flood.py <host> <conns> [keepalive]: keep <conns> TCP connections open and
+# send a well-formed frame on each one every second: a "CX2P" DATA header
+# with junk, or a plaintext KEEPALIVE; reconnect whatever the server closes.
 cat > "$BUILD_CTX/flood.py" <<'EOF'
 import os, socket, sys, time
 host, n = sys.argv[1], int(sys.argv[2])
-frame = b"CX2P\x02" + os.urandom(60)
+if len(sys.argv) > 3 and sys.argv[3] == "keepalive":
+    frame = b"CX2P\x04"
+else:
+    frame = b"CX2P\x02" + os.urandom(60)
 frame = len(frame).to_bytes(2, "big") + frame
 conns = []
 while True:
@@ -117,6 +122,17 @@ docker logs "$SRV" 2>&1 | grep -qE "no REGISTER within|Closed unregistered TCP c
 check $? "unregistered connections are limited (closed or timed out)"
 ! docker logs "$SRV" 2>&1 | grep -q "No free slots"
 check $? "the server never ran out of client slots"
+
+echo "== plaintext server: unregistered connections that send keepalives"
+docker rm -f $(docker ps -aq --filter "name=^$P-") >/dev/null 2>&1
+docker run -d --name "$SRV" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    "$IMAGE" --mode server --port 5800 --transport tcp --local-cidr 10.200.0.1/24 >/dev/null
+sleep 1
+docker run -d --name "$P-ka" --network "$NET_NAME" --entrypoint python3 \
+    "$IMAGE" /flood.py "$SRV" 4 keepalive >/dev/null
+sleep 14
+docker logs "$SRV" 2>&1 | grep -q "no REGISTER within"
+check $? "keepalives do not keep an unregistered connection open"
 
 if [ "$FAILS" != 0 ]; then
     echo "--- server log (tail) ---"

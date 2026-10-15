@@ -695,10 +695,10 @@ static void drain_tcp_server_accept(void)
 
         /* Until it registers, a connection holds a pre-auth slot (#9):
          * at most CAMEX_TCP_PREAUTH_PER_IP per source address (more are
-         * refused) and CAMEX_TCP_PREAUTH_MAX in total (the oldest one is
-         * closed to make room: a real client registers within a round
-         * trip, a flood cannot keep it out), each closed after
-         * CAMEX_TCP_PREAUTH_TIMEOUT without a REGISTER. */
+         * refused) and CAMEX_TCP_PREAUTH_MAX in total (the oldest one past
+         * CAMEX_TCP_PREAUTH_GRACE is closed to make room: a real client
+         * registers within a round trip, a flood cannot keep it out),
+         * each closed CAMEX_TCP_PREAUTH_TIMEOUT after the accept. */
         {
             size_t pending = 0U;
             size_t pending_ip = 0U;
@@ -714,7 +714,9 @@ static void drain_tcp_server_accept(void)
                 if (c->addr.sin_addr.s_addr == peer.sin_addr.s_addr) {
                     ++pending_ip;
                 }
-                if (oldest == NULL || c->last_seen < oldest->last_seen) {
+                if (difftime(g_now, c->connected_at) >=
+                        (double)CAMEX_TCP_PREAUTH_GRACE &&
+                    (oldest == NULL || c->connected_at < oldest->connected_at)) {
                     oldest = c;
                 }
             }
@@ -727,7 +729,17 @@ static void drain_tcp_server_accept(void)
                             peer_str);
                 continue;
             }
-            if (pending >= CAMEX_TCP_PREAUTH_MAX && oldest != NULL) {
+            if (pending >= CAMEX_TCP_PREAUTH_MAX && oldest == NULL) {
+                /* All pre-auth connections are younger than the grace
+                 * period: refuse; the client retries */
+                net_tcp_close(client_fd);
+                net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
+                log_message(LOG_WARNING,
+                            "Refused TCP connection from %s: too many "
+                            "unregistered connections", peer_str);
+                continue;
+            }
+            if (pending >= CAMEX_TCP_PREAUTH_MAX) {
                 net_sockaddr_to_string(&oldest->addr, peer_str,
                                        sizeof(peer_str));
                 log_message(LOG_WARNING,
@@ -744,6 +756,7 @@ static void drain_tcp_server_accept(void)
                 server_clients[i].tcp_fd = client_fd;
                 server_clients[i].addr = peer;
                 server_clients[i].last_seen = g_now;
+                server_clients[i].connected_at = g_now;
                 server_clients[i].active = 1U;
                 if (get_random_bytes(
                         server_clients[i].send_nonce_prefix,
