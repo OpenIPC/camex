@@ -18,6 +18,8 @@
 typedef struct {
     uint8_t psk_key[32];
     char owner[CAMEX_CLIENT_ID_LEN];  /* client ID; empty = global key */
+    uint8_t locked;   /* the client's psk= is invalid: the entry keeps the
+                       * ID owned but matches no key */
 } camex_keystore_entry_t;
 
 /* Per-client profile (from [client X] or defaults) */
@@ -27,7 +29,7 @@ typedef struct {
     char route_cidrs[CAMEX_MAX_ROUTES][32];
     uint8_t route_count;
     int mtu;
-    char psk[64];
+    char psk[128];   /* hex: + 64 digits fits; passphrases too */
 } camex_profile_t;
 
 /* Server profile for a named client */
@@ -44,12 +46,13 @@ typedef struct {
     char tun_dev[256];
     char bind_dev[IFNAMSIZ];
     char pid_file[256];
-    char psk[64];
+    char psk[128];   /* hex: + 64 digits fits; passphrases too */
     int  port;
     int  mtu;
     uint8_t encrypt;
     uint8_t encrypt_set;
     uint8_t deny_unknown_clients;  /* allow_unknown_clients = no (#15) */
+    char server_key[64];           /* base64 private key (server_key=) */
 } camex_server_globals_t;
 
 /* Full server DB */
@@ -94,7 +97,9 @@ int config_db_load_file(const char *path);
 int config_db_lookup_profile(const char *client_id, camex_profile_t *profile);
 
 /* Build the keystore from global PSK and per-client PSKs */
-void config_build_keystore(void);
+/* 0, or KEY_ERR_NOMEM (no memory for Argon2id: the keystore is empty and
+ * the caller restores the previous one or fails) */
+int config_build_keystore(void);
 
 /* Apply a profile to a camex_config_t */
 int config_apply_profile(camex_config_t *config, const camex_profile_t *profile);

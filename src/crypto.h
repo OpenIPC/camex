@@ -34,12 +34,24 @@ typedef struct {
     uint8_t fingerprint[16];
     uint8_t ready;
     uint8_t has_global;   /* psk_key is a usable global key */
+    uint8_t server_priv[32];  /* server: its static key pair (v2) */
+    uint8_t server_pub[32];   /* server: own; client: the server's */
+    uint8_t has_server_key;   /* server_priv is set */
+    uint8_t has_server_pub;   /* server_pub is set */
 } camex_crypto_t;
 
-/* Key derivation from PSK string */
-void derive_psk_key(const char *psk, uint8_t key[32]);
+/* Key from a PSK string: hex:/base64: raw key, or Argon2id (keys.h).
+ * Returns 0, -1 (malformed key) or KEY_ERR_NOMEM (no memory for
+ * Argon2id: the key itself may be fine). */
+int derive_psk_key(const char *psk, uint8_t key[32]);
 
-/* Init crypto context */
+/* Server: its static key pair from a base64 private key.
+ * Client: the server's base64 public key. Return 0 or -1. */
+int crypto_set_server_key(const char *priv_b64);
+int crypto_set_server_pub(const char *pub_b64);
+
+/* Init crypto context with the global key; on failure the context is left
+ * as it was. Returns 0, -1 or KEY_ERR_NOMEM (see derive_psk_key()). */
 int crypto_init(const char *psk);
 
 /* AEAD encrypt (ChaCha20-Poly1305) */
@@ -74,5 +86,9 @@ void crypto_wipe_ctx(void);
  * the key is wiped and packets without an explicit key are refused
  * (#16 L3). */
 void crypto_drop_global(void);
+
+/* A failed reload puts the global key back as it was */
+void crypto_save_ctx(camex_crypto_t *out);
+void crypto_restore_ctx(const camex_crypto_t *in);
 
 #endif /* CAMEX_CRYPTO_H */

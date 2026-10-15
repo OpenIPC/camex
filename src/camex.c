@@ -11,6 +11,7 @@
 #include "server.h"
 #include "config.h"
 #include "crypto.h"
+#include "keys.h"
 #include "log.h"
 #include "main.h"
 #include "net.h"
@@ -364,6 +365,39 @@ static const char *mode_to_string(camex_mode_t mode)
     }
 }
 
+/* Protocol v2 keys (#17): the server's static key pair (--server-key-file
+ * wins over server_key= in [server]); on a client, the server's public
+ * key. */
+static int camex_load_v2_keys(void)
+{
+    int rc = 0;
+
+    if (server_mode) {
+        char text[128];
+
+        text[0] = '\0';
+        if (current_config.server_key_file[0] != '\0') {
+            if (read_key_file(current_config.server_key_file, text,
+                              sizeof(text)) != 0) {
+                log_message(LOG_ERR, "Cannot read the server key file %s",
+                            current_config.server_key_file);
+                return -1;
+            }
+        } else if (server_db.globals.server_key[0] != '\0') {
+            snprintf(text, sizeof(text), "%s", server_db.globals.server_key);
+        }
+        if (text[0] != '\0') {
+            rc = crypto_set_server_key(text);
+        }
+        crypto_wipe(text, sizeof(text));
+        crypto_wipe(server_db.globals.server_key,
+                    sizeof(server_db.globals.server_key));
+    } else if (current_config.server_pubkey[0] != '\0') {
+        rc = crypto_set_server_pub(current_config.server_pubkey);
+    }
+    return rc;
+}
+
 int camex_init(camex_config_t *config)
 {
     char local_ip[16];
@@ -453,9 +487,23 @@ int camex_init(camex_config_t *config)
         if (crypto_init(current_config.psk) != 0) {
             return -1;
         }
+        if (camex_load_v2_keys() != 0) {
+            return -1;
+        }
         crypto_wipe(current_config.psk, sizeof(current_config.psk));
         crypto_wipe(server_db.globals.psk, sizeof(server_db.globals.psk));
     }
+    /* The private key text is not needed any more (and is unused without
+     * encryption) */
+    if (!current_config.encrypt &&
+        (server_db.globals.server_key[0] != '\0' ||
+         current_config.server_key_file[0] != '\0' ||
+         current_config.server_pubkey[0] != '\0')) {
+        log_message(LOG_NOTICE, "server_key=, --server-key-file and "
+                    "--server-pubkey are ignored without encryption");
+    }
+    crypto_wipe(server_db.globals.server_key,
+                sizeof(server_db.globals.server_key));
 
     if (client_mode) {
         if (!current_config.auto_config &&
@@ -550,7 +598,9 @@ int camex_init(camex_config_t *config)
         return 0;
     }
 
-    config_build_keystore();
+    if (config_build_keystore() != 0) {
+        return -1;
+    }
 
     if (server_socket_create(current_config.bind_ip, current_config.port,
                              current_config.bind_dev) != 0) {
@@ -1024,25 +1074,36 @@ void camex_run(void)
                 camex_server_db_t saved_db = server_db;
                 static camex_keystore_entry_t saved_keystore[CAMEX_MAX_CLIENTS + 1];
                 size_t saved_keystore_count = server_keystore_count;
+                int restore;
+                camex_crypto_t saved_ctx;
 
                 reload_config = 0;
                 log_message(LOG_INFO, "Reloading config: %s",
                             current_config.config_path);
+                key_cache_mark();
+                crypto_save_ctx(&saved_ctx);
                 memcpy(saved_keystore, server_keystore,
                        sizeof(saved_keystore));
-                if (config_db_load_file(current_config.config_path) != 0) {
-                    server_db = saved_db;
-                    memcpy(server_keystore, saved_keystore,
-                           sizeof(saved_keystore));
-                    server_keystore_count = saved_keystore_count;
-                    log_message(LOG_WARNING,
-                                "Keeping previous server configuration");
-                } else {
+                restore = config_db_load_file(current_config.config_path) != 0;
+
+                if (!restore) {
                     /* The global key follows psk= in [server] when it came
                      * from there (--psk on the command line wins) */
                     if (global_psk_from_config && current_config.encrypt) {
                         if (server_db.globals.psk[0] != '\0') {
-                            (void)crypto_init(server_db.globals.psk);
+                            /* A bad new key must not leave the old one
+                             * working */
+                            int rc = crypto_init(server_db.globals.psk);
+
+                            if (rc == KEY_ERR_NOMEM) {
+                                restore = 1;   /* the key may be fine */
+                            } else if (rc != 0) {
+                                log_message(LOG_ERR, "Invalid global psk= "
+                                            "after the reload: the global "
+                                            "key is disabled until it is "
+                                            "fixed");
+                                crypto_drop_global();
+                            }
                             crypto_wipe(server_db.globals.psk,
                                         sizeof(server_db.globals.psk));
                         } else {
@@ -1051,10 +1112,41 @@ void camex_run(void)
                             crypto_drop_global();
                         }
                     }
-                    config_build_keystore();
-                    server_revalidate_keys();
-                    server_revalidate_unknown_clients();
+                    /* The server key is read at startup only */
+                    if (server_db.globals.server_key[0] != '\0') {
+                        log_message(LOG_NOTICE, "server_key= is read at "
+                                    "startup only: restart to change it");
+                        crypto_wipe(server_db.globals.server_key,
+                                    sizeof(server_db.globals.server_key));
+                    }
+                    /* Out of memory for Argon2id: nothing is wrong with
+                     * the keys, so keep the previous ones */
+                    if (!restore && config_build_keystore() != 0) {
+                        restore = 1;
+                    }
+                    if (!restore) {
+                        server_revalidate_keys();
+                        server_revalidate_unknown_clients();
+                    }
                 }
+                if (restore) {
+                    crypto_wipe(&server_db, sizeof(server_db));
+                    server_db = saved_db;
+                    memcpy(server_keystore, saved_keystore,
+                           sizeof(saved_keystore));
+                    server_keystore_count = saved_keystore_count;
+                    crypto_restore_ctx(&saved_ctx);
+                    log_message(LOG_WARNING,
+                                "Keeping previous server configuration");
+                }
+                /* Cached keys: those the new configuration does not use
+                 * go; after a rollback only those it added */
+                if (restore) {
+                    key_cache_drop_new();
+                } else {
+                    key_cache_sweep();
+                }
+                crypto_wipe(&saved_ctx, sizeof(saved_ctx));
                 /* The copies hold passphrases and keys of the previous
                  * config */
                 crypto_wipe(&saved_db, sizeof(saved_db));
@@ -1134,7 +1226,8 @@ void camex_stop(void)
     /* Wipe all key material from memory */
     crypto_wipe_ctx();
     {
-        /* Wipe per-client keys */
+        /* Wipe per-client keys and the passphrase key cache */
+        key_cache_clear();
         extern camex_keystore_entry_t server_keystore[];
         extern size_t server_keystore_count;
         for (i = 0; i < server_keystore_count; ++i) {

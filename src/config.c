@@ -8,6 +8,7 @@
 
 #include "config.h"
 #include "crypto.h"
+#include "keys.h"
 #include "log.h"
 #include "util.h"
 
@@ -163,10 +164,12 @@ int config_db_apply_kv(camex_profile_t *profile,
     return 0;
 }
 
-int config_db_load_file(const char *path)
+/* The parser proper; line is the caller's buffer, wiped by the caller
+ * on every exit (it can hold psk= and server_key= text) */
+static int config_db_parse_file(const char *path, char *line,
+                                size_t line_size)
 {
     FILE *fp;
-    char line[512];
     camex_profile_t *current = NULL;
     camex_server_profile_t *client = NULL;
     enum {
@@ -192,7 +195,7 @@ int config_db_load_file(const char *path)
         return -1;
     }
 
-    while (fgets(line, sizeof(line), fp) != NULL) {
+    while (fgets(line, (int)line_size, fp) != NULL) {
         char *content;
         char *equals;
         trim_whitespace(line);
@@ -320,6 +323,9 @@ int config_db_load_file(const char *path)
                                 val);
                     rc = -1;
                 }
+            } else if (strcmp(content, "server_key") == 0) {
+                rc = copy_option(g->server_key, sizeof(g->server_key), val,
+                                 "server key");
             } else if (strcmp(content, "psk") == 0) {
                 rc = copy_option(g->psk, sizeof(g->psk), val, "PSK");
             } else if (strcmp(content, "tun_dev") == 0) {
@@ -362,6 +368,15 @@ int config_db_load_file(const char *path)
     return 0;
 }
 
+int config_db_load_file(const char *path)
+{
+    char line[512];
+    int rc = config_db_parse_file(path, line, sizeof(line));
+
+    crypto_wipe(line, sizeof(line));
+    return rc;
+}
+
 int config_db_lookup_profile(const char *client_id, camex_profile_t *profile)
 {
     camex_server_profile_t *client;
@@ -379,16 +394,26 @@ int config_db_lookup_profile(const char *client_id, camex_profile_t *profile)
     return 0;
 }
 
-void config_build_keystore(void)
+int config_build_keystore(void)
 {
     const camex_crypto_t *ctx;
     size_t i;
+    int rc;
 
     server_keystore_count = 0U;
     memset(server_keystore, 0, sizeof(server_keystore));
 
     ctx = crypto_get_ctx();
-    if (ctx->ready && ctx->has_global) {
+    if (!ctx->ready) {
+        /* No encryption: the keys are not used, do not derive them */
+        for (i = 0U; i < CAMEX_MAX_CLIENTS; ++i) {
+            crypto_wipe(server_db.clients[i].profile.psk,
+                        sizeof(server_db.clients[i].profile.psk));
+        }
+        crypto_wipe(server_db.defaults.psk, sizeof(server_db.defaults.psk));
+        return 0;
+    }
+    if (ctx->has_global) {
         memcpy(server_keystore[0].psk_key, ctx->psk_key, 32);
         server_keystore_count = 1U;
     }
@@ -401,8 +426,32 @@ void config_build_keystore(void)
         if (server_db.clients[i].profile.psk[0] == '\0') {
             continue;
         }
-        derive_psk_key(server_db.clients[i].profile.psk,
-                       server_keystore[server_keystore_count].psk_key);
+        rc = derive_psk_key(server_db.clients[i].profile.psk,
+                            server_keystore[server_keystore_count].psk_key);
+        if (rc == KEY_ERR_NOMEM) {
+            /* Not the key's fault: the caller keeps what it had */
+            log_message(LOG_ERR, "Out of memory deriving the key of "
+                        "client %s", server_db.clients[i].client_id);
+            crypto_wipe(server_keystore, sizeof(server_keystore));
+            server_keystore_count = 0U;
+            for (i = 0U; i < CAMEX_MAX_CLIENTS; ++i) {
+                crypto_wipe(server_db.clients[i].profile.psk,
+                            sizeof(server_db.clients[i].profile.psk));
+            }
+            crypto_wipe(server_db.defaults.psk,
+                        sizeof(server_db.defaults.psk));
+            return KEY_ERR_NOMEM;
+        }
+        if (rc != 0) {
+            /* The client keeps a locked owner entry that matches no key:
+             * it cannot register until its psk= is fixed, and the global
+             * key cannot take its ID over either */
+            log_message(LOG_ERR, "Invalid psk= for client %s: it cannot "
+                        "register until the key is fixed",
+                        server_db.clients[i].client_id);
+            crypto_wipe(server_keystore[server_keystore_count].psk_key, 32);
+            server_keystore[server_keystore_count].locked = 1U;
+        }
         snprintf(server_keystore[server_keystore_count].owner,
                  sizeof(server_keystore[server_keystore_count].owner),
                  "%s", server_db.clients[i].client_id);
@@ -423,7 +472,8 @@ void config_build_keystore(void)
         size_t j;
 
         for (j = 0U; j < i; ++j) {
-            if (memcmp(server_keystore[i].psk_key,
+            if (!server_keystore[i].locked && !server_keystore[j].locked &&
+                memcmp(server_keystore[i].psk_key,
                        server_keystore[j].psk_key, 32) == 0) {
                 log_message(LOG_WARNING,
                             "Client %s has the same psk as %s",
@@ -437,6 +487,7 @@ void config_build_keystore(void)
 
     log_message(LOG_INFO, "Server keystore: %u PSK(s) loaded",
                 (unsigned)server_keystore_count);
+    return 0;
 }
 
 int config_apply_profile(camex_config_t *config, const camex_profile_t *profile)

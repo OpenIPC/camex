@@ -9,6 +9,7 @@
 #include "util.h"
 #include "camex.h"
 #include "log.h"
+#include "monocypher.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -21,6 +22,7 @@
 #ifndef _WIN32
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 #else
@@ -442,5 +444,55 @@ int ipv4_parse_endpoints(const uint8_t *packet, size_t len,
 
     memcpy(src_ip, packet + 12, sizeof(*src_ip));
     memcpy(dst_ip, packet + 16, sizeof(*dst_ip));
+    return 0;
+}
+
+int read_key_file(const char *path, char *out, size_t out_size)
+{
+    FILE *fp;
+    char line[256];
+    char *p;
+    size_t len;
+
+    fp = fopen(path, "r");
+    if (fp == NULL) {
+        return -1;
+    }
+    /* No stdio buffer: it would keep a copy of the key after fclose() */
+    setvbuf(fp, NULL, _IONBF, 0);
+#ifndef _WIN32
+    {
+        struct stat st;
+
+        /* Anyone who reads it (and knows a PSK) can pose as the server */
+        if (fstat(fileno(fp), &st) == 0 && (st.st_mode & 077) != 0) {
+            log_message(LOG_WARNING, "%s can be read by other users: "
+                        "chmod 600 it", path);
+        }
+    }
+#endif
+    if (fgets(line, sizeof(line), fp) == NULL) {
+        fclose(fp);
+        return -1;
+    }
+    fclose(fp);
+    p = line;
+    while (*p == ' ' || *p == '\t') {
+        ++p;
+    }
+    if (strncmp(p, "server_key=", 11) == 0) {
+        p += 11;
+    }
+    len = strlen(p);
+    while (len > 0U && (p[len - 1U] == '\n' || p[len - 1U] == '\r' ||
+                        p[len - 1U] == ' ' || p[len - 1U] == '\t')) {
+        p[--len] = '\0';
+    }
+    if (len == 0U || len >= out_size) {
+        crypto_wipe(line, sizeof(line));
+        return -1;
+    }
+    memcpy(out, p, len + 1U);
+    crypto_wipe(line, sizeof(line));
     return 0;
 }

@@ -8,6 +8,7 @@ tests/test_net_tcp
 tests/test_proto
 tests/test_packet
 tests/test_noise
+tests/test_keys
 tests/test_log
 
 # IDE
