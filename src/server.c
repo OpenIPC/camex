@@ -438,6 +438,34 @@ static int server_auto_pool_take(const server_client_t *entry, uint8_t *octet)
     return -1;
 }
 
+void server_revalidate_unknown_clients(void)
+{
+    size_t i;
+
+    if (!server_db.globals.deny_unknown_clients) {
+        return;
+    }
+    /* After a reload that set allow_unknown_clients = no, auto clients
+     * whose ID is not in the file lose their session (#15). */
+    for (i = 0U; i < CAMEX_MAX_CLIENTS; ++i) {
+        server_client_t *c = &server_clients[i];
+
+        if (!c->active || !c->auto_client ||
+            config_db_find_client(c->client_id) != NULL) {
+            continue;
+        }
+        log_message(LOG_NOTICE,
+                    "Ended session of client %s: unknown client ID "
+                    "(allow_unknown_clients = no)", c->client_id);
+        if (c->tcp_fd >= 0) {
+            net_tcp_close(c->tcp_fd);
+        }
+        server_forget_session(c);
+        memset(c, 0, sizeof(*c));
+        c->tcp_fd = -1;
+    }
+}
+
 int server_send_config_response(const struct sockaddr_in *from,
                                 server_client_t *entry,
                                 const char *client_id)
@@ -465,7 +493,8 @@ int server_send_config_response(const struct sockaddr_in *from,
             /* Reuse existing auto-IP if client already has one */
             if (entry->ip_be != 0U &&
                 server_find_auto_ip_octet(entry->ip_be, &octet) == 0 &&
-                octet >= AUTO_POOL_FIRST && octet <= AUTO_POOL_LAST) {
+                octet >= AUTO_POOL_FIRST && octet <= AUTO_POOL_LAST &&
+                profile_owner_of_ip(entry->ip_be) == NULL) {
                 /* Keep the same IP */
             } else if (server_auto_pool_take(entry, &octet) != 0) {
                 log_message(LOG_WARNING,
@@ -753,6 +782,7 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
                                  const server_register_seq_t *rseq)
 {
     server_register_state_t rstate;
+    int fresh_entry = 0;
     char message[CAMEX_CONTROL_MAX];
     char local_ip[16];
     char client_id[CAMEX_CLIENT_ID_LEN];
@@ -864,10 +894,12 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
                                 client_id);
                     return -1;
                 }
+                fresh_entry = 1;
             }
             entry->addr = *from;
             entry->last_seen = g_now;
         }
+        entry->auto_client = 1U;
         snprintf(entry->client_id, sizeof(entry->client_id), "%s", client_id);
         if (rstate.live != entry) {
             server_begin_session(entry, rseq, &rstate);
@@ -894,6 +926,14 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
             }
         }
         if (server_send_config_response(from, entry, client_id) != 0) {
+            /* No configuration (e.g. the auto pool is full): a slot taken
+             * for this REGISTER must not stay behind, or failed attempts
+             * fill the table and evict live clients (#15). */
+            if (fresh_entry) {
+                server_forget_session(entry);
+                memset(entry, 0, sizeof(*entry));
+                entry->tcp_fd = -1;
+            }
             return -1;
         }
         log_message(LOG_INFO, "Registered auto client %s", client_id);

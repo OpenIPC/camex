@@ -9,8 +9,12 @@
 #    pool must hand out only .2-.254, never the same address twice, and
 #    then report that it is full. Before the fix it handed out .255 and
 #    then wrapped to .2 while that address was still in use.
+#    Failed registrations after that must not free addresses by evicting
+#    live clients.
 # 2. Server with allow_unknown_clients=no: a listed client ID gets its
 #    configuration, an unlisted one gets nothing.
+# 3. A reload that switches to allow_unknown_clients=no ends the sessions
+#    of unlisted auto clients.
 #
 # Usage: ./test-e2e-auto-pool.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
@@ -105,6 +109,9 @@ dups=$(awk '$2 != "-" { print $2 }' "$BUILD_CTX/pool.txt" | sort | uniq -d | wc 
 [ "$assigned" = 253 ]; check $? "the whole pool .2-.254 is used (253 addresses)"
 docker logs "$P-srv1" 2>&1 | grep -q "Auto pool .* is full"
 check $? "the server reports that the pool is full"
+atk "$P-srv1" $(seq -f "LATE%02g" 1 10) > "$BUILD_CTX/late.txt"
+late=$(awk '$2 != "-"' "$BUILD_CTX/late.txt" | wc -l)
+[ "$late" = 0 ]; check $? "failed registrations do not evict live clients to free addresses (got $late)"
 
 echo "== 2. allow_unknown_clients=no"
 docker run -d --name "$P-srv2" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
@@ -116,6 +123,23 @@ grep -q "^KNOWN 10.201.0.10/24$" "$BUILD_CTX/known.txt"
 check $? "a listed client ID gets its configuration"
 grep -q "^STRANGER -$" "$BUILD_CTX/known.txt"
 check $? "an unlisted client ID gets nothing"
+
+echo "== 3. reload to allow_unknown_clients=no ends unknown clients' sessions"
+sed 's/allow_unknown_clients=no/allow_unknown_clients=yes/' "$BUILD_CTX/camex.conf" > "$BUILD_CTX/yes.conf"
+docker create --name "$P-srv3" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    "$IMAGE" --mode server --port 5800 --local-cidr 10.201.0.1/24 \
+    --config /etc/camex.conf >/dev/null
+docker cp "$BUILD_CTX/yes.conf" "$P-srv3:/etc/camex.conf" >/dev/null
+docker start "$P-srv3" >/dev/null
+sleep 1
+atk "$P-srv3" GUEST > "$BUILD_CTX/guest.txt"
+! grep -q "^GUEST -$" "$BUILD_CTX/guest.txt"
+check $? "with allow_unknown_clients=yes an unlisted ID gets an address"
+docker cp "$BUILD_CTX/camex.conf" "$P-srv3:/etc/camex.conf" >/dev/null
+docker kill -s HUP "$P-srv3" >/dev/null
+sleep 2
+docker logs "$P-srv3" 2>&1 | grep -q "Ended session of client GUEST"
+check $? "after the reload to \"no\" the unlisted client's session ends"
 
 if [ "$FAILS" != 0 ]; then
     echo "--- server 1 log (tail) ---"

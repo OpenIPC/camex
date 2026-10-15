@@ -34,6 +34,7 @@ typedef struct {
     uint8_t active;
     uint8_t registered;   /* a REGISTER was accepted for this entry; until
                            * then a TCP slot is pre-auth (#9) */
+    uint8_t auto_client;  /* registered in auto mode (#15) */
     time_t connected_at;  /* TCP accept time: the pre-auth deadline counts
                            * from here, not from last_seen (#9) */
     uint8_t send_nonce_prefix[4];
@@ -60,6 +61,10 @@ void server_expire_clients(void);
 
 /* Reset replay protection for a client entry */
 void server_reset_replay(server_client_t *entry);
+
+/* After a config reload: end sessions of auto clients whose ID is not in
+ * the file when allow_unknown_clients = no (#15). */
+void server_revalidate_unknown_clients(void);
 
 /* Remember the replay state of the entry's session before the entry is
  * cleared or starts a new session (#7). */
