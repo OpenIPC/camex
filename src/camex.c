@@ -474,30 +474,35 @@ int camex_init(camex_config_t *config)
     }
 
     /* Protocol v2 is always encrypted (#17) */
-    if (crypto_init(current_config.psk) != 0 || camex_load_v2_keys() != 0) {
-        return -1;
+    {
+        int keys_ok = crypto_init(current_config.psk) == 0 &&
+                      camex_load_v2_keys() == 0;
+
+        if (keys_ok && server_mode && !crypto_get_ctx()->has_server_key) {
+            log_message(LOG_ERR, "The server needs its private key: "
+                        "--server-key-file or server_key= in [server] "
+                        "(create one with --genkey)");
+            keys_ok = 0;
+        }
+        if (keys_ok && client_mode && (!crypto_get_ctx()->has_server_pub ||
+                                       !crypto_get_ctx()->has_global)) {
+            log_message(LOG_ERR, "The client needs --psk and the server's "
+                        "public key (--server-pubkey)");
+            keys_ok = 0;
+        }
+        /* The key texts are not needed any more; on failure the derived
+         * keys go too (on Android the process outlives this start) */
+        crypto_wipe(current_config.psk, sizeof(current_config.psk));
+        crypto_wipe(server_db.globals.psk, sizeof(server_db.globals.psk));
+        crypto_wipe(server_db.globals.server_key,
+                    sizeof(server_db.globals.server_key));
+        if (!keys_ok) {
+            crypto_wipe_ctx();
+            key_cache_clear();
+            crypto_wipe(&server_db, sizeof(server_db));  /* client psk= */
+            return -1;
+        }
     }
-    crypto_wipe(current_config.psk, sizeof(current_config.psk));
-    crypto_wipe(server_db.globals.psk, sizeof(server_db.globals.psk));
-    if (server_mode && !crypto_get_ctx()->has_server_key) {
-        log_message(LOG_ERR, "The server needs its private key: "
-                    "--server-key-file or server_key= in [server] "
-                    "(create one with --genkey)");
-        return -1;
-    }
-    if (client_mode && (!crypto_get_ctx()->has_server_pub ||
-                        !crypto_get_ctx()->has_global)) {
-        log_message(LOG_ERR, "The client needs --psk and the server's "
-                    "public key (--server-pubkey)");
-        return -1;
-    }
-    /* The private key text is not needed any more (and is unused without
-     * encryption) */
-    if (!current_config.encrypt && server_db.globals.server_key[0] != '\0') {
-        log_message(LOG_NOTICE, "server_key= is ignored without encryption");
-    }
-    crypto_wipe(server_db.globals.server_key,
-                sizeof(server_db.globals.server_key));
 
     if (client_mode) {
         if (!current_config.auto_config &&

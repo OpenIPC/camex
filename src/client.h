@@ -31,6 +31,8 @@ typedef struct {
     time_t last_keepalive;    /* last keepalive sent */
     uint8_t config_received;  /* auto mode: CONFIG applied */
     uint8_t established;      /* a session has been set up since connect */
+    uint8_t confirm_pending;  /* the server has not answered on cur yet:
+                               * keepalives repeat until it does */
 } client_state_t;
 
 extern client_state_t client_state;

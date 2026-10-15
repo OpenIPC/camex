@@ -50,6 +50,7 @@
 #define V2_REJECT_AFTER_MSGS ((uint64_t)1 << 60)
 #define V2_PREV_SESSION_GRACE 30   /* seconds an old session still receives */
 #define V2_HANDSHAKE_RETRY 5       /* seconds between INIT retransmissions */
+#define V2_REKEY_TIMEOUT 90        /* a rekey unanswered this long: reconnect */
 
 typedef struct {
     uint64_t max;

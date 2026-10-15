@@ -194,9 +194,11 @@ static int client_handle_resp(const uint8_t *buffer, size_t len)
 
     client_state.last_recv = g_now;
     client_state.established = 1U;
+    client_state.confirm_pending = 1U;
     reconnect_backoff = 0;
     /* The server sends on a new session only after the first packet on
-     * it: confirm at once */
+     * it: confirm at once (and again in client_tick() until the server
+     * answers on it) */
     {
         uint8_t ka[V2_OVERHEAD];
         size_t ka_len = session_seal(&client_state.cur, NULL, 0U, ka,
@@ -249,6 +251,9 @@ int client_handle_net_packet(const uint8_t *buffer, size_t len)
         return -1;
     }
     client_state.last_recv = g_now;
+    if (s == &client_state.cur) {
+        client_state.confirm_pending = 0U;
+    }
     reconnect_backoff = 0;
     if (plain_len == 0U) {
         return 0;   /* keepalive answer */
@@ -488,6 +493,19 @@ void client_tick(void)
         return;
     }
 
+    /* A rekey that gets no answer while the old session still works
+     * (handshakes blocked, say) must not keep the old keys forever */
+    if (client_state.established && client_state.hs_pending &&
+        difftime(g_now, client_state.hs_started) >= V2_REKEY_TIMEOUT) {
+        log_message(LOG_ERR, "Session renewal got no answer from %s:%d "
+                    "for %ds — reconnecting", current_config.server_host,
+                    current_config.port, V2_REKEY_TIMEOUT);
+        client_link_up = 0U;
+        client_state.last_recv = 0;
+        client_reconnect();
+        return;
+    }
+
     /* Handshake retransmission (a new INIT, new ephemeral key) */
     if (client_state.hs_pending &&
         difftime(g_now, client_state.hs_sent) >= V2_HANDSHAKE_RETRY) {
@@ -511,10 +529,15 @@ void client_tick(void)
 
     /* Keepalive: an empty DATA packet. The interval is capped at half the
      * server timeout, so an idle client never times out between probes;
-     * with --keepalive 0 it is half the server's client timeout. */
+     * with --keepalive 0 it is half the server's client timeout. Until the
+     * server answers on a new session (its confirmation may be lost), one
+     * goes every V2_HANDSHAKE_RETRY seconds: the server drops a session
+     * nobody confirmed after V2_PREV_SESSION_GRACE. */
     if (client_state.cur.valid &&
         difftime(g_now, client_state.last_keepalive) >=
-            (double)client_keepalive_interval()) {
+            (client_state.confirm_pending
+                 ? (double)V2_HANDSHAKE_RETRY
+                 : (double)client_keepalive_interval())) {
         uint8_t packet[V2_OVERHEAD];
         size_t packet_len = session_seal(&client_state.cur, NULL, 0U, packet,
                                          sizeof(packet));

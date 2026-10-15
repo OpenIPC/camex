@@ -725,7 +725,12 @@ static server_client_t *server_entry_for(const char *client_id,
             }
             server_adopt_tcp(by_ip, fd);
             entry = by_ip;
-        } else if (by_addr != NULL) {
+        } else if (by_addr != NULL && (fd >= 0 || !by_addr->cur.valid)) {
+            /* The same connection or address, without a working session:
+             * a client that changed its address. A UDP entry that has one
+             * is not taken over by a handshake for another address (a
+             * forged source plus a replayed message 1 could otherwise cut
+             * that client off): such a handshake gets a new entry. */
             entry = by_addr;
         } else {
             entry = server_alloc_client();
@@ -906,14 +911,9 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         }
         if (server_build_config(entry, client_id, local_ip, reply,
                                 sizeof(reply)) != 0) {
-            /* No configuration (e.g. the auto pool is full): a slot taken
-             * for this handshake must not stay behind (#15) */
-            if (fresh) {
-                crypto_wipe(entry, sizeof(*entry));
-                entry->tcp_fd = -1;
-            }
+            /* No configuration (e.g. the auto pool is full) */
             noise_wipe(&hs);
-            return -1;
+            goto fail;
         }
     } else {
         snprintf(reply, sizeof(reply), "%s OK VER=%u\n", CAMEX_CTRL_WORD,
@@ -923,12 +923,12 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     /* Message 2 */
     if (get_random_bytes(e_seed, sizeof(e_seed)) != 0) {
         noise_wipe(&hs);
-        return -1;
+        goto fail;
     }
     server_index = server_new_index();
     if (server_index == 0U) {
         noise_wipe(&hs);
-        return -1;
+        goto fail;
     }
     memcpy(resp, CAMEX_MAGIC, 4);
     resp[4] = V2_TYPE_RESP;
@@ -940,7 +940,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     crypto_wipe(e_seed, sizeof(e_seed));
     if (resp_len == 0U) {
         noise_wipe(&hs);
-        return -1;
+        goto fail;
     }
     noise_split(&hs, c1, c2);
     noise_wipe(&hs);
@@ -965,11 +965,11 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     if (entry->tcp_fd >= 0) {
         if (net_tcp_send_frame(entry->tcp_fd, resp,
                                V2_RESP_HDR + resp_len) < 0) {
-            return -1;
+            goto fail;
         }
     } else if (net_send_payload(net_fd, from, resp,
                                 V2_RESP_HDR + resp_len) < 0) {
-        return -1;
+        goto fail;
     }
     if (first) {
         if (auto_request) {
@@ -979,6 +979,15 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         }
     }
     return 0;
+
+fail:
+    /* A slot taken for this handshake must not stay behind (#15); entries
+     * that existed before keep their working sessions */
+    if (fresh) {
+        crypto_wipe(entry, sizeof(*entry));
+        entry->tcp_fd = -1;
+    }
+    return -1;
 }
 
 /* DATA: find the session by the receiver index, open it, forward */
