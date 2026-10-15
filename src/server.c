@@ -13,6 +13,7 @@
 #include "util.h"
 #include "proto.h"
 #include "net.h"
+#include "packet.h"
 #include "tun.h"
 #include "config.h"
 #include "camex.h"
@@ -1046,10 +1047,8 @@ int server_forward_packet(const uint8_t *packet, size_t len,
 
     dst = server_find_by_ip(dst_ip_be);
     if (dst == NULL) {
-        if (tun_fd >= 0) {
-            return tun_write_packet(packet, len);
-        }
-        return -1;
+        /* Not a client: the packet is for the server's own network */
+        return packet_write(packet, len);
     }
 
     dst->last_seen = (g_now != 0) ? g_now : time(NULL);
