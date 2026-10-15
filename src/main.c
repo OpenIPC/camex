@@ -591,6 +591,8 @@ int main(int argc, char *argv[])
             "SECURITY WARNING: mlockall failed (%s)"
             " — sensitive key material may be swapped to disk\n",
             strerror(errno));
+    } else {
+        key_set_memory_locked(1);
     }
     /* Line-buffered output for predictable log ordering */
     setlinebuf(stdout);

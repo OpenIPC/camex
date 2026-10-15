@@ -1139,10 +1139,13 @@ void camex_run(void)
                     log_message(LOG_WARNING,
                                 "Keeping previous server configuration");
                 }
-                /* Cached keys of the rejected configuration go as well
-                 * (those of the kept one come back from Argon2id if a
-                 * later reload needs them) */
-                key_cache_sweep();
+                /* Cached keys: those the new configuration does not use
+                 * go; after a rollback only those it added */
+                if (restore) {
+                    key_cache_drop_new();
+                } else {
+                    key_cache_sweep();
+                }
                 crypto_wipe(&saved_ctx, sizeof(saved_ctx));
                 /* The copies hold passphrases and keys of the previous
                  * config */

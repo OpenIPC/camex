@@ -34,11 +34,10 @@ int key_base64_decode(const char *in, uint8_t *out, size_t out_size);
  *   "hex:<64 hex digits>" or "base64:<44 chars>" — a raw 32-byte key;
  *   anything else — a passphrase, stretched with Argon2id.
  * Argon2id results are cached by passphrase, so a config reload does not
- * recompute unchanged keys. Returns 0, or -1 (malformed raw key, no
- * memory).
+ * recompute unchanged keys. Returns 0, -1 (malformed or all-zero raw
+ * key) or KEY_ERR_NOMEM (no memory for Argon2id).
  */
-int key_from_psk(const char *psk, uint8_t key[KEY_LEN]);  /* also
-                                                            * KEY_ERR_NOMEM */
+int key_from_psk(const char *psk, uint8_t key[KEY_LEN]);
 void key_cache_clear(void);
 
 /* Around a config reload: key_cache_mark() before the keys are derived
@@ -46,6 +45,13 @@ void key_cache_clear(void);
  * that the new configuration no longer uses */
 void key_cache_mark(void);
 void key_cache_sweep(void);
+/* A rolled-back reload instead: wipes only the keys it added, so the kept
+ * configuration's keys stay cached */
+void key_cache_drop_new(void);
+
+/* The process locked its memory (mlockall): Argon2id may unlock it for its
+ * work area and locks it again. Otherwise memory locking is left alone. */
+void key_set_memory_locked(int locked);
 
 /* 32-byte value in base64 (public key, private key) */
 int key_parse_b64(const char *text, uint8_t key[KEY_LEN]);
