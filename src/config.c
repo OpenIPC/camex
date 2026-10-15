@@ -388,7 +388,7 @@ void config_build_keystore(void)
     memset(server_keystore, 0, sizeof(server_keystore));
 
     ctx = crypto_get_ctx();
-    if (ctx->ready) {
+    if (ctx->ready && ctx->has_global) {
         memcpy(server_keystore[0].psk_key, ctx->psk_key, 32);
         server_keystore_count = 1U;
     }

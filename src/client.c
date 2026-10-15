@@ -108,10 +108,10 @@ int client_handle_net_packet(const uint8_t *buffer, size_t len)
                                   NULL) != 0) {
             char peer[64];
             net_sockaddr_to_string(&server_addr, peer, sizeof(peer));
-            log_message(LOG_WARNING,
-                        "Crypto error: failed to decrypt packet "
-                        "from server %s (len=%u)",
-                        peer, (unsigned)len);
+            log_peer(LOG_WARNING,
+                     "Crypto error: failed to decrypt packet "
+                     "from server %s (len=%u)",
+                     peer, (unsigned)len);
             return -1;
         }
         /* Every authenticated packet goes through the replay window before
@@ -120,10 +120,10 @@ int client_handle_net_packet(const uint8_t *buffer, size_t len)
          * then times out and reconnects with a fresh window (#10). */
         if (replay_check(&client_state.recv_seq_max,
                          &client_state.recv_window, seq) != 0) {
-            log_message(LOG_WARNING,
-                        "Replay check failed for packet type %u "
-                        "(seq=%" PRIu64 ", max=%" PRIu64 ")",
-                        (unsigned)type, seq, client_state.recv_seq_max);
+            log_peer(LOG_WARNING,
+                     "Replay check failed for packet type %u "
+                     "(seq=%" PRIu64 ", max=%" PRIu64 ")",
+                     (unsigned)type, seq, client_state.recv_seq_max);
             return -1;
         }
         client_state.last_recv = g_now;
