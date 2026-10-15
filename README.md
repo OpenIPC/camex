@@ -48,6 +48,24 @@ sudo ./camex --mode client \
   --server-host vpn.example.org --port 5800
 ```
 
+### Android
+
+The app connects in auto mode: the server sends the address, routes and MTU.
+
+| Main screen | Settings |
+|---|---|
+| ![Main screen](docs/images/android-main.png) | ![Settings](docs/images/android-settings.png) |
+
+- **Server host / port** — the camex server.
+- **Client name** — the client ID, i.e. the `[client ID]` block on the server.
+- **Transport** — UDP or TCP, as on the server.
+- **Encrypt traffic** and **Pre-shared key** — `--encrypt --psk`; the key must
+  match the client's `psk=` (or the global key).
+- **Route all traffic through the tunnel** — off: only the tunnel network and
+  the server's routes go through the tunnel.
+- **Advanced** — MTU, keepalive and server timeout
+  ([screenshot](docs/images/android-settings-advanced.png)).
+
 ## Binary Sizes
 
 | Platform | Size (stripped) | UPX compressed |
