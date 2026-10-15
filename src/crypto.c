@@ -78,8 +78,16 @@ int crypto_init(const char *psk)
         return 0;
     }
 
-    if (derive_psk_key(psk, crypto_ctx.psk_key) != 0) {
-        return -1;
+    {
+        /* A bad key must not leave a partly overwritten key behind */
+        uint8_t key[32];
+
+        if (derive_psk_key(psk, key) != 0) {
+            crypto_wipe(key, sizeof(key));
+            return -1;
+        }
+        memcpy(crypto_ctx.psk_key, key, sizeof(key));
+        crypto_wipe(key, sizeof(key));
     }
     crypto_blake2b(crypto_ctx.fingerprint, sizeof(crypto_ctx.fingerprint),
                    crypto_ctx.psk_key, sizeof(crypto_ctx.psk_key));

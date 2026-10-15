@@ -1080,6 +1080,13 @@ void camex_run(void)
                             crypto_drop_global();
                         }
                     }
+                    /* The server key is read at startup only */
+                    if (server_db.globals.server_key[0] != '\0') {
+                        log_message(LOG_NOTICE, "server_key= is read at "
+                                    "startup only: restart to change it");
+                        crypto_wipe(server_db.globals.server_key,
+                                    sizeof(server_db.globals.server_key));
+                    }
                     config_build_keystore();
                     server_revalidate_keys();
                     server_revalidate_unknown_clients();

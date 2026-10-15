@@ -166,6 +166,19 @@ void key_cache_clear(void)
     key_cache_next = 0U;
 }
 
+/* Lock memory again after a temporary munlockall() */
+static void relock_memory(int relock)
+{
+#ifndef _WIN32
+    if (relock && mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+        log_message(LOG_WARNING, "SECURITY WARNING: memory could not be "
+                    "locked again after the passphrase key derivation");
+    }
+#else
+    (void)relock;
+#endif
+}
+
 static int argon2id(const char *pass, uint8_t key[KEY_LEN])
 {
     crypto_argon2_config config;
@@ -185,6 +198,7 @@ static int argon2id(const char *pass, uint8_t key[KEY_LEN])
 #endif
     if (work == NULL) {
         log_message(LOG_ERR, "Out of memory for the passphrase key");
+        relock_memory(relock);
         return -1;
     }
     config.algorithm = CRYPTO_ARGON2_ID;
@@ -199,13 +213,7 @@ static int argon2id(const char *pass, uint8_t key[KEY_LEN])
                   crypto_argon2_no_extras);
     crypto_wipe(work, (size_t)KEY_ARGON2_BLOCKS * 1024U);
     free(work);
-#ifndef _WIN32
-    if (relock) {
-        (void)mlockall(MCL_CURRENT | MCL_FUTURE);
-    }
-#else
-    (void)relock;
-#endif
+    relock_memory(relock);
     return 0;
 }
 

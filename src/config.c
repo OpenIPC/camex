@@ -407,9 +407,14 @@ void config_build_keystore(void)
         if (derive_psk_key(server_db.clients[i].profile.psk,
                            server_keystore[server_keystore_count].psk_key)
             != 0) {
-            log_message(LOG_ERR, "Ignoring the key of client %s",
+            /* The client keeps an owner entry, with a random key nobody
+             * has: it cannot register until its psk= is fixed, and the
+             * global key cannot take its ID over either */
+            log_message(LOG_ERR, "Invalid psk= for client %s: it cannot "
+                        "register until the key is fixed",
                         server_db.clients[i].client_id);
-            continue;
+            (void)get_random_bytes(
+                server_keystore[server_keystore_count].psk_key, 32);
         }
         snprintf(server_keystore[server_keystore_count].owner,
                  sizeof(server_keystore[server_keystore_count].owner),
