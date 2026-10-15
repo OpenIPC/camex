@@ -32,6 +32,10 @@ typedef struct {
     uint64_t send_seq;
     char client_id[CAMEX_CLIENT_ID_LEN];
     uint8_t active;
+    uint8_t registered;   /* a REGISTER was accepted for this entry; until
+                           * then a TCP slot is pre-auth (#9) */
+    time_t connected_at;  /* TCP accept time: the pre-auth deadline counts
+                           * from here, not from last_seen (#9) */
     uint8_t send_nonce_prefix[4];
     uint8_t recv_nonce_prefix[4]; /* client's nonce prefix for this session */
     uint8_t has_recv_prefix;      /* recv_nonce_prefix is set (encrypted) */
