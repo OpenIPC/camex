@@ -329,7 +329,14 @@ int key_from_psk(const char *psk, uint8_t key[KEY_LEN])
 int key_server_from_b64(const char *priv_b64, uint8_t priv[KEY_LEN],
                         uint8_t pub[KEY_LEN])
 {
+    static const uint8_t zero[KEY_LEN];
+
     if (key_parse_b64(priv_b64, priv) != 0) {
+        return -1;
+    }
+    /* An all-zero key is no secret (create one with --genkey) */
+    if (crypto_verify32(priv, zero) == 0) {
+        crypto_wipe(priv, KEY_LEN);
         return -1;
     }
     crypto_x25519_public_key(pub, priv);

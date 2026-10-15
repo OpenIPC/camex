@@ -1071,11 +1071,13 @@ void camex_run(void)
                 static camex_keystore_entry_t saved_keystore[CAMEX_MAX_CLIENTS + 1];
                 size_t saved_keystore_count = server_keystore_count;
                 int restore;
+                camex_crypto_t saved_ctx;
 
                 reload_config = 0;
                 log_message(LOG_INFO, "Reloading config: %s",
                             current_config.config_path);
                 key_cache_mark();
+                crypto_save_ctx(&saved_ctx);
                 memcpy(saved_keystore, server_keystore,
                        sizeof(saved_keystore));
                 restore = config_db_load_file(current_config.config_path) != 0;
@@ -1119,7 +1121,6 @@ void camex_run(void)
                         restore = 1;
                     }
                     if (!restore) {
-                        key_cache_sweep();
                         server_revalidate_keys();
                         server_revalidate_unknown_clients();
                     }
@@ -1130,9 +1131,15 @@ void camex_run(void)
                     memcpy(server_keystore, saved_keystore,
                            sizeof(saved_keystore));
                     server_keystore_count = saved_keystore_count;
+                    crypto_restore_ctx(&saved_ctx);
                     log_message(LOG_WARNING,
                                 "Keeping previous server configuration");
                 }
+                /* Cached keys of the rejected configuration go as well
+                 * (those of the kept one come back from Argon2id if a
+                 * later reload needs them) */
+                key_cache_sweep();
+                crypto_wipe(&saved_ctx, sizeof(saved_ctx));
                 /* The copies hold passphrases and keys of the previous
                  * config */
                 crypto_wipe(&saved_db, sizeof(saved_db));
