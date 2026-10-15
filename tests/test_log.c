@@ -39,9 +39,15 @@ int main(void)
         ++failures;
     }
 
-    /* The summary keeps the most severe priority among the suppressed */
+    /* The summary keeps the most severe priority among the suppressed
+     * (made deterministic: the window is the current second) */
+    limit.window = (long)time(NULL);
+    limit.count = LOG_LIMIT_BURST;
+    limit.suppressed = 1U;
+    limit.suppressed_priority = LOG_DEBUG;
     log_limited(&limit, LOG_ERR, "an error");
-    if (limit.suppressed_priority != LOG_ERR) {
+    if (limit.window == (long)time(NULL) &&
+        limit.suppressed_priority != LOG_ERR) {
         fprintf(stderr, "FAIL: suppressed priority %d, want %d\n",
                 limit.suppressed_priority, LOG_ERR);
         ++failures;

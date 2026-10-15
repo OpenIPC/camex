@@ -87,6 +87,32 @@ check $? "the server ends CAMA's session after the reload"
 ! docker exec "$P-cama" ping -c2 -W1 10.200.0.1 >/dev/null 2>&1
 check $? "CAMA's old key no longer reaches the server"
 
+echo "== L3: a reload that changes psk= in [server] ends sessions on the old global key"
+printf '[server]\nencrypt=yes\npsk=global-old\n' > "$BUILD_CTX/g.conf"
+docker create --name "$P-srvg" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    "$IMAGE" --mode server --port 5800 --local-cidr 10.202.0.1/24 \
+    --config /etc/camex.conf >/dev/null
+docker cp "$BUILD_CTX/g.conf" "$P-srvg:/etc/camex.conf" >/dev/null
+docker start "$P-srvg" >/dev/null
+sleep 1
+docker run -d --name "$P-gcli" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    "$IMAGE" --mode client --local-cidr 10.202.0.2/24 --gateway-ip 10.202.0.1 \
+    --server-host "$P-srvg" --port 5800 --encrypt --psk global-old >/dev/null
+up=1
+for _ in $(seq 1 20); do
+    docker exec "$P-gcli" ping -c1 -W1 10.202.0.1 >/dev/null 2>&1 && { up=0; break; }
+    sleep 1
+done
+check $up "a client on the global key from [server] reaches the server"
+printf '[server]\nencrypt=yes\npsk=global-new\n' > "$BUILD_CTX/g.conf"
+docker cp "$BUILD_CTX/g.conf" "$P-srvg:/etc/camex.conf" >/dev/null
+docker kill -s HUP "$P-srvg" >/dev/null
+sleep 3
+docker logs "$P-srvg" 2>&1 | grep -q "Ended session of client"
+check $? "the session on the old global key ends after the reload"
+! docker exec "$P-gcli" ping -c2 -W1 10.202.0.1 >/dev/null 2>&1
+check $? "the old global key no longer reaches the server"
+
 echo "== L1: a flood of undecryptable packets is logged a bounded number of times"
 before=$(docker logs "$SRV" 2>&1 | wc -l)
 docker run --rm --network "$NET_NAME" --entrypoint python3 "$IMAGE" -c '

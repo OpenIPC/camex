@@ -86,6 +86,10 @@ typedef int socklen_t;
 #include <iphlpapi.h>
 #endif
 
+/* The global key came from psk= in [server], not from --psk: a reload
+ * then replaces it (#16 L3). */
+static uint8_t global_psk_from_config = 0U;
+
 /* Global state */
 camex_config_t current_config;
 volatile sig_atomic_t running = 1;
@@ -427,6 +431,7 @@ int camex_init(camex_config_t *config)
             if (current_config.psk[0] == '\0' && g->psk[0] != '\0') {
                 snprintf(current_config.psk, sizeof(current_config.psk),
                          "%s", g->psk);
+                global_psk_from_config = 1U;
             }
             if (!current_config.encrypt && g->encrypt_set) {
                 current_config.encrypt = g->encrypt;
@@ -1022,6 +1027,17 @@ void camex_run(void)
                     log_message(LOG_WARNING,
                                 "Keeping previous server configuration");
                 } else {
+                    /* The global key follows psk= in [server] when it came
+                     * from there (--psk on the command line wins) */
+                    if (global_psk_from_config && current_config.encrypt) {
+                        if (server_db.globals.psk[0] != '\0') {
+                            (void)crypto_init(server_db.globals.psk);
+                        } else {
+                            log_message(LOG_NOTICE,
+                                        "Global key removed by the reload");
+                            crypto_wipe_ctx();
+                        }
+                    }
                     config_build_keystore();
                     server_revalidate_keys();
                     server_revalidate_unknown_clients();

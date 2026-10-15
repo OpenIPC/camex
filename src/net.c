@@ -268,6 +268,16 @@ int net_sock_err_is_again(void)
 /* Seconds to wait for a TCP connection to the server (#16 L7) */
 #define CAMEX_TCP_CONNECT_TIMEOUT 5
 
+/* A socket call was interrupted by a signal */
+static int net_sock_err_is_intr(void)
+{
+#ifdef _WIN32
+    return WSAGetLastError() == WSAEINTR;
+#else
+    return errno == EINTR;
+#endif
+}
+
 /* connect() on a non-blocking socket has started and is still going */
 static int net_connect_in_progress(void)
 {
@@ -713,18 +723,27 @@ int net_tcp_connect(const char *host, int port)
             tv.tv_sec = left > 0 ? (long)left : 0;
             tv.tv_usec = 0;
             ready = select(fd + 1, NULL, &wset, &eset, &tv);
-        } while (ready < 0 && errno == EINTR && running &&
+        } while (ready < 0 && net_sock_err_is_intr() && running &&
                  time(NULL) < deadline);
-        if (ready <= 0) {
-            log_message(LOG_ERR, "connect(TCP): %s",
-                        ready == 0 ? "timed out" : "interrupted");
+        if (ready == 0) {
+            log_message(LOG_ERR, "connect(TCP): timed out");
+            close(fd);
+            return -1;
+        }
+        if (ready < 0) {
+            print_errno_message(LOG_ERR, "connect(TCP): select");
             close(fd);
             return -1;
         }
         if (getsockopt(fd, SOL_SOCKET, SO_ERROR,
                        (char *)&soerr, &soerr_len) != 0 || soerr != 0) {
+#ifdef _WIN32
+            /* Winsock error codes are not C runtime errno values */
+            log_message(LOG_ERR, "connect(TCP): socket error %d", soerr);
+#else
             log_message(LOG_ERR, "connect(TCP): %s",
                         soerr != 0 ? strerror(soerr) : "getsockopt failed");
+#endif
             close(fd);
             return -1;
         }
