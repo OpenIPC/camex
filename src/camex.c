@@ -86,6 +86,10 @@ typedef int socklen_t;
 #include <iphlpapi.h>
 #endif
 
+/* Messages a peer can trigger at will (dropped packets, rejected
+ * registrations) are rate-limited (#16 L1). */
+static log_limit_t peer_log_limit;
+
 /* Global state */
 camex_config_t current_config;
 volatile sig_atomic_t running = 1;
@@ -602,7 +606,8 @@ static void drain_udp_packets(void)
                 if (server_handle_packet(buffer, (size_t)len, &from, -1) != 0) {
                     char peer[64];
                     net_sockaddr_to_string(&from, peer, sizeof(peer));
-                    log_message(LOG_WARNING, "Dropped packet from %s", peer);
+                    log_limited(&peer_log_limit, LOG_WARNING,
+                                "Dropped packet from %s", peer);
                 }
                 continue;
             }
@@ -630,7 +635,8 @@ static void drain_udp_packets(void)
                     current_config.server_host, current_config.port);
             }
             if (client_handle_net_packet(buffer, frame_len) != 0) {
-                log_message(LOG_WARNING, "Dropped packet from server");
+                log_limited(&peer_log_limit, LOG_WARNING,
+                            "Dropped packet from server");
             }
         } else if (rc < 0) {
             log_message(LOG_WARNING,
@@ -653,7 +659,8 @@ static void drain_udp_packets(void)
                     current_config.server_host, current_config.port);
             }
             if (client_handle_net_packet(buffer, (size_t)len) != 0) {
-                log_message(LOG_WARNING, "Dropped packet from server");
+                log_limited(&peer_log_limit, LOG_WARNING,
+                            "Dropped packet from server");
             }
             continue;
         }
@@ -688,6 +695,16 @@ static void drain_tcp_server_accept(void)
             continue;
         }
 
+#ifndef _WIN32
+        /* select() can only watch descriptors below FD_SETSIZE (#16 L4) */
+        if (client_fd >= FD_SETSIZE) {
+            net_tcp_close(client_fd);
+            log_limited(&peer_log_limit, LOG_WARNING,
+                        "Refused TCP connection: descriptor %d is beyond "
+                        "FD_SETSIZE", client_fd);
+            continue;
+        }
+#endif
         if (set_fd_nonblocking(client_fd) != 0) {
             net_tcp_close(client_fd);
             continue;
@@ -776,7 +793,8 @@ static void drain_tcp_client_read(int fd)
                                      &server_clients[i].addr, fd) != 0) {
                 net_sockaddr_to_string(&server_clients[i].addr,
                                        peer_str, sizeof(peer_str));
-                log_message(LOG_WARNING, "Dropped TCP packet from %s",
+                log_limited(&peer_log_limit, LOG_WARNING,
+                            "Dropped TCP packet from %s",
                             peer_str);
             }
             return;
@@ -948,6 +966,7 @@ void camex_run(void)
                                 "Keeping previous server configuration");
                 } else {
                     config_build_keystore();
+                    server_revalidate_keys();
                 }
             }
         }

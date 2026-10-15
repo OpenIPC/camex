@@ -36,4 +36,18 @@ void log_message(int priority, const char *fmt, ...)
 
 void print_errno_message(int priority, const char *what);
 
+/* Rate limit for messages that a peer can trigger at will, e.g. one per
+ * dropped packet (#16 L1): at most LOG_LIMIT_BURST messages per second per
+ * limiter; the number suppressed is logged with the next allowed one. */
+#define LOG_LIMIT_BURST 5U
+
+typedef struct {
+    long window;            /* second of the current window */
+    unsigned int count;     /* messages logged in this window */
+    unsigned int suppressed;
+} log_limit_t;
+
+void log_limited(log_limit_t *limit, int priority, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+
 #endif /* CAMEX_LOG_H */

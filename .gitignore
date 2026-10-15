@@ -6,6 +6,7 @@ src/camex
 *.o
 tests/test_net_tcp
 tests/test_proto
+tests/test_log
 
 # IDE
 .vscode/

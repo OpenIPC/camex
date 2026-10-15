@@ -265,6 +265,19 @@ int net_sock_err_is_again(void)
 #endif
 }
 
+/* Seconds to wait for a TCP connection to the server (#16 L7) */
+#define CAMEX_TCP_CONNECT_TIMEOUT 5
+
+/* connect() on a non-blocking socket has started and is still going */
+static int net_connect_in_progress(void)
+{
+#ifdef _WIN32
+    return WSAGetLastError() == WSAEWOULDBLOCK;
+#else
+    return errno == EINPROGRESS;
+#endif
+}
+
 int net_fd = -1;
 int listen_fd = -1;
 struct sockaddr_in server_addr;
@@ -403,7 +416,7 @@ void net_close(void)
 int net_send_payload(int fd, const struct sockaddr_in *to,
                      const uint8_t *data, size_t len)
 {
-    int sent;
+    ssize_t sent;
 
     if (fd < 0 || data == NULL) {
         return -1;
@@ -657,16 +670,43 @@ int net_tcp_connect(const char *host, int port)
                          OPTVAL_CAST &bufsize, sizeof(bufsize));
     }
 
-    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        print_errno_message(LOG_ERR, "connect(TCP)");
-        close(fd);
-        return -1;
-    }
-
-    /* Set nonblocking after connect completes */
+    /* Non-blocking connect with a timeout: a blocking connect() to an
+     * unreachable server stalled the event loop until the kernel gave up,
+     * which can take minutes (#16 L7). */
     if (set_fd_nonblocking(fd) != 0) {
         close(fd);
         return -1;
+    }
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        fd_set wset;
+        struct timeval tv;
+        int soerr = 0;
+        socklen_t soerr_len = sizeof(soerr);
+        int ready;
+
+        if (!net_connect_in_progress()) {
+            print_errno_message(LOG_ERR, "connect(TCP)");
+            close(fd);
+            return -1;
+        }
+        FD_ZERO(&wset);
+        FD_SET(fd, &wset);
+        tv.tv_sec = CAMEX_TCP_CONNECT_TIMEOUT;
+        tv.tv_usec = 0;
+        ready = select(fd + 1, NULL, &wset, NULL, &tv);
+        if (ready <= 0) {
+            log_message(LOG_ERR, "connect(TCP): %s",
+                        ready == 0 ? "timed out" : "select failed");
+            close(fd);
+            return -1;
+        }
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR,
+                       (char *)&soerr, &soerr_len) != 0 || soerr != 0) {
+            log_message(LOG_ERR, "connect(TCP): %s",
+                        soerr != 0 ? strerror(soerr) : "getsockopt failed");
+            close(fd);
+            return -1;
+        }
     }
 
     server_addr = addr;

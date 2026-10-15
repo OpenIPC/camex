@@ -38,6 +38,10 @@
 #define close(fd) closesocket(fd)
 #endif
 
+/* Messages a peer can trigger at will (dropped packets, rejected
+ * registrations) are rate-limited (#16 L1). */
+static log_limit_t peer_log_limit;
+
 server_client_t server_clients[CAMEX_MAX_CLIENTS];
 
 /* Dynamic IP pool for auto-config clients when no config file is loaded.
@@ -616,6 +620,57 @@ static const char *profile_owner_of_ip(uint32_t ip_be)
     return NULL;
 }
 
+static int keystore_contains(const uint8_t *key)
+{
+    size_t i;
+
+    for (i = 0U; i < server_keystore_count; ++i) {
+        if (memcmp(server_keystore[i].psk_key, key, 32) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void server_revalidate_keys(void)
+{
+    size_t i;
+
+    if (!current_config.encrypt) {
+        return;
+    }
+    /* After a config reload (SIGHUP) every live session must still be
+     * allowed with the key it registered with: a removed or changed key,
+     * or a key that now belongs to another client, ends it (#16 L3). */
+    for (i = 0U; i < CAMEX_MAX_CLIENTS; ++i) {
+        server_client_t *c = &server_clients[i];
+        const char *owner;
+        int allowed;
+
+        if (!c->active || is_zero_key(c->psk_key)) {
+            continue;
+        }
+        owner = keystore_owner(c->psk_key);
+        allowed = keystore_contains(c->psk_key) &&
+                  (c->client_id[0] == '\0' ||
+                   keystore_key_owned_by(c->psk_key, c->client_id) ||
+                   (owner[0] == '\0' && !keystore_has_owner(c->client_id)));
+        if (allowed) {
+            continue;
+        }
+        log_message(LOG_NOTICE,
+                    "Ended session of client %s: its key is no longer "
+                    "allowed after the config reload",
+                    c->client_id[0] != '\0' ? c->client_id : "(manual)");
+        if (c->tcp_fd >= 0) {
+            net_tcp_close(c->tcp_fd);
+        }
+        server_forget_session(c);
+        memset(c, 0, sizeof(*c));
+        c->tcp_fd = -1;
+    }
+}
+
 /*
  * May a REGISTER authenticated with key claim client_id / local_ip?
  * For a manual REGISTER without CLIENT_ID the owner of a per-client key
@@ -642,7 +697,7 @@ static int server_register_allowed(const uint8_t *key, char *client_id,
         if (client_id[0] != '\0' &&
             !keystore_key_owned_by(key, client_id) &&
             (!global_key || keystore_has_owner(client_id))) {
-            log_message(LOG_WARNING,
+            log_limited(&peer_log_limit, LOG_WARNING,
                         "Rejected REGISTER from %s: key does not belong "
                         "to client %s", peer, client_id);
             return -1;
@@ -661,7 +716,7 @@ static int server_register_allowed(const uint8_t *key, char *client_id,
         }
         if (client_id[0] != '\0' && profile_ip(client_id, &want) == 0 &&
             want != claimed.s_addr) {
-            log_message(LOG_WARNING,
+            log_limited(&peer_log_limit, LOG_WARNING,
                         "Rejected REGISTER from %s: client %s claims %s, "
                         "configured address differs", peer, client_id,
                         local_ip);
@@ -671,7 +726,7 @@ static int server_register_allowed(const uint8_t *key, char *client_id,
         if (ip_owner != NULL &&
             strcasecmp(ip_owner, client_id) != 0 &&
             keystore_has_owner(ip_owner)) {
-            log_message(LOG_WARNING,
+            log_limited(&peer_log_limit, LOG_WARNING,
                         "Rejected REGISTER from %s: address %s belongs "
                         "to client %s", peer, local_ip, ip_owner);
             return -1;
@@ -687,7 +742,7 @@ static void server_log_register_replay(const struct sockaddr_in *from,
     char peer[64];
 
     net_sockaddr_to_string(from, peer, sizeof(peer));
-    log_message(LOG_WARNING,
+    log_limited(&peer_log_limit, LOG_WARNING,
                 "Dropped REGISTER from %s (%s): replayed or out-of-date "
                 "sequence number", peer, who);
 }
@@ -833,7 +888,8 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
     }
 
     if (inet_pton(AF_INET, local_ip, &addr) != 1) {
-        log_message(LOG_WARNING, "Rejected invalid client IP: %s", local_ip);
+        log_limited(&peer_log_limit, LOG_WARNING,
+                    "Rejected invalid client IP: %s", local_ip);
         return -1;
     }
 
@@ -849,7 +905,7 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
             keystore_has_owner(by_ip->client_id)) {
             char peer[64];
             net_sockaddr_to_string(from, peer, sizeof(peer));
-            log_message(LOG_WARNING,
+            log_limited(&peer_log_limit, LOG_WARNING,
                         "Rejected REGISTER from %s: address %s is in use "
                         "by client %s", peer, local_ip, by_ip->client_id);
             return -1;
@@ -1003,10 +1059,10 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
 
         if (used_key == NULL) {
             net_sockaddr_to_string(from, peer, sizeof(peer));
-            log_message(LOG_WARNING,
+            log_limited(&peer_log_limit, LOG_WARNING,
                         "Dropped packet from %s: %s (type=%u, len=%u)", peer,
                         is_register ? "decryption failed with all keys"
-                                    : "no registered session for this key",
+                        : "no registered session for this key",
                         (unsigned)(len > 4U ? buffer[4] : 0U), (unsigned)len);
             return -1;
         }
@@ -1031,7 +1087,7 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
         if (src->has_recv_prefix &&
             memcmp(src->recv_nonce_prefix, buffer + 5, 4) != 0) {
             net_sockaddr_to_string(from, peer, sizeof(peer));
-            log_message(LOG_WARNING,
+            log_limited(&peer_log_limit, LOG_WARNING,
                         "Dropped packet from %s: not from the client's "
                         "current session", peer);
             return -1;
@@ -1039,7 +1095,7 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
 
         if (replay_check(&src->recv_seq_max, &src->recv_window, seq) != 0) {
             net_sockaddr_to_string(from, peer, sizeof(peer));
-            log_message(LOG_WARNING,
+            log_limited(&peer_log_limit, LOG_WARNING,
                         "Dropped packet from %s: replay check failed "
                         "(seq=%" PRIu64 ", max=%" PRIu64 ")",
                         peer, seq, src->recv_seq_max);
@@ -1054,7 +1110,7 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
 
         if (type != CAMEX_PACKET_DATA) {
             net_sockaddr_to_string(from, peer, sizeof(peer));
-            log_message(LOG_WARNING,
+            log_limited(&peer_log_limit, LOG_WARNING,
                         "Dropped packet from %s: unknown type %u",
                         peer, (unsigned)type);
             return -1;
@@ -1073,7 +1129,7 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
             a.s_addr = src_ip_be;
             inet_ntop(AF_INET, &a, claimed, sizeof(claimed));
             net_sockaddr_to_string(from, peer, sizeof(peer));
-            log_message(LOG_WARNING,
+            log_limited(&peer_log_limit, LOG_WARNING,
                         "Dropped packet from %s (client %s): source address "
                         "%s is not the client's tunnel address",
                         peer, src->client_id, claimed);

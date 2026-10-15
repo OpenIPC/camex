@@ -12,6 +12,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #ifndef _WIN32
 #include <sys/syslog.h>
 #endif
@@ -40,6 +41,33 @@ void log_message(int priority, const char *fmt, ...)
 #endif
     fprintf(stream, "%s\n", message);
     fflush(stream);
+}
+
+void log_limited(log_limit_t *limit, int priority, const char *fmt, ...)
+{
+    char message[512];
+    va_list ap;
+    long now = (long)time(NULL);
+
+    if (limit->window != now) {
+        if (limit->suppressed > 0U) {
+            log_message(priority, "(%u similar messages suppressed)",
+                        limit->suppressed);
+        }
+        limit->window = now;
+        limit->count = 0U;
+        limit->suppressed = 0U;
+    }
+    if (limit->count >= LOG_LIMIT_BURST) {
+        limit->suppressed++;
+        return;
+    }
+    limit->count++;
+
+    va_start(ap, fmt);
+    vsnprintf(message, sizeof(message), fmt, ap);
+    va_end(ap);
+    log_message(priority, "%s", message);
 }
 
 void print_errno_message(int priority, const char *what)
