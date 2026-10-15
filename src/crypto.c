@@ -98,6 +98,16 @@ int crypto_init(const char *psk)
     return 0;
 }
 
+void crypto_save_ctx(camex_crypto_t *out)
+{
+    *out = crypto_ctx;
+}
+
+void crypto_restore_ctx(const camex_crypto_t *in)
+{
+    crypto_ctx = *in;
+}
+
 void crypto_drop_global(void)
 {
     crypto_wipe(crypto_ctx.psk_key, sizeof(crypto_ctx.psk_key));

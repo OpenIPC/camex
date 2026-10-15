@@ -404,7 +404,16 @@ int config_build_keystore(void)
     memset(server_keystore, 0, sizeof(server_keystore));
 
     ctx = crypto_get_ctx();
-    if (ctx->ready && ctx->has_global) {
+    if (!ctx->ready) {
+        /* No encryption: the keys are not used, do not derive them */
+        for (i = 0U; i < CAMEX_MAX_CLIENTS; ++i) {
+            crypto_wipe(server_db.clients[i].profile.psk,
+                        sizeof(server_db.clients[i].profile.psk));
+        }
+        crypto_wipe(server_db.defaults.psk, sizeof(server_db.defaults.psk));
+        return 0;
+    }
+    if (ctx->has_global) {
         memcpy(server_keystore[0].psk_key, ctx->psk_key, 32);
         server_keystore_count = 1U;
     }

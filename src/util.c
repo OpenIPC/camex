@@ -22,6 +22,7 @@
 #ifndef _WIN32
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 #else
@@ -457,6 +458,17 @@ int read_key_file(const char *path, char *out, size_t out_size)
     if (fp == NULL) {
         return -1;
     }
+#ifndef _WIN32
+    {
+        struct stat st;
+
+        /* Anyone who reads it (and knows a PSK) can pose as the server */
+        if (fstat(fileno(fp), &st) == 0 && (st.st_mode & 077) != 0) {
+            log_message(LOG_WARNING, "%s can be read by other users: "
+                        "chmod 600 it", path);
+        }
+    }
+#endif
     if (fgets(line, sizeof(line), fp) == NULL) {
         fclose(fp);
         return -1;

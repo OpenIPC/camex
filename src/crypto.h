@@ -57,4 +57,8 @@ void crypto_wipe_ctx(void);
  * (#16 L3). */
 void crypto_drop_global(void);
 
+/* A failed reload puts the global key back as it was */
+void crypto_save_ctx(camex_crypto_t *out);
+void crypto_restore_ctx(const camex_crypto_t *in);
+
 #endif /* CAMEX_CRYPTO_H */
