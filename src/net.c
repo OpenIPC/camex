@@ -594,6 +594,15 @@ int net_tcp_listen(const char *bind_ip, int port)
         print_errno_message(LOG_ERR, "socket(TCP)");
         return -1;
     }
+#ifndef _WIN32
+    /* The event loop watches it with select() (#16 L4) */
+    if (fd >= FD_SETSIZE) {
+        log_message(LOG_ERR, "socket(TCP): descriptor %d is beyond FD_SETSIZE",
+                    fd);
+        close(fd);
+        return -1;
+    }
+#endif
 
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, OPTVAL_CAST &reuse, sizeof(reuse)) < 0) {
         print_errno_message(LOG_WARNING, "setsockopt(SO_REUSEADDR)");
@@ -701,14 +710,6 @@ int net_tcp_connect(const char *host, int port)
             close(fd);
             return -1;
         }
-#ifndef _WIN32
-        if (fd >= FD_SETSIZE) {  /* select() cannot watch it (#16 L4) */
-            log_message(LOG_ERR, "connect(TCP): descriptor %d is beyond "
-                        "FD_SETSIZE", fd);
-            close(fd);
-            return -1;
-        }
-#endif
         /* Winsock reports a failed connect in the except set, POSIX as
          * writable with SO_ERROR set. A signal does not end the wait,
          * unless it is a request to stop. */

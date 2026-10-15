@@ -1035,7 +1035,7 @@ void camex_run(void)
                         } else {
                             log_message(LOG_NOTICE,
                                         "Global key removed by the reload");
-                            crypto_wipe_ctx();
+                            crypto_drop_global();
                         }
                     }
                     config_build_keystore();

@@ -712,6 +712,19 @@ static int keystore_contains(const uint8_t *key)
     return 0;
 }
 
+static int keystore_is_global(const uint8_t *key)
+{
+    size_t i;
+
+    for (i = 0U; i < server_keystore_count; ++i) {
+        if (server_keystore[i].owner[0] == '\0' &&
+            memcmp(server_keystore[i].psk_key, key, 32) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void server_revalidate_keys(void)
 {
     size_t i;
@@ -731,10 +744,15 @@ void server_revalidate_keys(void)
             continue;
         }
         owner = keystore_owner(c->psk_key);
+        /* A session without a client ID registered with the global key
+         * (a per-client key would have named its owner): it must still be
+         * the global key, not bytes a profile now owns. */
         allowed = keystore_contains(c->psk_key) &&
-                  (c->client_id[0] == '\0' ||
-                   keystore_key_owned_by(c->psk_key, c->client_id) ||
-                   (owner[0] == '\0' && !keystore_has_owner(c->client_id)));
+                  (c->client_id[0] == '\0'
+                       ? keystore_is_global(c->psk_key)
+                       : (keystore_key_owned_by(c->psk_key, c->client_id) ||
+                          (owner[0] == '\0' &&
+                           !keystore_has_owner(c->client_id))));
         if (allowed) {
             continue;
         }

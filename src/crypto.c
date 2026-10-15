@@ -54,8 +54,17 @@ int crypto_init(const char *psk)
     crypto_blake2b(crypto_ctx.fingerprint, sizeof(crypto_ctx.fingerprint),
                    crypto_ctx.psk_key, sizeof(crypto_ctx.psk_key));
     crypto_ctx.ready = 1U;
+    crypto_ctx.has_global = 1U;
     crypto_log_fingerprint();
     return 0;
+}
+
+void crypto_drop_global(void)
+{
+    if (get_random_bytes(crypto_ctx.psk_key, sizeof(crypto_ctx.psk_key)) != 0) {
+        log_message(LOG_WARNING, "getrandom failed while dropping the global key");
+    }
+    crypto_ctx.has_global = 0U;
 }
 
 void crypto_wipe_ctx(void)

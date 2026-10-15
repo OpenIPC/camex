@@ -57,6 +57,10 @@ docker build -q -t "$IMAGE" "$BUILD_CTX" >/dev/null
 docker network create "$NET_NAME" >/dev/null
 set +e   # checks below report failures themselves
 
+running() {  # running <container>: the container is still up
+    [ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" = true ]
+}
+
 conf() {    # conf <CAMA key>: write the server config
     printf '[server]\n[client CAMA]\nlocal_cidr=10.200.0.10/24\ngateway_ip=10.200.0.1\npsk=%s\n' "$1" \
         > "$BUILD_CTX/camex.conf"
@@ -84,11 +88,12 @@ docker kill -s HUP "$SRV" >/dev/null
 sleep 3
 docker logs "$SRV" 2>&1 | grep -q "Ended session of client CAMA"
 check $? "the server ends CAMA's session after the reload"
-! docker exec "$P-cama" ping -c2 -W1 10.200.0.1 >/dev/null 2>&1
-check $? "CAMA's old key no longer reaches the server"
+running "$P-cama" && ! docker exec "$P-cama" ping -c2 -W1 10.200.0.1 >/dev/null 2>&1
+check $? "CAMA (still running) no longer reaches the server with its old key"
 
 echo "== L3: a reload that changes psk= in [server] ends sessions on the old global key"
-printf '[server]\nencrypt=yes\npsk=global-old\n' > "$BUILD_CTX/g.conf"
+CAMB='[client CAMB]\nlocal_cidr=10.202.0.11/24\ngateway_ip=10.202.0.1\npsk=key-b\n'
+printf "[server]\nencrypt=yes\npsk=global-old\n$CAMB" > "$BUILD_CTX/g.conf"
 docker create --name "$P-srvg" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" --mode server --port 5800 --local-cidr 10.202.0.1/24 \
     --config /etc/camex.conf >/dev/null
@@ -104,14 +109,29 @@ for _ in $(seq 1 20); do
     sleep 1
 done
 check $up "a client on the global key from [server] reaches the server"
-printf '[server]\nencrypt=yes\npsk=global-new\n' > "$BUILD_CTX/g.conf"
+docker run -d --name "$P-camb" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    "$IMAGE" --mode client --auto --name CAMB --server-host "$P-srvg" --port 5800 \
+    --encrypt --psk key-b >/dev/null
+up=1
+for _ in $(seq 1 20); do
+    docker exec "$P-camb" ping -c1 -W1 10.202.0.1 >/dev/null 2>&1 && { up=0; break; }
+    sleep 1
+done
+check $up "CAMB reaches the server with its own key"
+printf "[server]\nencrypt=yes\npsk=global-new\n$CAMB" > "$BUILD_CTX/g.conf"
 docker cp "$BUILD_CTX/g.conf" "$P-srvg:/etc/camex.conf" >/dev/null
 docker kill -s HUP "$P-srvg" >/dev/null
 sleep 3
 docker logs "$P-srvg" 2>&1 | grep -q "Ended session of client"
 check $? "the session on the old global key ends after the reload"
-! docker exec "$P-gcli" ping -c2 -W1 10.202.0.1 >/dev/null 2>&1
-check $? "the old global key no longer reaches the server"
+running "$P-gcli" && ! docker exec "$P-gcli" ping -c2 -W1 10.202.0.1 >/dev/null 2>&1
+check $? "the client (still running) no longer reaches the server with the old global key"
+printf "[server]\nencrypt=yes\n$CAMB" > "$BUILD_CTX/g.conf"
+docker cp "$BUILD_CTX/g.conf" "$P-srvg:/etc/camex.conf" >/dev/null
+docker kill -s HUP "$P-srvg" >/dev/null
+sleep 3
+docker exec "$P-camb" ping -c2 -W2 10.202.0.1 >/dev/null 2>&1
+check $? "after psk= is removed from [server], CAMB still works with its own key"
 
 echo "== L1: a flood of undecryptable packets is logged a bounded number of times"
 before=$(docker logs "$SRV" 2>&1 | wc -l)
@@ -120,7 +140,9 @@ import os, socket, sys
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 for _ in range(2000):
     s.sendto(b"CX2P\x02" + os.urandom(60), (sys.argv[1], 5800))
-' "$SRV"
+print("sent")
+' "$SRV" | grep -q '^sent$'
+check $? "the attacker sent 2000 packets"
 sleep 2
 lines=$(( $(docker logs "$SRV" 2>&1 | wc -l) - before ))
 [ "$lines" -lt 100 ]; check $? "2000 bad packets produce fewer than 100 log lines (got $lines)"
