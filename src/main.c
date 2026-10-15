@@ -428,7 +428,8 @@ void print_usage(const char *progname)
 
     printf("Common options:\n");
     printf("  -t, --mtu <size>     Tunnel MTU, 576-9000 (default: 1500)\n");
-    printf("  -k, --psk <pass>     Passphrase stretched into a 32-byte key\n");
+    printf("  -k, --psk <pass>     Passphrase hashed into a 32-byte key (no\n"
+           "                       stretching: use a long random one)\n");
     printf("  -e, --encrypt        Enable ChaCha20-Poly1305 encryption\n");
     printf("  -P, --pid-file <path> Write PID to file on startup\n");
     printf("  -R, --transport <t>  Transport protocol: udp (default) or tcp\n");
