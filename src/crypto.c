@@ -53,6 +53,15 @@ int crypto_set_server_pub(const char *pub_b64)
                     "Invalid server public key (need base64 of 32 bytes)");
         return -1;
     }
+    {
+        static const uint8_t zero[32];
+
+        if (crypto_verify32(crypto_ctx.server_pub, zero) == 0) {
+            log_message(LOG_ERR, "Invalid server public key: all zero "
+                        "(take public_key= from camex --genkey)");
+            return -1;
+        }
+    }
     crypto_ctx.has_server_pub = 1U;
     return 0;
 }

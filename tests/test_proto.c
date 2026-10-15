@@ -9,6 +9,7 @@
 #include "camex.h"
 #include "client.h"
 #include "config.h"
+#include "crypto.h"
 #include "proto.h"
 
 #include <stdio.h>
@@ -129,6 +130,12 @@ int main(void)
             }
             unlink(path);
         }
+    }
+
+    /* The server public key must not be all zero */
+    if (crypto_set_server_pub("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=") == 0) {
+        fprintf(stderr, "FAIL: an all-zero server public key was accepted\n");
+        ++failures;
     }
 
     if (failures != 0) {

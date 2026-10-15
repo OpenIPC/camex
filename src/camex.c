@@ -88,9 +88,10 @@ typedef int socklen_t;
 #include <iphlpapi.h>
 #endif
 
-/* The global key came from psk= in [server], not from --psk: a reload
- * then replaces it (#16 L3). */
-static uint8_t global_psk_from_config = 0U;
+/* The global key came from --psk: psk= in [server] is then ignored, also
+ * on reloads. Otherwise a reload sets, replaces or removes the global key
+ * from psk= (#16 L3), also on a server started without one. */
+static uint8_t global_psk_from_cli = 0U;
 
 /* Global state */
 camex_config_t current_config;
@@ -456,10 +457,10 @@ int camex_init(camex_config_t *config)
                 snprintf(current_config.pid_file,
                          sizeof(current_config.pid_file), "%s", g->pid_file);
             }
-            if (current_config.psk[0] == '\0' && g->psk[0] != '\0') {
+            global_psk_from_cli = current_config.psk[0] != '\0';
+            if (!global_psk_from_cli && g->psk[0] != '\0') {
                 snprintf(current_config.psk, sizeof(current_config.psk),
                          "%s", g->psk);
-                global_psk_from_config = 1U;
             }
             if (current_config.mtu == CAMEX_DEFAULT_MTU && g->mtu > 0) {
                 current_config.mtu = g->mtu;
@@ -1083,9 +1084,12 @@ void camex_run(void)
                 restore = config_db_load_file(current_config.config_path) != 0;
 
                 if (!restore) {
-                    /* The global key follows psk= in [server] when it came
-                     * from there (--psk on the command line wins) */
-                    if (global_psk_from_config) {
+                    /* The global key follows psk= in [server] unless it
+                     * came from --psk (the command line wins) */
+                    if (global_psk_from_cli) {
+                        crypto_wipe(server_db.globals.psk,
+                                    sizeof(server_db.globals.psk));
+                    } else {
                         if (server_db.globals.psk[0] != '\0') {
                             /* A bad new key must not leave the old one
                              * working */
@@ -1102,7 +1106,7 @@ void camex_run(void)
                             }
                             crypto_wipe(server_db.globals.psk,
                                         sizeof(server_db.globals.psk));
-                        } else {
+                        } else if (crypto_get_ctx()->has_global) {
                             log_message(LOG_NOTICE,
                                         "Global key removed by the reload");
                             crypto_drop_global();
