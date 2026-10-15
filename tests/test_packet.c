@@ -82,6 +82,17 @@ int main(void)
         ++failures;
     }
 
+    /* close without open does not reach the backend */
+    mem_opened = 7;
+    packet_backend_set(&mem_backend);
+    packet_close();
+    if (mem_opened != 7) {
+        fprintf(stderr, "FAIL: close reached a backend that was not open\n");
+        ++failures;
+    }
+    mem_opened = 0;
+    packet_backend_set(NULL);
+
     if (packet_backend_set(&mem_backend) != 0) {
         fprintf(stderr, "FAIL: could not select a backend\n");
         ++failures;

@@ -87,6 +87,11 @@ intptr_t packet_fd(void)
 
 void packet_close(void)
 {
+    /* Nothing to close when the backend was never opened (e.g. a server
+     * without a tunnel address) */
+    if (!backend_open) {
+        return;
+    }
     backend->close();
     backend_open = 0;
 }
