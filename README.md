@@ -249,15 +249,17 @@ protects before exposing it to an untrusted network.
 
 ### With `--encrypt`
 
-- Every packet (header and payload) is authenticated and encrypted with
-  ChaCha20-Poly1305. Packets that fail authentication are dropped.
+- Every packet is authenticated with ChaCha20-Poly1305: the payload is
+  encrypted, the header (packet type, nonce, length, sequence number) is
+  authenticated but readable. Packets that fail authentication are dropped.
 - **Keys.** The key is derived from the passphrase (`--psk` or `psk=`) with a
   single BLAKE2b-256 hash, without salt or stretching (#14). Anyone who captures
   traffic can test passphrase guesses offline, so use a long random passphrase
   (32+ characters from a password generator), not a word.
 - **Per-client keys.** A `psk=` in a `[client ID]` block gives that client its
   own key; it can register only with it, and the global key no longer works for
-  that ID. See [Notes](#notes) for the exact rules.
+  that ID (unless both passphrases are the same, which makes them one key). See
+  [Notes](#notes) for the exact rules.
 - **Source addresses.** A client may send only from its own tunnel address;
   packets with another source address are dropped.
 - **Replay protection.** Each session has a 64-packet sliding window. A session
@@ -289,7 +291,8 @@ protects before exposing it to an untrusted network.
   address, 32 in total) and closed after 10 s.
 - Log messages that a peer can trigger (dropped packets, rejected
   registrations) are rate-limited; the number suppressed is logged.
-- The auto pool hands out `10.200.0.2`–`.254` and never the same address twice;
+- The auto pool hands out `10.200.0.2`–`.254` and never gives one address to two
+  live clients (an expired client's address is handed out again);
   `allow_unknown_clients=no` serves only IDs listed in the config file.
 
 ### Recommended deployment
@@ -301,13 +304,13 @@ protects before exposing it to an untrusted network.
 - Run the server with only the capabilities it needs (`CAP_NET_ADMIN`), and
   firewall the tunnel interface.
 
-### Kernel module
+### Kernel module permissions
 
 `/dev/camex` is created `0600`, and `open()` requires `CAP_NET_ADMIN`; see
 [Key Design Decisions](#key-design-decisions). The module does no encryption:
 encryption is done by the userspace app.
 
-### Android
+### Android app
 
 The app uses `VpnService`, so Android shows the VPN key icon while the tunnel is
 up; there is no way around that with `VpnService` (a client without TUN is
