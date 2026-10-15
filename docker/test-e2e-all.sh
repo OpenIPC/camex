@@ -2,9 +2,10 @@
 #
 # Copyright (c) OpenIPC  https://openipc.org  MIT License
 #
-# test-e2e-all.sh — full E2E test for 4 modes (UDP/TCP × plain/encrypted)
+# test-e2e-all.sh — full E2E test for UDP and TCP (protocol v2 is always
+# encrypted)
 #
-# Tests:  UDP plain, TCP plain, UDP encrypted, TCP encrypted
+# Tests:  UDP, TCP
 # Each mode runs for 120 seconds, logs are analyzed for reconnects.
 #
 
@@ -122,16 +123,14 @@ run_test() {
         transport_str="UDP"
     fi
 
-    log_section "Mode: $transport_str $([ "$encrypt" = "encrypt" ] && echo "ENCRYPTED" || echo "PLAINTEXT")"
+    log_section "Mode: $transport_str"
 
-    if [ "$encrypt" = "encrypt" ]; then
-        extra_args="$extra_args --encrypt --psk $PASS"
-    fi
+    extra_args="$extra_args --psk $PASS"
 
     # Start server
     run_docker "Server" "$SERVER_NAME" "" \
         --mode server --port 5800 --bind-ip 0.0.0.0 \
-        $extra_args \
+        $SERVER_KEY_ARGS $extra_args \
         --pid-file /tmp/camex.pid || { FAILED_MODES="$FAILED_MODES $mode"; return 1; }
 
     SERVER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$SERVER_NAME")
@@ -141,7 +140,7 @@ run_test() {
     run_docker "Client" "$CLIENT_NAME" "" \
         --mode client --auto --name "${transport_str}01" \
         --server-host "$SERVER_NAME" --port 5800 \
-        $extra_args \
+        --server-pubkey "$SERVER_PUBKEY" $extra_args \
         --pid-file /tmp/camex.pid || { FAILED_MODES="$FAILED_MODES $mode"; return 1; }
 
     if [ "$transport" = "tcp" ]; then
@@ -180,7 +179,7 @@ run_test() {
 # ── main ──────────────────────────────────────────────────────────────
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  camex E2E Full Matrix Test — 4 modes × ${DURATION}s each"
+echo "  camex E2E Full Matrix Test — 2 modes × ${DURATION}s each"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Binary: $CAMEX_BINARY"
 echo ""
@@ -197,6 +196,8 @@ echo ""
 echo "▶ Building Docker image…"
 BUILD_DIR=$(mktemp -d /tmp/camex-e2e-build-XXXXXX)
 cp "$CAMEX_BINARY" "$BUILD_DIR/camex"
+. "$SCRIPT_DIR/lib-keys.sh"
+gen_server_key "$BUILD_DIR" "$CAMEX_BINARY" || { echo "ERROR: cannot create a server key"; exit 1; }
 cp "$SCRIPT_DIR/Dockerfile.smoke" "$BUILD_DIR/"
 docker build -t camex:e2e -f "$BUILD_DIR/Dockerfile.smoke" "$BUILD_DIR" > /dev/null 2>&1
 rm -rf "$BUILD_DIR"
@@ -210,16 +211,10 @@ echo "▶ Creating Docker network…"
 docker network create "$NET_NAME" > /dev/null
 echo "  Network: $NET_NAME"
 
-# ─── Mode 1: UDP plain ────────────────────────────────────────────────
-run_test "udp-plain" "udp" "plain"
-
-# ─── Mode 2: TCP plain ────────────────────────────────────────────────
-run_test "tcp-plain" "tcp" "plain"
-
-# ─── Mode 3: UDP encrypted ────────────────────────────────────────────
+# ─── UDP ──────────────────────────────────────────────────────────────
 run_test "udp-encrypt" "udp" "encrypt"
 
-# ─── Mode 4: TCP encrypted ────────────────────────────────────────────
+# ─── TCP ──────────────────────────────────────────────────────────────
 run_test "tcp-encrypt" "tcp" "encrypt"
 
 # ── Summary ───────────────────────────────────────────────────────────
@@ -231,7 +226,7 @@ echo "════════════════════════�
 echo ""
 echo "Mode               Status"
 echo "────────────────── ──────"
-for mode in udp-plain tcp-plain udp-encrypt tcp-encrypt; do
+for mode in udp-encrypt tcp-encrypt; do
     if echo " $FAILED_MODES " | grep -q " $mode "; then
         printf "%-18s ✗ FAILED\n" "$mode"
     else
@@ -240,8 +235,8 @@ for mode in udp-plain tcp-plain udp-encrypt tcp-encrypt; do
 done
 
 echo ""
-passed=$((4 - $(echo "$FAILED_MODES" | wc -w)))
-echo "Total: $passed / 4 passed"
+passed=$((2 - $(echo "$FAILED_MODES" | wc -w)))
+echo "Total: $passed / 2 passed"
 echo "Logs:  $LOG_DIR"
 
 if [ -z "$FAILED_MODES" ]; then

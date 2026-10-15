@@ -15,7 +15,9 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CAMEX_REGISTER_INTERVAL  10
+/* First word of the control messages (handshake payloads) */
+#define CAMEX_CTRL_WORD "CAMEX"
+
 #define CAMEX_CLIENT_TIMEOUT    120
 #define CAMEX_SERVER_TIMEOUT     20
 #define CAMEX_RECONNECT_INTERVAL  5

@@ -19,7 +19,8 @@ Ships as a userspace daemon and an optional standalone kernel module.
 
 - **Client/server architecture** over UDP or TCP
 - **Auto-config mode** — client fetches tunnel parameters from the server
-- **ChaCha20-Poly1305 encryption** — optional, zero overhead when disabled
+- **Protocol v2** — Noise handshake (`NKpsk0`, X25519, ChaCha20-Poly1305,
+  BLAKE2b), fresh keys per session and direction, always encrypted
 - **No external dependencies** — only libc required
 - **Cross-platform builds** — x86_64, ARM, AArch64, MIPS (via CI)
 - **Custom kernel module** — `camex.ko` replaces `tun.ko` with no external deps
@@ -27,17 +28,28 @@ Ships as a userspace daemon and an optional standalone kernel module.
 
 ## Quick Start
 
+### Keys
+
+The server has a key pair; every client needs the server's **public** key and
+a pre-shared key (the global one, or its own `psk=` from the server config).
+
+```sh
+camex --genkey > server.key       # server_key=… (secret) and public_key=…
+```
+
 ### Server
 
 ```sh
-sudo ./camex --mode server --port 5800 --config /etc/camex/camex.conf
+sudo ./camex --mode server --port 5800 --config /etc/camex/camex.conf \
+  --server-key-file server.key --psk secret
 ```
 
 ### Client (auto mode)
 
 ```sh
 sudo ./camex --mode client --auto --name 0203A104B5AE \
-  --server-host vpn.example.org --port 5800
+  --server-host vpn.example.org --port 5800 \
+  --server-pubkey <public_key> --psk secret
 ```
 
 ### Client (manual mode)
@@ -45,7 +57,8 @@ sudo ./camex --mode client --auto --name 0203A104B5AE \
 ```sh
 sudo ./camex --mode client \
   --local-cidr 10.0.0.2/24 --gateway-ip 10.0.0.1 \
-  --server-host vpn.example.org --port 5800
+  --server-host vpn.example.org --port 5800 \
+  --server-pubkey <public_key> --psk secret
 ```
 
 ### Android
@@ -59,8 +72,8 @@ The app connects in auto mode: the server sends the address, routes and MTU.
 - **Server host / port** — the camex server.
 - **Client name** — the client ID, i.e. the `[client ID]` block on the server.
 - **Transport** — UDP or TCP, as on the server.
-- **Encrypt traffic** and **Pre-shared key** — `--encrypt --psk`; the key must
-  match the client's `psk=` (or the global key).
+- **Server public key** and **Pre-shared key** — `--server-pubkey --psk`; the
+  key must match the client's `psk=` (or the global key).
 - **Route all traffic through the tunnel** — off: only the tunnel network and
   the server's routes go through the tunnel.
 - **Advanced** — MTU, keepalive and server timeout
@@ -171,7 +184,7 @@ sudo ./camex \
   --name 0203A104B5AE \
   --server-host vpn.example.org \
   --port 5800 \
-  --encrypt --psk secret
+  --server-pubkey <public_key> --psk secret
 ```
 
 Manual client mode:
@@ -184,7 +197,7 @@ sudo ./camex \
   --server-host vpn.example.org \
   --port 5800 \
   --route-cidr 192.168.100.0/24 \
-  --encrypt --psk secret
+  --server-pubkey <public_key> --psk secret
 ```
 
 With explicit TUN backend:
@@ -196,6 +209,7 @@ sudo ./camex \
   --gateway-ip 10.0.0.1 \
   --server-host vpn.example.org \
   --port 5800 \
+  --server-pubkey <public_key> --psk secret \
   --tun-dev /dev/camex
 ```
 
@@ -207,7 +221,8 @@ sudo ./camex \
   --port 5800 \
   --bind-ip 0.0.0.0 \
   --config /etc/camex/camex.conf \
-  --encrypt --psk secret
+  --server-key-file /etc/camex/server.key \
+  --psk secret
 ```
 
 ### Options
@@ -225,8 +240,11 @@ sudo ./camex \
 | `--config <path>` | `-f` | Server config file path |
 | `--route-cidr <cidr>` | `-c` | Extra route to install on the client; repeatable |
 | `--mtu <size>` | `-t` | Tunnel MTU, 576–9000 (default: 1500) |
-| `--psk <pass>` | `-k` | Passphrase hashed into a 32-byte key, without stretching: use a long random one (works for both UDP and TCP) |
-| `--encrypt` | `-e` | Enable ChaCha20-Poly1305 encryption (master switch; required for all encrypted traffic) |
+| `--psk <key>` | `-k` | Pre-shared key: `hex:<64 hex digits>`, `base64:<44 chars>`, or a passphrase (stretched with Argon2id). Required on clients |
+| `--server-pubkey <key>` | | Client: the server's public key (from `--genkey`) |
+| `--server-key-file <path>` | | Server: file with its private key (or `server_key=` in `[server]`) |
+| `--genkey` | | Print a new server key pair (`server_key=`, `public_key=`) and exit |
+| `--encrypt` | `-e` | Accepted for compatibility; protocol v2 is always encrypted |
 | `--tun-dev <path>` | `-T` | TUN device path (default: auto-detect `/dev/net/tun` then `/dev/camex`) |
 | `--pid-file <path>` | `-P` | Write PID to file on startup |
 | `--bind-dev <iface>` | `-d` | Bind socket to a specific network interface (`SO_BINDTODEVICE`) |
@@ -265,40 +283,40 @@ To serve only the IDs listed in the file, set `allow_unknown_clients=no` in the
 camex is a small tunnel for cameras, not a general-purpose VPN. Know what it
 protects before exposing it to an untrusted network.
 
-### With `--encrypt`
+### Protocol v2 (camex 3.x)
 
-- Every packet is authenticated with ChaCha20-Poly1305: the payload is
-  encrypted, the header (packet type, nonce, length, sequence number) is
-  authenticated but readable. Packets that fail authentication are dropped.
-- **Keys.** The key is derived from the passphrase (`--psk` or `psk=`) with a
-  single BLAKE2b-256 hash, without salt or stretching (#14). Anyone who captures
-  traffic can test passphrase guesses offline, so use a long random passphrase
-  (32+ characters from a password generator), not a word.
+- **Handshake.** `Noise_NKpsk0_25519_ChaChaPoly_BLAKE2b`: the client knows the
+  server's public key, both sides know the client's pre-shared key. Every
+  session gets fresh keys, separate for each direction (forward secrecy: a
+  leaked key does not decrypt recorded sessions).
+- **Packets.** ChaCha20-Poly1305: the payload is encrypted, the 17-byte header
+  (type, session index, counter) is authenticated but readable. Packets that
+  fail authentication are dropped. Keys are renewed every 10 minutes.
+- **Keys.** The pre-shared key is a raw key (`hex:`, `base64:`) or a passphrase
+  stretched with Argon2id. A captured handshake does not let anyone test
+  passphrase guesses offline: that needs the server's private key.
 - **Per-client keys.** A `psk=` in a `[client ID]` block gives that client its
   own key; it can register only with it, and the global key no longer works for
   that ID (unless both passphrases are the same, which makes them one key). See
   [Notes](#notes) for the exact rules.
 - **Source addresses.** A client may send only from its own tunnel address;
   packets with another source address are dropped.
-- **Replay protection.** Each session has a 64-packet sliding window. A session
-  is bound to the client's random nonce prefix and its key: a captured
-  `REGISTER` or data packet replayed later, from any address, is rejected. The
-  server remembers the last 256 ended sessions; older sessions and sessions from
-  before a server restart are not remembered (fixed for good by per-session keys,
-  #17).
+- **Replay protection.** Data packets have a 2048-packet window per session; a
+  replayed handshake carries an old timestamp and is rejected. Packets of an
+  ended session cannot be replayed into a new one: its keys are different.
+- **Roaming.** A session is found by its index, not by the client's address:
+  after a NAT rebinding the client keeps its session.
 - **Config reload.** After `SIGHUP`, a live session whose key was removed or
   changed, or now belongs to another client, ends.
 
 ### What it does not protect
 
-- **Plaintext mode** (no `--encrypt`) has no authentication at all: anyone who
-  can reach the server port can register and inject packets. Use it only on a
-  trusted network.
-- **No forward secrecy.** A leaked passphrase decrypts recorded traffic.
-- **Same key both ways.** One key is used in both directions and for all
-  sessions of a client (#16, #17).
+- **The server's private key** lets its holder impersonate the server to
+  clients that know the pre-shared key: keep `server_key` secret.
 - **Metadata.** Packet sizes, timing, endpoints and the cleartext header (packet
-  type, sequence number) are visible.
+  type, session index, counter) are visible.
+- There is **no unencrypted mode**; for an open tunnel without encryption see
+  OpenIPC VTesse.
 - **Inside the tunnel** traffic is not filtered: any client can reach the server
   and other clients on the tunnel network. Restrict that with a firewall on the
   server's tunnel interface (`tun0` or similar with `/dev/net/tun`, `camex`
@@ -306,8 +324,9 @@ protects before exposing it to an untrusted network.
 
 ### Denial of service limits
 
-- TCP connections that have not registered yet are limited (4 per source
-  address, 32 in total) and closed after 10 s.
+- TCP connections that have not completed a handshake are limited (4 per
+  source address, 32 in total) and closed after 10 s; the server processes at
+  most 200 handshakes per second.
 - Log messages that a peer can trigger (dropped packets, rejected
   registrations) are rate-limited; the number suppressed is logged.
 - The auto pool hands out `10.200.0.2`–`.254` and never gives one address to two
@@ -317,8 +336,9 @@ protects before exposing it to an untrusted network.
 
 ### Recommended deployment
 
-- Always use `--encrypt` over networks you do not control, with a long random
-  passphrase.
+- Keep the server key file readable by the server only (`umask 077`); give the
+  clients `public_key` only.
+- Prefer raw keys (`hex:`/`base64:`) or long random passphrases.
 - Give each camera its own `psk=` in a `[client ID]` block, and set
   `allow_unknown_clients=no` when all auto-mode cameras are listed.
 - Run the server with only the capabilities it needs (`CAP_NET_ADMIN`; with the
@@ -716,19 +736,20 @@ set to the tag name (e.g., `v2.3.6`).
 - Client sockets are outbound only; no listening port is opened on the client side.
 - In auto mode, `-l`, `-g`, and `-c` are supplied by the server.
 - `examples/camex.conf` shows the server-side parameter database format.
-- Encryption (`--encrypt`) works transparently over both UDP and TCP transport.
-  Add `--encrypt --psk <key>` to both server and client commands.
+- Protocol v2 works over both UDP and TCP transport; every session starts with
+  a handshake (`--server-key-file` on the server, `--server-pubkey` and `--psk`
+  on the client). camex 3.x does not talk to camex 2.x.
 - The server supports per-client PSKs: add `psk=<key>` inside a `[client ID]` block
-  in the config file. With `--encrypt`, keys are bound to client IDs:
+  in the config file. Keys are bound to client IDs:
   - a client that has its own key can register only with that key;
   - the global `--psk` key works only for clients without their own key;
   - a manual client with its own key may omit `--name`: the key identifies it;
   - a manual client may only claim the `local_cidr` address of its own
     `[client ID]` block, and never the address of another client that has its
     own key.
-- With `--encrypt` the server accepts data packets only from a registered
-  session and only with the client's own tunnel address as the source; other
-  source addresses are dropped.
+- The server accepts data packets only from an established session and only with
+  the client's own tunnel address as the source; other source addresses are
+  dropped.
 
 ## License
 

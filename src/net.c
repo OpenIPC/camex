@@ -7,6 +7,7 @@
  */
 
 #include "net.h"
+#include "session.h"
 #include "log.h"
 #include "util.h"
 #include "camex.h"
@@ -59,7 +60,7 @@
  * old frame into a new connection that reuses the fd number.
  */
 /* Largest frame: 2-byte length + encrypted packet of TUN_PACKET_MAX bytes */
-#define TCP_SEND_BUF_SIZE (2U + CAMEX_HDR_LEN + 1U + TUN_PACKET_MAX + 16U)
+#define TCP_SEND_BUF_SIZE (2U + V2_OVERHEAD + TUN_PACKET_MAX)
 #define TCP_PENDING_SLOTS (CAMEX_MAX_CLIENTS + 1U)
 
 typedef struct {

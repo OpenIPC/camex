@@ -5,7 +5,8 @@
 # test-e2e-auto-pool.sh — regression test for issue #15
 #
 # 1. Server without a config file (auto pool 10.200.0.0/24): 256 auto-mode
-#    REGISTERs with different client IDs, each from its own socket. The
+#    handshakes with different client IDs, each from its own socket
+#    (tests/v2tool). The
 #    pool must hand out only .2-.254, never the same address twice, and
 #    then report that it is full. Before the fix it handed out .255 and
 #    then wrapped to .2 while that address was still in use.
@@ -30,6 +31,7 @@ IMAGE="camex:e2e-pool"
 P="camex-pool-$$"
 NET_NAME="$P-net"
 BUILD_CTX="$(mktemp -d)"
+PSK="pool-test"
 FAILS=0
 
 cleanup() {
@@ -46,38 +48,21 @@ check() {   # check <condition-exit-code> <message>
 [ -x "$CAMEX_BINARY" ] || { echo "camex binary not found: $CAMEX_BINARY"; exit 1; }
 
 cp "$CAMEX_BINARY" "$BUILD_CTX/camex"
+. "$SCRIPT_DIR/lib-keys.sh"
+gen_server_key "$BUILD_CTX" "$CAMEX_BINARY" || { echo "cannot create a server key"; exit 1; }
 cat > "$BUILD_CTX/Dockerfile" <<'EOF'
 FROM ubuntu:24.04
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
         python3-minimal >/dev/null && rm -rf /var/lib/apt/lists/*
 COPY camex /usr/local/bin/camex
-COPY register.py /register.py
+COPY server.key /etc/camex/server.key
+COPY v2tool /usr/local/bin/v2tool
 COPY camex.conf /etc/camex.conf
 RUN printf '#!/bin/sh\nmkdir -p /dev/net\n[ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200\nexec /usr/local/bin/camex "$@"\n' \
         > /usr/local/bin/camex-run && chmod +x /usr/local/bin/camex-run
 ENTRYPOINT ["/usr/local/bin/camex-run"]
 EOF
-# register.py <host> <id>...: send a plaintext auto-mode REGISTER for each
-# client ID from its own socket and print "<id> <LOCAL_CIDR or ->".
-cat > "$BUILD_CTX/register.py" <<'EOF'
-import socket, sys
-host, ids = sys.argv[1], sys.argv[2:]
-socks = []
-for cid in ids:
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.settimeout(1.0)
-    s.sendto(("CX2P REGISTER VER=1 MODE=AUTO CLIENT_ID=%s" % cid).encode(),
-             (host, 5800))
-    cidr = "-"
-    try:
-        for tok in s.recv(2048).decode(errors="replace").split():
-            if tok.startswith("LOCAL_CIDR="):
-                cidr = tok.split("=", 1)[1]
-    except OSError:
-        pass
-    print(cid, cidr, flush=True)
-    socks.append(s)   # keep the source port: one client per socket
-EOF
+build_v2tool "$BUILD_CTX" || { echo "cannot build tests/v2tool"; exit 1; }
 cat > "$BUILD_CTX/camex.conf" <<'EOF'
 [server]
 allow_unknown_clients=no
@@ -89,14 +74,19 @@ docker build -q -t "$IMAGE" "$BUILD_CTX" >/dev/null
 docker network create "$NET_NAME" >/dev/null
 set +e   # checks below report failures themselves
 
-atk() {     # atk <server> <id>...: register from an attacker container
-    docker run --rm --network "$NET_NAME" --entrypoint python3 "$IMAGE" \
-        /register.py "$@"
+atk() {     # atk <server> <id>...: auto-mode handshakes, one socket each;
+            # prints "<id> <LOCAL_CIDR or ->"
+    local srv="$1"; shift
+    docker run --rm --network "$NET_NAME" -e PACE_MS=6 \
+        --entrypoint /usr/local/bin/v2tool "$IMAGE" \
+        "$srv" 5800 "$SERVER_PUBKEY" "$PSK" udp $(printf 'auto:%s ' "$@") |
+        sed 's/^auto://'
 }
 
 echo "== 1. auto pool without a config file: 256 client IDs"
 docker run -d --name "$P-srv1" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
-    "$IMAGE" --mode server --port 5800 --local-cidr 10.200.0.1/24 >/dev/null
+    "$IMAGE" --mode server --port 5800 --local-cidr 10.200.0.1/24 \
+    $SERVER_KEY_ARGS --psk "$PSK" >/dev/null
 sleep 1
 atk "$P-srv1" $(seq -f "CAM%03g" 1 256) > "$BUILD_CTX/pool.txt"
 assigned=$(awk '$2 != "-"' "$BUILD_CTX/pool.txt" | wc -l)
@@ -116,7 +106,7 @@ late=$(awk '$2 != "-"' "$BUILD_CTX/late.txt" | wc -l)
 echo "== 2. allow_unknown_clients=no"
 docker run -d --name "$P-srv2" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" --mode server --port 5800 --local-cidr 10.201.0.1/24 \
-    --config /etc/camex.conf >/dev/null
+    $SERVER_KEY_ARGS --psk "$PSK" --config /etc/camex.conf >/dev/null
 sleep 1
 atk "$P-srv2" KNOWN STRANGER > "$BUILD_CTX/known.txt"
 grep -q "^KNOWN 10.201.0.10/24$" "$BUILD_CTX/known.txt"
@@ -128,7 +118,7 @@ echo "== 3. reload to allow_unknown_clients=no ends unknown clients' sessions"
 sed 's/allow_unknown_clients=no/allow_unknown_clients=yes/' "$BUILD_CTX/camex.conf" > "$BUILD_CTX/yes.conf"
 docker create --name "$P-srv3" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" --mode server --port 5800 --local-cidr 10.201.0.1/24 \
-    --config /etc/camex.conf >/dev/null
+    $SERVER_KEY_ARGS --psk "$PSK" --config /etc/camex.conf >/dev/null
 docker cp "$BUILD_CTX/yes.conf" "$P-srv3:/etc/camex.conf" >/dev/null
 docker start "$P-srv3" >/dev/null
 sleep 1

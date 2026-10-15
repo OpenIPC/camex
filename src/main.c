@@ -315,8 +315,10 @@ int validate_config(camex_config_t *config)
         return -1;
     }
 
-    if (config->encrypt && config->psk[0] == '\0') {
-        log_message(LOG_ERR, "Encryption requested but PSK is empty");
+    /* Protocol v2 is always encrypted: a client needs its key. A server
+     * may do without a global key when every client has its own psk=. */
+    if (config->mode == CAMEX_MODE_CLIENT && config->psk[0] == '\0') {
+        log_message(LOG_ERR, "The client needs a key: --psk");
         return -1;
     }
 
@@ -408,10 +410,11 @@ void print_usage(const char *progname)
 
     printf("Features:\n");
     printf("  * Client/server architecture over UDP or TCP\n");
-    printf("  * ChaCha20-Poly1305 authenticated encryption (optional)\n");
+    printf("  * Protocol v2: Noise_NKpsk0_25519_ChaChaPoly_BLAKE2b handshake,\n"
+           "    fresh keys per session and direction, always encrypted\n");
     printf("  * Auto-config: server pushes IP/route/MTU to the client\n");
     printf("  * Per-client pre-shared keys alongside a global PSK\n");
-    printf("  * Replay protection (64-bit sliding window)\n");
+    printf("  * Replay protection (2048-packet window), roaming, rekeying\n");
     printf("  * Works with standard tun.ko (/dev/net/tun)"
            " or camex.ko (/dev/camex)\n");
     printf("  * Cross-compilable, no external dependencies\n");
@@ -460,9 +463,10 @@ void print_usage(const char *progname)
 
     printf("Common options:\n");
     printf("  -t, --mtu <size>     Tunnel MTU, 576-9000 (default: 1500)\n");
-    printf("  -k, --psk <pass>     Passphrase hashed into a 32-byte key (no\n"
-           "                       stretching: use a long random one)\n");
-    printf("  -e, --encrypt        Enable ChaCha20-Poly1305 encryption\n");
+    printf("  -k, --psk <key>      Pre-shared key: hex:<64 digits>, base64:<key>,\n"
+           "                       or a passphrase (stretched with Argon2id)\n");
+    printf("  -e, --encrypt        Accepted for compatibility: protocol v2 is"
+           " always encrypted\n");
     printf("  -P, --pid-file <path> Write PID to file on startup\n");
     printf("  -R, --transport <t>  Transport protocol: udp (default) or tcp\n");
     printf("  -K, --keepalive <s>  Keepalive interval in seconds, 0=off"
@@ -477,28 +481,28 @@ void print_usage(const char *progname)
     printf("  -h, --help           Show this help message and exit\n\n");
 
     printf("Examples:\n");
+    printf("  # Server key pair (once): keep server_key secret, give\n"
+           "  # public_key to the clients\n");
+    printf("  %s --genkey > /etc/camex/server.key\n\n", progname);
     printf("  # Server (UDP)\n");
     printf("  %s --mode server --port 5800"
            " --config /etc/camex/camex.conf"
-           " --encrypt --psk secret\n\n", progname);
+           " --server-key-file /etc/camex/server.key --psk secret\n\n",
+           progname);
     printf("  # Server (TCP)\n");
-    printf("  %s --mode server --port 5800"
-           " --transport tcp"
+    printf("  %s --mode server --port 5800 --transport tcp"
            " --config /etc/camex/camex.conf"
-           " --encrypt --psk secret\n\n", progname);
+           " --server-key-file /etc/camex/server.key --psk secret\n\n",
+           progname);
     printf("  # Client (auto-config, UDP)\n");
     printf("  %s --mode client --auto --name 0203A104B5AE"
-           " --server-host cloud.openipc.org"
-           " --port 5800 --encrypt --psk secret\n\n", progname);
-    printf("  # Client (auto-config, TCP)\n");
-    printf("  %s --mode client --auto --name 0203A104B5AE"
-           " --transport tcp"
-           " --server-host cloud.openipc.org"
-           " --port 5800 --encrypt --psk secret\n\n", progname);
+           " --server-host cloud.openipc.org --port 5800"
+           " --server-pubkey <public_key> --psk secret\n\n", progname);
     printf("  # Client (manual)\n");
     printf("  %s --mode client"
            " --local-cidr 10.0.0.2/24 --gateway-ip 10.0.0.1"
-           " --server-host cloud.openipc.org --port 5800\n", progname);
+           " --server-host cloud.openipc.org --port 5800"
+           " --server-pubkey <public_key> --psk secret\n", progname);
 }
 
 int main(int argc, char *argv[])

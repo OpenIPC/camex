@@ -49,11 +49,14 @@ check() {   # check <condition-exit-code> <message>
 [ -x "$CAMEX_BINARY" ] || { echo "camex binary not found: $CAMEX_BINARY"; exit 1; }
 
 cp "$CAMEX_BINARY" "$BUILD_CTX/camex"
+. "$SCRIPT_DIR/lib-keys.sh"
+gen_server_key "$BUILD_CTX" "$CAMEX_BINARY" || { echo "cannot create a server key"; exit 1; }
 cat > "$BUILD_CTX/Dockerfile" <<'EOF'
 FROM ubuntu:24.04
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
         iputils-ping python3-minimal >/dev/null && rm -rf /var/lib/apt/lists/*
 COPY camex /usr/local/bin/camex
+COPY server.key /etc/camex/server.key
 RUN printf '#!/bin/sh\nmkdir -p /dev/net\n[ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200\nexec /usr/local/bin/camex "$@"\n' \
         > /usr/local/bin/camex-run && chmod +x /usr/local/bin/camex-run
 ENTRYPOINT ["/usr/local/bin/camex-run"]
@@ -89,7 +92,7 @@ run() {     # run <name> <camex args...>
 }
 client() {  # client <name> <camex client args...>
     local name="$1"; shift
-    run "$name" --mode client --server-host "$SRV" --port 5800 --encrypt "$@"
+    run "$name" --mode client --server-host "$SRV" --port 5800 --server-pubkey "$SERVER_PUBKEY" "$@"
 }
 got_config() { docker logs "$P-$1" 2>&1 | grep -q "Received config from server"; }
 still_up() {  # still_up <name> <who>: the victim keeps its session
@@ -103,9 +106,8 @@ icmp_in() {  # ICMP echo requests received by a container
 echo "== server"
 docker create --name "$SRV" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" --mode server --port 5800 --local-cidr 10.200.0.1/24 \
-    --encrypt --psk global-key --config /etc/camex/camex.conf >/dev/null
-mkdir -p "$BUILD_CTX/etc-camex" && cp "$BUILD_CTX/camex.conf" "$BUILD_CTX/etc-camex/"
-docker cp "$BUILD_CTX/etc-camex" "$SRV:/etc/camex" >/dev/null
+    $SERVER_KEY_ARGS --psk global-key --config /etc/camex/camex.conf >/dev/null
+docker cp "$BUILD_CTX/camex.conf" "$SRV:/etc/camex/camex.conf" >/dev/null
 docker start "$SRV" >/dev/null
 sleep 1
 

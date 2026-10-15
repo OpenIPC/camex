@@ -14,8 +14,8 @@ android {
         applicationId = "org.openipc.camex"
         minSdk = 26
         targetSdk = 34
-        versionCode = 20307
-        versionName = "2.3.7"
+        versionCode = 30000
+        versionName = "3.0.0"
         // 64-bit phones and 32-bit devices (TV boxes, older phones).
         // Override with -PcamexAbis=arm64-v8a for a smaller APK.
         val abis = (project.findProperty("camexAbis") as String?)

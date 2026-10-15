@@ -85,10 +85,13 @@ route_cidr=192.168.77.0/24
 route_cidr=192.168.78.5/24
 route_cidr=0.0.0.0/0
 EOF
+. "$REPO_DIR/docker/lib-keys.sh"
+gen_server_key "$CTX/etc-camex" "$CAMEX_BINARY" || { echo "cannot create a server key"; exit 1; }
 docker build -q -t camex:devtest "$CTX" >/dev/null
 docker create --name "$SRV" -p 5800:5800 --cap-add NET_ADMIN --cap-add MKNOD \
     camex:devtest --mode server --port 5800 --transport tcp \
-    --local-cidr 10.200.0.1/24 --encrypt --psk devtest-key \
+    --local-cidr 10.200.0.1/24 --psk devtest-key \
+    --server-key-file /etc/camex/server.key \
     --config /etc/camex/camex.conf >/dev/null
 docker cp "$CTX/etc-camex" "$SRV:/etc/camex" >/dev/null
 docker start "$SRV" >/dev/null
@@ -109,7 +112,7 @@ if ! $ADB install -r -g "$APK" >/dev/null 2>"$CTX/install.err"; then
 fi
 $ADB shell am force-stop "$PKG"
 
-# Settings: server through adb reverse, TCP, encryption, full tunnel OFF so
+# Settings: server through adb reverse, TCP, server key, full tunnel OFF so
 # the rest of the device keeps its normal network.
 cat > "$CTX/camex.xml" <<'EOF'
 <?xml version='1.0' encoding='utf-8' standalone='yes' ?>
@@ -118,7 +121,7 @@ cat > "$CTX/camex.xml" <<'EOF'
     <int name="server_port" value="5800" />
     <string name="name">DEVTEST</string>
     <string name="transport">tcp</string>
-    <boolean name="encrypt" value="true" />
+    <string name="server_pubkey">__SERVER_PUBKEY__</string>
     <string name="psk">devtest-key</string>
     <boolean name="full_tunnel" value="false" />
     <int name="mtu" value="1500" />
@@ -126,7 +129,8 @@ cat > "$CTX/camex.xml" <<'EOF'
     <int name="server_timeout" value="15" />
 </map>
 EOF
-sed -i "s/__SERVER_HOST__/${SERVER_HOST:-127.0.0.1}/" "$CTX/camex.xml"
+sed -i -e "s/__SERVER_HOST__/${SERVER_HOST:-127.0.0.1}/" \
+    -e "s|__SERVER_PUBKEY__|$SERVER_PUBKEY|" "$CTX/camex.xml"
 $ADB push "$CTX/camex.xml" /data/local/tmp/camex.xml >/dev/null
 $ADB shell "run-as $PKG sh -c 'mkdir -p shared_prefs && cat /data/local/tmp/camex.xml > shared_prefs/camex.xml'"
 $ADB shell rm /data/local/tmp/camex.xml

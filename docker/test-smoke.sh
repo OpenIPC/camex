@@ -96,6 +96,8 @@ echo ""
 echo "4. Building Docker smoke image..."
 BUILD_DIR=$(mktemp -d /tmp/camex-smoke-build-XXXXXX)
 cp "$CAMEX_BINARY" "$BUILD_DIR/camex"
+. "$SCRIPT_DIR/lib-keys.sh"
+gen_server_key "$BUILD_DIR" "$CAMEX_BINARY" || { echo "   cannot create a server key"; exit 1; }
 cp "$SCRIPT_DIR/Dockerfile.smoke" "$BUILD_DIR/"
 docker build -t camex:smoke -f "$BUILD_DIR/Dockerfile.smoke" "$BUILD_DIR" > /dev/null
 rm -rf "$BUILD_DIR"
@@ -112,7 +114,7 @@ echo ""
 echo "6. Starting server..."
 run_docker "Server" "$SERVER_NAME" "" \
     --mode server --port 5800 --bind-ip 0.0.0.0 \
-    --encrypt --psk "$PASS" \
+    $SERVER_KEY_ARGS --psk "$PASS" \
     --pid-file /tmp/camex.pid
 echo ""
 
@@ -125,7 +127,7 @@ echo "7. Starting client (auto mode)..."
 run_docker "Client" "$CLIENT_NAME" "" \
     --mode client --auto --name SMOKE01 \
     --server-host "$SERVER_NAME" --port 5800 \
-    --encrypt --psk "$PASS" \
+    --server-pubkey "$SERVER_PUBKEY" --psk "$PASS" \
     --pid-file /tmp/camex.pid
 echo ""
 

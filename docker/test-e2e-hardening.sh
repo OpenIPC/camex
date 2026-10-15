@@ -44,11 +44,14 @@ check() {   # check <condition-exit-code> <message>
 [ -x "$CAMEX_BINARY" ] || { echo "camex binary not found: $CAMEX_BINARY"; exit 1; }
 
 cp "$CAMEX_BINARY" "$BUILD_CTX/camex"
+. "$SCRIPT_DIR/lib-keys.sh"
+gen_server_key "$BUILD_CTX" "$CAMEX_BINARY" || { echo "cannot create a server key"; exit 1; }
 cat > "$BUILD_CTX/Dockerfile" <<'EOF'
 FROM ubuntu:24.04
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
         iputils-ping python3-minimal >/dev/null && rm -rf /var/lib/apt/lists/*
 COPY camex /usr/local/bin/camex
+COPY server.key /etc/camex/server.key
 RUN printf '#!/bin/sh\nmkdir -p /dev/net\n[ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200\nexec /usr/local/bin/camex "$@"\n' \
         > /usr/local/bin/camex-run && chmod +x /usr/local/bin/camex-run
 ENTRYPOINT ["/usr/local/bin/camex-run"]
@@ -70,13 +73,13 @@ conf() {    # conf <CAMA key>: write the server config
 echo "== L3: a config reload that changes a client's key ends its session"
 docker create --name "$SRV" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" --mode server --port 5800 --local-cidr 10.200.0.1/24 \
-    --encrypt --psk global-key --config /etc/camex.conf >/dev/null
+    $SERVER_KEY_ARGS --psk global-key --config /etc/camex.conf >/dev/null
 conf key-a
 docker start "$SRV" >/dev/null
 sleep 1
 docker run -d --name "$P-cama" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" --mode client --auto --name CAMA --server-host "$SRV" --port 5800 \
-    --encrypt --psk key-a >/dev/null
+    --server-pubkey "$SERVER_PUBKEY" --psk key-a >/dev/null
 up=1
 for _ in $(seq 1 20); do
     docker exec "$P-cama" ping -c1 -W1 10.200.0.1 >/dev/null 2>&1 && { up=0; break; }
@@ -96,13 +99,13 @@ CAMB='[client CAMB]\nlocal_cidr=10.202.0.11/24\ngateway_ip=10.202.0.1\npsk=key-b
 printf "[server]\nencrypt=yes\npsk=global-old\n$CAMB" > "$BUILD_CTX/g.conf"
 docker create --name "$P-srvg" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" --mode server --port 5800 --local-cidr 10.202.0.1/24 \
-    --config /etc/camex.conf >/dev/null
+    $SERVER_KEY_ARGS --config /etc/camex.conf >/dev/null
 docker cp "$BUILD_CTX/g.conf" "$P-srvg:/etc/camex.conf" >/dev/null
 docker start "$P-srvg" >/dev/null
 sleep 1
 docker run -d --name "$P-gcli" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" --mode client --local-cidr 10.202.0.2/24 --gateway-ip 10.202.0.1 \
-    --server-host "$P-srvg" --port 5800 --encrypt --psk global-old >/dev/null
+    --server-host "$P-srvg" --port 5800 --server-pubkey "$SERVER_PUBKEY" --psk global-old >/dev/null
 up=1
 for _ in $(seq 1 20); do
     docker exec "$P-gcli" ping -c1 -W1 10.202.0.1 >/dev/null 2>&1 && { up=0; break; }
@@ -111,7 +114,7 @@ done
 check $up "a client on the global key from [server] reaches the server"
 docker run -d --name "$P-camb" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" --mode client --auto --name CAMB --server-host "$P-srvg" --port 5800 \
-    --encrypt --psk key-b >/dev/null
+    --server-pubkey "$SERVER_PUBKEY" --psk key-b >/dev/null
 up=1
 for _ in $(seq 1 20); do
     docker exec "$P-camb" ping -c1 -W1 10.202.0.1 >/dev/null 2>&1 && { up=0; break; }
@@ -139,7 +142,7 @@ docker run --rm --network "$NET_NAME" --entrypoint python3 "$IMAGE" -c '
 import os, socket, sys
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 for _ in range(2000):
-    s.sendto(b"CX2P\x02" + os.urandom(60), (sys.argv[1], 5800))
+    s.sendto(b"CXv2\x03" + os.urandom(60), (sys.argv[1], 5800))
 print("sent")
 ' "$SRV" | grep -q '^sent$'
 check $? "the attacker sent 2000 packets"
@@ -152,7 +155,8 @@ echo "== L7: TCP connect to a server that does not answer times out"
 # unanswered
 docker run -d --name "$P-tcp" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" --mode client --transport tcp --local-cidr 10.201.0.2/24 \
-    --gateway-ip 10.201.0.1 --server-host 192.0.2.1 --port 5800 >/dev/null
+    --gateway-ip 10.201.0.1 --server-host 192.0.2.1 --port 5800 \
+    --server-pubkey "$SERVER_PUBKEY" --psk unused >/dev/null
 sleep 20
 timeouts=$(docker logs "$P-tcp" 2>&1 | grep -c "connect(TCP): timed out")
 [ "$timeouts" -ge 2 ]; check $? "connect() times out and is retried (timeouts in 20 s: $timeouts)"

@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g., v2.3.8)'
+        description: 'Release version (e.g., v3.0.0)'
         required: true
-        default: 'v2.3.8'
+        default: 'v3.0.0'
 
 env:
   BUILD_DIR: build

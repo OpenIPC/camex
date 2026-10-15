@@ -15,7 +15,6 @@ import android.net.VpnService;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
-import android.text.TextUtils;
 import android.util.Log;
 import androidx.annotation.Keep;
 import androidx.core.app.ServiceCompat;
@@ -103,13 +102,9 @@ public class TunnelService extends VpnService {
                 args.add("--keepalive"); args.add(String.valueOf(getInt("keepalive", 10)));
                 args.add("--server-timeout");
                 args.add(String.valueOf(getInt("server_timeout", 20)));
-                if (getEncrypt()) {
-                    args.add("--encrypt");
-                    String psk = getPsk();
-                    if (!TextUtils.isEmpty(psk)) {
-                        args.add("--psk"); args.add(psk);
-                    }
-                }
+                // Protocol v2: always encrypted
+                args.add("--server-pubkey"); args.add(getServerPubkey());
+                args.add("--psk"); args.add(getPsk());
                 String[] argv = args.toArray(new String[0]);
 
                 if (!acquireRun(generation)) {
@@ -268,9 +263,9 @@ public class TunnelService extends VpnService {
         return getSharedPreferences("camex", MODE_PRIVATE).getInt(key, def);
     }
 
-    private boolean getEncrypt() {
+    private String getServerPubkey() {
         return getSharedPreferences("camex", MODE_PRIVATE)
-            .getBoolean("encrypt", false);
+            .getString("server_pubkey", "");
     }
 
     private String getPsk() {

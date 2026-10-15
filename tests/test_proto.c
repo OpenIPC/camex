@@ -51,7 +51,7 @@ int main(void)
     camex_config_t cfg;
 
     /* Valid message is accepted and applied */
-    if (parse("CX2P CONFIG VER=1 CLIENT_ID=cam1 MTU=1400 "
+    if (parse("CAMEX CONFIG VER=1 CLIENT_ID=cam1 MTU=1400 "
               "LOCAL_CIDR=10.200.0.5/24 GATEWAY_IP=10.200.0.1 "
               "ROUTE_CIDR=192.168.1.0/24", &cfg) != 0 ||
         strcmp(cfg.local_cidr, "10.200.0.5/24") != 0 ||
@@ -62,23 +62,23 @@ int main(void)
     }
 
     /* #12: shell metacharacters must never get through */
-    expect("CX2P CONFIG LOCAL_CIDR=10.200.0.5/24 GATEWAY_IP=1;reboot",
+    expect("CAMEX CONFIG LOCAL_CIDR=10.200.0.5/24 GATEWAY_IP=1;reboot",
            0, "gateway with ';'");
-    expect("CX2P CONFIG LOCAL_CIDR=10.200.0.5/24 GATEWAY_IP=$(id)",
+    expect("CAMEX CONFIG LOCAL_CIDR=10.200.0.5/24 GATEWAY_IP=$(id)",
            0, "gateway with $()");
-    expect("CX2P CONFIG LOCAL_CIDR=10.200.0.5/24 GATEWAY_IP=10.0.0.1|sh",
+    expect("CAMEX CONFIG LOCAL_CIDR=10.200.0.5/24 GATEWAY_IP=10.0.0.1|sh",
            0, "gateway with '|'");
-    expect("CX2P CONFIG LOCAL_CIDR=10.200.0.5/24 GATEWAY_IP=gw.example",
+    expect("CAMEX CONFIG LOCAL_CIDR=10.200.0.5/24 GATEWAY_IP=gw.example",
            0, "gateway that is not an IPv4 address");
-    expect("CX2P CONFIG LOCAL_CIDR=10.200.0.5/24;id GATEWAY_IP=10.200.0.1",
+    expect("CAMEX CONFIG LOCAL_CIDR=10.200.0.5/24;id GATEWAY_IP=10.200.0.1",
            0, "local CIDR with ';'");
-    expect("CX2P CONFIG LOCAL_CIDR=10.200.0.5/33 GATEWAY_IP=10.200.0.1",
+    expect("CAMEX CONFIG LOCAL_CIDR=10.200.0.5/33 GATEWAY_IP=10.200.0.1",
            0, "local CIDR prefix out of range");
-    expect("CX2P CONFIG LOCAL_CIDR=10.200.0.5 GATEWAY_IP=10.200.0.1",
+    expect("CAMEX CONFIG LOCAL_CIDR=10.200.0.5 GATEWAY_IP=10.200.0.1",
            0, "local CIDR without prefix");
-    expect("CX2P CONFIG LOCAL_CIDR=10.200.0.5/24 GATEWAY_IP=10.200.0.1 "
+    expect("CAMEX CONFIG LOCAL_CIDR=10.200.0.5/24 GATEWAY_IP=10.200.0.1 "
            "ROUTE_CIDR=1.2.3.0/24;id", 0, "route with ';'");
-    expect("CX2P CONFIG LOCAL_CIDR=10.200.0.5/24 GATEWAY_IP=10.200.0.1 MTU=99999",
+    expect("CAMEX CONFIG LOCAL_CIDR=10.200.0.5/24 GATEWAY_IP=10.200.0.1 MTU=99999",
            0, "MTU out of range");
 
     /* A rejected CONFIG leaves the client ID unchanged */
@@ -88,7 +88,7 @@ int main(void)
         memset(&cfg, 0, sizeof(cfg));
         snprintf(cfg.client_id, sizeof(cfg.client_id), "cam1");
         snprintf(buf, sizeof(buf), "%s",
-                 "CX2P CONFIG CLIENT_ID=other LOCAL_CIDR=10.200.0.5/24 "
+                 "CAMEX CONFIG CLIENT_ID=other LOCAL_CIDR=10.200.0.5/24 "
                  "GATEWAY_IP=1;reboot");
         if (proto_parse_config(buf, &cfg) == 0 ||
             strcmp(cfg.client_id, "cam1") != 0) {

@@ -2,7 +2,8 @@
  *
  * Copyright (c) OpenIPC  https://openipc.org  MIT License
  *
- * server.h — server-side client tracking, packet forwarding, keystore lookup
+ * server.h — server side of protocol v2: client table, handshakes,
+ *            sessions, packet forwarding
  *
  */
 
@@ -11,6 +12,7 @@
 
 #include "camex.h"
 #include "net.h"
+#include "session.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -21,46 +23,44 @@
 #include <winsock2.h>
 #endif
 
+/* Handshakes (INIT messages) processed per second, all clients together:
+ * each costs X25519 operations */
+#define SERVER_HANDSHAKES_PER_SEC 200U
+
 /* Per-server-client state */
 typedef struct {
     struct sockaddr_in addr;
     uint32_t ip_be;
     time_t last_seen;
-    time_t last_register_time;
-    uint64_t recv_seq_max;
-    uint64_t recv_window;
-    uint64_t send_seq;
     char client_id[CAMEX_CLIENT_ID_LEN];
     uint8_t active;
-    uint8_t registered;   /* a REGISTER was accepted for this entry; until
+    uint8_t registered;   /* a handshake was accepted for this entry; until
                            * then a TCP slot is pre-auth (#9) */
     uint8_t auto_client;  /* registered in auto mode (#15) */
     time_t connected_at;  /* TCP accept time: the pre-auth deadline counts
                            * from here, not from last_seen (#9) */
-    uint8_t send_nonce_prefix[4];
-    uint8_t recv_nonce_prefix[4]; /* client's nonce prefix for this session */
-    uint8_t has_recv_prefix;      /* recv_nonce_prefix is set (encrypted) */
-    int tcp_fd;         /* TCP socket fd for this client (-1 = UDP) */
-    uint8_t psk_key[32];
+    int tcp_fd;           /* TCP socket fd for this client (-1 = UDP) */
+    uint8_t psk_key[32];  /* key of the last handshake (for reloads) */
+    session_t cur;        /* current session */
+    session_t prev;       /* previous session, receives until prev_until */
+    time_t prev_until;
     tcp_recv_state_t recv_state;  /* per-connection partial-read tracker —
                                     * zero on accept/reuse, see net.h */
 } server_client_t;
 
 extern server_client_t server_clients[];
 
-/* Find / upsert client */
+/* Find clients */
 server_client_t *server_find_by_ip(uint32_t ip_be);
 server_client_t *server_find_by_client_id(const char *client_id);
 server_client_t *server_find_by_addr(const struct sockaddr_in *addr);
 server_client_t *server_alloc_client(void);
-server_client_t *server_upsert_client(uint32_t ip_be,
-                                      const struct sockaddr_in *addr);
 
-/* Expire stale clients */
+/* Close the entry's TCP connection (if any), wipe its keys, free it */
+void server_drop_entry(server_client_t *entry);
+
+/* Expire stale clients and old sessions */
 void server_expire_clients(void);
-
-/* Reset replay protection for a client entry */
-void server_reset_replay(server_client_t *entry);
 
 /* After a config reload: end sessions whose key is no longer allowed
  * for their client (#16 L3). */
@@ -69,39 +69,6 @@ void server_revalidate_keys(void);
 /* After a config reload: end sessions of auto clients whose ID is not in
  * the file when allow_unknown_clients = no (#15). */
 void server_revalidate_unknown_clients(void);
-
-/* Remember the replay state of the entry's session before the entry is
- * cleared or starts a new session (#7). */
-void server_forget_session(server_client_t *entry);
-
-/* Send config response */
-int server_send_config_response(const struct sockaddr_in *from,
-                                server_client_t *entry,
-                                const char *client_id);
-
-/* Replay state of an encrypted REGISTER: the client's nonce prefix, the
- * packet's sequence number and the key it was authenticated with (#7). */
-typedef struct {
-    uint8_t nonce_prefix[4];
-    uint64_t seq;
-    const uint8_t *key;   /* key that authenticated the REGISTER */
-} server_register_seq_t;
-
-/* Handle a REGISTER message (decrypted, or plaintext).
- * fd: current TCP connection's fd for this packet, or -1 for UDP —
- * used to keep server_client_t.tcp_fd in sync on reconnect (see camex.c).
- * rseq: nonce prefix and sequence number of an encrypted REGISTER, NULL in
- * plaintext mode. */
-int server_handle_plain_register(const uint8_t *buffer, size_t len,
-                                 const struct sockaddr_in *from,
-                                 const uint8_t *used_key, int fd,
-                                 const server_register_seq_t *rseq);
-
-/* Try all keystore entries to decrypt a packet */
-const uint8_t *server_try_all_keys(const uint8_t *buffer, size_t len,
-                                   uint8_t *type,
-                                   uint8_t *plain, size_t plain_size,
-                                   size_t *plain_len, uint64_t *seq);
 
 /* Forward an IP packet from one client to another (or local TUN) */
 int server_forward_packet(const uint8_t *packet, size_t len,
