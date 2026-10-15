@@ -97,8 +97,9 @@ int config_db_load_file(const char *path);
 int config_db_lookup_profile(const char *client_id, camex_profile_t *profile);
 
 /* Build the keystore from global PSK and per-client PSKs */
-/* 0, or KEY_ERR_NOMEM (no memory for Argon2id: the keystore is empty and
- * the caller restores the previous one or fails) */
+/* 0; -1 when no key is usable (no client could connect); KEY_ERR_NOMEM
+ * (no memory for Argon2id: the keystore is empty). On an error the caller
+ * restores the previous keystore or fails. */
 int config_build_keystore(void);
 
 /* Apply a profile to a camex_config_t */

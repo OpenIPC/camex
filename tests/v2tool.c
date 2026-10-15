@@ -23,6 +23,7 @@
 #include "session.h"
 #include "util.h"
 
+#include <errno.h>
 #include <netdb.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,14 +66,30 @@ static int open_socket(const char *host, const char *port, int tcp)
 static int send_packet(int fd, int tcp, const uint8_t *p, size_t len)
 {
     uint8_t buf[2048];
+    size_t off = 0U;
 
     if (!tcp) {
         return send(fd, p, len, 0) == (ssize_t)len ? 0 : -1;
     }
+    if (len + 2U > sizeof(buf)) {
+        return -1;
+    }
     buf[0] = (uint8_t)(len >> 8);
     buf[1] = (uint8_t)len;
     memcpy(buf + 2, p, len);
-    return send(fd, buf, len + 2U, 0) == (ssize_t)(len + 2U) ? 0 : -1;
+    /* A stream: send() may take part of the frame */
+    while (off < len + 2U) {
+        ssize_t n = send(fd, buf + off, len + 2U - off, 0);
+
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n <= 0) {
+            return -1;
+        }
+        off += (size_t)n;
+    }
+    return 0;
 }
 
 /* One packet within 2 s, or -1 */

@@ -1219,6 +1219,13 @@ void camex_stop(void)
         }
     }
 
+    camex_cleanup();
+}
+
+void camex_cleanup(void)
+{
+    size_t i;
+
     /* Wipe all key material from memory */
     crypto_wipe_ctx();
     {

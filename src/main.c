@@ -605,6 +605,7 @@ int main(int argc, char *argv[])
 
     if (camex_init(&config) != 0) {
         log_message(LOG_ERR, "Initialization failed");
+        camex_cleanup();
 #ifndef _WIN32
         closelog();
 #endif
