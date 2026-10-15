@@ -332,6 +332,68 @@ int server_send_config_response(const struct sockaddr_in *from,
     return net_send_text(net_fd, from, message);
 }
 
+/* Answer a client KEEPALIVE so the client can tell a live server from a
+ * dead one (#10). */
+static void server_send_keepalive(server_client_t *entry)
+{
+    uint8_t packet[CAMEX_HDR_LEN + 1U + 16U];
+    size_t packet_len = 0U;
+    int rc;
+
+    if (entry == NULL) {
+        return;
+    }
+
+    if (current_config.encrypt) {
+        uint64_t seq = entry->send_seq;
+
+        if (crypto_encrypt_packet(CAMEX_PACKET_KEEPALIVE, seq,
+                entry->send_nonce_prefix,
+                is_zero_key(entry->psk_key) ? NULL : entry->psk_key,
+                NULL, 0, packet, sizeof(packet), &packet_len) != 0) {
+            return;
+        }
+        entry->send_seq = seq + 1U;
+    } else {
+        memcpy(packet, CAMEX_MAGIC, 4);
+        packet[4] = CAMEX_PACKET_KEEPALIVE;
+        packet_len = 5U;
+    }
+
+    if (entry->tcp_fd >= 0) {
+        rc = net_tcp_send_frame(entry->tcp_fd, packet, packet_len);
+    } else {
+        rc = net_send_payload(net_fd, &entry->addr, packet, packet_len);
+    }
+    /* rc > 0 on TCP: an earlier frame to this client is still queued and
+     * the reply is dropped.  That is fine for liveness: the queued frame
+     * reaches the client as soon as the socket drains, and the client
+     * counts any authenticated frame as server activity, not only
+     * keepalive replies. */
+    if (rc < 0) {
+        log_message(LOG_DEBUG, "Failed to answer keepalive from %s",
+                    entry->client_id);
+    } else if (rc > 0) {
+        log_message(LOG_DEBUG, "Keepalive reply to %s dropped: "
+                    "send queue busy", entry->client_id);
+    }
+}
+
+/* Does `used_key` (the key a packet decrypted with) belong to `entry`?
+ * An entry without its own key uses the global key. */
+static int server_entry_owns_key(const server_client_t *entry,
+                                 const uint8_t *used_key)
+{
+    const uint8_t *own;
+
+    if (entry == NULL || used_key == NULL) {
+        return 0;
+    }
+    own = is_zero_key(entry->psk_key) ? crypto_get_ctx()->psk_key
+                                      : entry->psk_key;
+    return memcmp(own, used_key, 32) == 0;
+}
+
 int server_handle_plain_register(const uint8_t *buffer, size_t len,
                                  const struct sockaddr_in *from,
                                  const uint8_t *used_key, int fd)
@@ -635,14 +697,16 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
         }
 
         if (type == CAMEX_PACKET_KEEPALIVE) {
-            /* Update last_seen on the client entry to prevent expiry */
-            if (decrypt_src != NULL) {
-                decrypt_src->last_seen = g_now;
-            } else {
-                server_client_t *ka = server_find_by_addr(from);
-                if (ka != NULL) {
-                    ka->last_seen = g_now;
-                }
+            server_client_t *ka = (decrypt_src != NULL)
+                                  ? decrypt_src : server_find_by_addr(from);
+
+            /* Refresh last_seen and answer, unless the packet was
+             * sealed with another client's key or is a replay */
+            if (ka != NULL && server_entry_owns_key(ka, used_key) &&
+                replay_check(&ka->recv_seq_max, &ka->recv_window,
+                             seq) == 0) {
+                ka->last_seen = g_now;
+                server_send_keepalive(ka);
             }
             return 0;
         }
@@ -663,10 +727,11 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
     if (!current_config.encrypt && len >= 4U &&
         memcmp(buffer, CAMEX_MAGIC, 4) == 0) {
         if (len >= 5U && buffer[4] == CAMEX_PACKET_KEEPALIVE) {
-            /* Plaintext keepalive: update client last_seen */
+            /* Plaintext keepalive: update client last_seen and answer */
             server_client_t *ka = server_find_by_addr(from);
             if (ka != NULL) {
                 ka->last_seen = g_now;
+                server_send_keepalive(ka);
             }
             return 0;
         }

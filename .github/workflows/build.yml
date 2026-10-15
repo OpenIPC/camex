@@ -82,6 +82,10 @@ jobs:
         run: ./docker/test-e2e-tcp-pending.sh
         if: matrix.platform.name == 'x86_64'
 
+      - name: E2E test (client liveness, issue #10)
+        run: ./docker/test-e2e-client-liveness.sh
+        if: matrix.platform.name == 'x86_64'
+
       - name: Build cross
         run: |
           make clean
