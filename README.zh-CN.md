@@ -235,6 +235,12 @@ sudo ./camex \
 sudo ./camex --mode server --port 5800 --config /etc/camex/camex.conf
 ```
 
+自动模式的客户端从配置文件获取地址。ID 没有对应 `[client ID]` 块的客户端
+使用 `[defaults]`；若未配置地址，则从自动地址池 `10.200.0.2`–`10.200.0.254`
+中分配（跳过已占用的地址和 `[client ID]` 块中的地址；已过期客户端的地址会被
+重新分配）。若只想为配置文件中列出的 ID 提供服务，请在 `[server]` 块中设置
+`allow_unknown_clients=no`。
+
 ## 内核模块
 
 ### 架构

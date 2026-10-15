@@ -306,6 +306,20 @@ int config_db_load_file(const char *path)
                     rc = -1;
                 }
                 g->encrypt_set = 1U;
+            } else if (strcmp(content, "allow_unknown_clients") == 0) {
+                if (strcasecmp(val, "yes") == 0 ||
+                    strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0) {
+                    g->deny_unknown_clients = 0U;
+                } else if (strcasecmp(val, "no") == 0 ||
+                           strcasecmp(val, "false") == 0 ||
+                           strcmp(val, "0") == 0) {
+                    g->deny_unknown_clients = 1U;
+                } else {
+                    log_message(LOG_ERR,
+                                "Invalid value for allow_unknown_clients: %s",
+                                val);
+                    rc = -1;
+                }
             } else if (strcmp(content, "psk") == 0) {
                 rc = copy_option(g->psk, sizeof(g->psk), val, "PSK");
             } else if (strcmp(content, "tun_dev") == 0) {
