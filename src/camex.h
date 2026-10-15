@@ -57,6 +57,8 @@ typedef struct {
     char tun_dev[256];  /* explicit TUN device path; empty = auto-detect */
     int server_timeout;  /* seconds before declaring connection lost (default 20) */
     int keepalive;       /* keepalive interval in seconds, 0=disabled (default 10) */
+    char server_key_file[256]; /* server: file with its base64 private key */
+    char server_pubkey[64];    /* client: the server's base64 public key */
 } camex_config_t;
 
 /* Global state shared across modules */

@@ -11,6 +11,7 @@
 #include "server.h"
 #include "config.h"
 #include "crypto.h"
+#include "keys.h"
 #include "log.h"
 #include "main.h"
 #include "net.h"
@@ -364,6 +365,39 @@ static const char *mode_to_string(camex_mode_t mode)
     }
 }
 
+/* Protocol v2 keys (#17): the server's static key pair (--server-key-file
+ * wins over server_key= in [server]); on a client, the server's public
+ * key. */
+static int camex_load_v2_keys(void)
+{
+    int rc = 0;
+
+    if (server_mode) {
+        char text[128];
+
+        text[0] = '\0';
+        if (current_config.server_key_file[0] != '\0') {
+            if (read_key_file(current_config.server_key_file, text,
+                              sizeof(text)) != 0) {
+                log_message(LOG_ERR, "Cannot read the server key file %s",
+                            current_config.server_key_file);
+                return -1;
+            }
+        } else if (server_db.globals.server_key[0] != '\0') {
+            snprintf(text, sizeof(text), "%s", server_db.globals.server_key);
+        }
+        if (text[0] != '\0') {
+            rc = crypto_set_server_key(text);
+        }
+        crypto_wipe(text, sizeof(text));
+        crypto_wipe(server_db.globals.server_key,
+                    sizeof(server_db.globals.server_key));
+    } else if (current_config.server_pubkey[0] != '\0') {
+        rc = crypto_set_server_pub(current_config.server_pubkey);
+    }
+    return rc;
+}
+
 int camex_init(camex_config_t *config)
 {
     char local_ip[16];
@@ -451,6 +485,9 @@ int camex_init(camex_config_t *config)
 
     if (current_config.encrypt) {
         if (crypto_init(current_config.psk) != 0) {
+            return -1;
+        }
+        if (camex_load_v2_keys() != 0) {
             return -1;
         }
         crypto_wipe(current_config.psk, sizeof(current_config.psk));
@@ -1134,7 +1171,8 @@ void camex_stop(void)
     /* Wipe all key material from memory */
     crypto_wipe_ctx();
     {
-        /* Wipe per-client keys */
+        /* Wipe per-client keys and the passphrase key cache */
+        key_cache_clear();
         extern camex_keystore_entry_t server_keystore[];
         extern size_t server_keystore_count;
         for (i = 0; i < server_keystore_count; ++i) {

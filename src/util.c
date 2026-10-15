@@ -444,3 +444,40 @@ int ipv4_parse_endpoints(const uint8_t *packet, size_t len,
     memcpy(dst_ip, packet + 16, sizeof(*dst_ip));
     return 0;
 }
+
+int read_key_file(const char *path, char *out, size_t out_size)
+{
+    FILE *fp;
+    char line[256];
+    char *p;
+    size_t len;
+
+    fp = fopen(path, "r");
+    if (fp == NULL) {
+        return -1;
+    }
+    if (fgets(line, sizeof(line), fp) == NULL) {
+        fclose(fp);
+        return -1;
+    }
+    fclose(fp);
+    p = line;
+    while (*p == ' ' || *p == '\t') {
+        ++p;
+    }
+    if (strncmp(p, "server_key=", 11) == 0) {
+        p += 11;
+    }
+    len = strlen(p);
+    while (len > 0U && (p[len - 1U] == '\n' || p[len - 1U] == '\r' ||
+                        p[len - 1U] == ' ' || p[len - 1U] == '\t')) {
+        p[--len] = '\0';
+    }
+    if (len == 0U || len >= out_size) {
+        memset(line, 0, sizeof(line));
+        return -1;
+    }
+    memcpy(out, p, len + 1U);
+    memset(line, 0, sizeof(line));
+    return 0;
+}

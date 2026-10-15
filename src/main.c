@@ -12,6 +12,7 @@
 #include "main.h"
 #include "config.h"
 #include "crypto.h"
+#include "keys.h"
 #include "log.h"
 #include "util.h"
 #include "net.h"
@@ -101,13 +102,16 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         { "transport", required_argument, NULL, 'R' },
         { "keepalive", required_argument, NULL, 'K' },
         { "server-timeout", required_argument, NULL, 'W' },
+        { "genkey", no_argument, NULL, 'G' },
+        { "server-key-file", required_argument, NULL, 'S' },
+        { "server-pubkey", required_argument, NULL, 'Y' },
         { NULL, 0, NULL, 0 }
     };
     int opt;
     int option_index = 0;
 
     opterr = 0;
-    while ((opt = getopt_long(argc, argv, "M:b:an:f:l:g:p:s:c:t:k:evhP:d:T:R:K:W:",
+    while ((opt = getopt_long(argc, argv, "M:b:an:f:l:g:p:s:c:t:k:evhP:d:T:R:K:W:GS:Y:",
                              long_options, &option_index)) != -1) {
         switch (opt) {
         case 'M':
@@ -185,6 +189,33 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         case 'v':
             print_version();
             return 1;
+        case 'G':
+            {
+                char priv[KEY_B64_LEN + 1U];
+                char pub[KEY_B64_LEN + 1U];
+
+                if (key_generate(priv, pub) != 0) {
+                    log_message(LOG_ERR, "Cannot generate a key pair");
+                    return -1;
+                }
+                printf("server_key=%s\npublic_key=%s\n", priv, pub);
+                crypto_wipe(priv, sizeof(priv));
+            }
+            return 1;
+        case 'S':
+            if (copy_option(config->server_key_file,
+                            sizeof(config->server_key_file), optarg,
+                            "server key file") != 0) {
+                return -1;
+            }
+            break;
+        case 'Y':
+            if (copy_option(config->server_pubkey,
+                            sizeof(config->server_pubkey), optarg,
+                            "server public key") != 0) {
+                return -1;
+            }
+            break;
         case 'h':
             print_usage(argv[0]);
             return 1;
@@ -436,6 +467,10 @@ void print_usage(const char *progname)
     printf("  -R, --transport <t>  Transport protocol: udp (default) or tcp\n");
     printf("  -K, --keepalive <s>  Keepalive interval in seconds, 0=off"
            " (default: 10)\n");
+    printf("      --genkey         Print a new server key pair and exit\n");
+    printf("      --server-key-file <path> Server: file with its private key\n"
+           "                       (or server_key= in [server])\n");
+    printf("      --server-pubkey <key> Client: the server's public key\n");
     printf("  -W, --server-timeout <s> Connection timeout in seconds"
            " (default: 20)\n");
     printf("  -v, --version        Show version and exit\n");

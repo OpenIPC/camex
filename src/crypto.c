@@ -7,6 +7,7 @@
  */
 
 #include "crypto.h"
+#include "keys.h"
 #include "log.h"
 #include "util.h"
 #include "monocypher.h"
@@ -20,14 +21,40 @@
 
 static camex_crypto_t crypto_ctx;
 
-void derive_psk_key(const char *psk, uint8_t key[32])
+int derive_psk_key(const char *psk, uint8_t key[32])
 {
     if (psk == NULL) {
         memset(key, 0, 32);
-        return;
+        return -1;
     }
+    return key_from_psk(psk, key);
+}
 
-    crypto_blake2b(key, 32, (const uint8_t *)psk, strlen(psk));
+int crypto_set_server_key(const char *priv_b64)
+{
+    char pub[KEY_B64_LEN + 1U];
+
+    if (key_server_from_b64(priv_b64, crypto_ctx.server_priv,
+                            crypto_ctx.server_pub) != 0) {
+        log_message(LOG_ERR, "Invalid server key (need base64 of 32 bytes)");
+        return -1;
+    }
+    crypto_ctx.has_server_key = 1U;
+    crypto_ctx.has_server_pub = 1U;
+    key_base64_encode(crypto_ctx.server_pub, KEY_LEN, pub, sizeof(pub));
+    log_message(LOG_INFO, "Server public key: %s", pub);
+    return 0;
+}
+
+int crypto_set_server_pub(const char *pub_b64)
+{
+    if (key_parse_b64(pub_b64, crypto_ctx.server_pub) != 0) {
+        log_message(LOG_ERR,
+                    "Invalid server public key (need base64 of 32 bytes)");
+        return -1;
+    }
+    crypto_ctx.has_server_pub = 1U;
+    return 0;
 }
 
 void crypto_log_fingerprint(void)
@@ -50,7 +77,9 @@ int crypto_init(const char *psk)
         return -1;
     }
 
-    derive_psk_key(psk, crypto_ctx.psk_key);
+    if (derive_psk_key(psk, crypto_ctx.psk_key) != 0) {
+        return -1;
+    }
     crypto_blake2b(crypto_ctx.fingerprint, sizeof(crypto_ctx.fingerprint),
                    crypto_ctx.psk_key, sizeof(crypto_ctx.psk_key));
     crypto_ctx.ready = 1U;

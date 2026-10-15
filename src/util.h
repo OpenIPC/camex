@@ -19,6 +19,10 @@ uint64_t read_be64(const uint8_t *src);
 /* Hex encoding */
 void hex_encode(const uint8_t *in, size_t len, char *out, size_t out_size);
 
+/* First line of a small key file, without surrounding whitespace and an
+ * optional "server_key=" prefix. Returns 0 or -1. */
+int read_key_file(const char *path, char *out, size_t out_size);
+
 /* Secure random bytes */
 int get_random_bytes(void *buf, size_t len);
 

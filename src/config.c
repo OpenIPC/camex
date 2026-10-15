@@ -320,6 +320,9 @@ int config_db_load_file(const char *path)
                                 val);
                     rc = -1;
                 }
+            } else if (strcmp(content, "server_key") == 0) {
+                rc = copy_option(g->server_key, sizeof(g->server_key), val,
+                                 "server key");
             } else if (strcmp(content, "psk") == 0) {
                 rc = copy_option(g->psk, sizeof(g->psk), val, "PSK");
             } else if (strcmp(content, "tun_dev") == 0) {
@@ -401,8 +404,13 @@ void config_build_keystore(void)
         if (server_db.clients[i].profile.psk[0] == '\0') {
             continue;
         }
-        derive_psk_key(server_db.clients[i].profile.psk,
-                       server_keystore[server_keystore_count].psk_key);
+        if (derive_psk_key(server_db.clients[i].profile.psk,
+                           server_keystore[server_keystore_count].psk_key)
+            != 0) {
+            log_message(LOG_ERR, "Ignoring the key of client %s",
+                        server_db.clients[i].client_id);
+            continue;
+        }
         snprintf(server_keystore[server_keystore_count].owner,
                  sizeof(server_keystore[server_keystore_count].owner),
                  "%s", server_db.clients[i].client_id);

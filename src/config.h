@@ -49,7 +49,8 @@ typedef struct {
     int  mtu;
     uint8_t encrypt;
     uint8_t encrypt_set;
-    uint8_t deny_unknown_clients;  /* allow_unknown_clients = no (#15) */
+    uint8_t deny_unknown_clients;
+    char server_key[64];           /* base64 private key (server_key=) */  /* allow_unknown_clients = no (#15) */
 } camex_server_globals_t;
 
 /* Full server DB */
