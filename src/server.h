@@ -66,11 +66,12 @@ int server_send_config_response(const struct sockaddr_in *from,
                                 server_client_t *entry,
                                 const char *client_id);
 
-/* Replay state of an encrypted REGISTER: the client's nonce prefix and the
- * packet's sequence number (#7). */
+/* Replay state of an encrypted REGISTER: the client's nonce prefix, the
+ * packet's sequence number and the key it was authenticated with (#7). */
 typedef struct {
     uint8_t nonce_prefix[4];
     uint64_t seq;
+    const uint8_t *key;   /* key that authenticated the REGISTER */
 } server_register_seq_t;
 
 /* Handle a REGISTER message (decrypted, or plaintext).

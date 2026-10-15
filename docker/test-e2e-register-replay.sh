@@ -64,9 +64,12 @@ EOF
 cat > "$BUILD_CTX/send.py" <<'EOF'
 import socket, sys, time
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+n = 0
 for line in sys.stdin:
     s.sendto(bytes.fromhex(line.split()[1]), (sys.argv[1], 5800))
+    n += 1
     time.sleep(0.05)
+print(n)
 EOF
 docker build -q -t "$IMAGE" "$BUILD_CTX" >/dev/null
 docker network create "$NET_NAME" >/dev/null
@@ -92,9 +95,17 @@ wait_ping() {
     done
     return 1
 }
-# replay <file>...: send the captured payloads, in order, from one socket
+# replay <file>...: send the captured payloads, in order, from one socket;
+# checks that all of them were sent
 replay() {
-    cat "$@" | docker exec -i "$ATK" python3 /send.py "$SRV"
+    local want sent
+    want=$(cat "$@" | wc -l)
+    sent=$(cat "$@" | docker exec -i "$ATK" python3 /send.py "$SRV")
+    [ "$sent" = "$want" ]; check $? "attacker sent $want captured packets (sent: ${sent:-none})"
+}
+# dropped_regs: REGISTERs the server rejected as replays so far
+dropped_regs() {
+    docker logs "$SRV" 2>&1 | grep -c "Dropped REGISTER" || true
 }
 
 echo "== start server, capture, client"
@@ -103,7 +114,8 @@ docker run -d --name "$SRV" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add 
     --encrypt --psk "$PSK" >/dev/null
 docker run -d --name "$CAP" --network "container:$SRV" --cap-add NET_RAW --cap-add NET_ADMIN \
     --entrypoint tcpdump "$IMAGE" -i any -U -w /tmp/c.pcap udp port 5800 >/dev/null
-docker run -d --name "$ATK" --network "$NET_NAME" --entrypoint sleep "$IMAGE" infinity >/dev/null
+docker run -d --name "$ATK" --network "$NET_NAME" --entrypoint sleep "$IMAGE" infinity >/dev/null \
+    || { echo "FAIL: attacker container did not start"; exit 2; }
 docker cp "$BUILD_CTX/send.py" "$ATK:/send.py" >/dev/null
 sleep 2
 start_client
@@ -142,12 +154,14 @@ echo "   captured: $regs REGISTER, $datas DATA"
 echo "== 1. replay the live session's REGISTER and DATA from another address"
 sleep 6   # past the server's 5 s per-address REGISTER rate limit
 before=$(icmp_in "$SRV")
+drops=$(dropped_regs)
 grep '^1 ' "$BUILD_CTX/old.txt" | tail -n 1 > "$BUILD_CTX/reg-last.txt"
 grep '^2 ' "$BUILD_CTX/old.txt" > "$BUILD_CTX/data.txt"
 replay "$BUILD_CTX/reg-last.txt" "$BUILD_CTX/data.txt"
 sleep 2
 after=$(icmp_in "$SRV")
 [ "$after" = "$before" ]; check $? "replayed pings do not reach the server (echo requests: $before -> $after)"
+[ "$(dropped_regs)" -gt "$drops" ]; check $? "the server rejected the replayed REGISTER"
 docker logs "$SRV" 2>&1 | grep -q "reconnected: .*$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$ATK")"
 [ $? != 0 ]; check $? "the session did not move to the attacker's address"
 still_up
@@ -157,11 +171,13 @@ docker restart -t 1 "$CLI" >/dev/null
 wait_ping; check $? "the client registered a new session"
 sleep 6
 before=$(icmp_in "$SRV")
+drops=$(dropped_regs)
 grep '^1 ' "$BUILD_CTX/old.txt" > "$BUILD_CTX/regs.txt"
 replay "$BUILD_CTX/regs.txt" "$BUILD_CTX/data.txt"
 sleep 2
 after=$(icmp_in "$SRV")
 [ "$after" = "$before" ]; check $? "old session's pings do not reach the server (echo requests: $before -> $after)"
+[ "$(dropped_regs)" -ge $((drops + regs)) ]; check $? "the server rejected all $regs old REGISTERs"
 still_up
 
 if [ "$FAILS" != 0 ]; then
