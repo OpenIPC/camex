@@ -16,7 +16,11 @@ android {
         targetSdk = 34
         versionCode = 20307
         versionName = "2.3.7"
-        ndk { abiFilters += listOf("arm64-v8a") }
+        // 64-bit phones and 32-bit devices (TV boxes, older phones).
+        // Override with -PcamexAbis=arm64-v8a for a smaller APK.
+        val abis = (project.findProperty("camexAbis") as String?)
+            ?: "arm64-v8a,armeabi-v7a"
+        ndk { abiFilters += abis.split(",").map { it.trim() } }
         externalNativeBuild {
             cmake { arguments("-DANDROID_STL=c++_static") }
         }

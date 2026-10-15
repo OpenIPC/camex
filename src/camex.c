@@ -495,8 +495,13 @@ int camex_init(camex_config_t *config)
             return -1;
         }
 
-        /* Try accepting TUN fd from environment (Android VpnService) */
-        if (tun_accept_fd() < 0) {
+        /* TUN from the host application (Android VpnService): through the
+         * provider, which gets the final address and routes, or as a
+         * ready fd in CAMEX_TUN_FD; otherwise create the device here. */
+        if (tun_open_provided(local_ip, local_netmask, current_config.mtu,
+                              (const char (*)[32])current_config.route_cidrs,
+                              current_config.route_count) < 0 &&
+            tun_accept_fd() < 0) {
             if (tun_create_device(local_ip, local_netmask, current_config.mtu,
                                   current_config.tun_dev) != 0) {
                 net_close();
@@ -773,14 +778,22 @@ static void drain_tcp_client_read(int fd)
     }
 }
 
+/* Max TUN packets handled per event-loop pass. */
+#define TUN_DRAIN_BUDGET 64U
+
 static void handle_tun_packet(void)
 {
     uint8_t buffer[TUN_PACKET_MAX];
     ssize_t len;
     uint32_t src_ip_be = 0;
     uint32_t dst_ip_be = 0;
+    unsigned int budget = TUN_DRAIN_BUDGET;
 
-    while (1) {
+    /* Bounded: under a continuous stream the loop returns to select()
+     * after TUN_DRAIN_BUDGET packets, so socket reads, pending-send
+     * flushes and client expiry still run.  The TUN fd stays readable,
+     * so the next pass picks up where this one stopped. */
+    while (budget-- > 0U) {
         len = tun_read_packet(buffer, sizeof(buffer));
         if (len > 0) {
             int rc;
@@ -796,20 +809,19 @@ static void handle_tun_packet(void)
                 rc = client_handle_tun_packet(buffer, (size_t)len);
             }
             if (rc == 1) {
-                /* BUGFIX: rc==1 means the underlying TCP send is still
-                 * flushing a previous frame (single shared pending-send
-                 * buffer, see net_tcp_send_frame()) — NOT a real error.
-                 * The old code logged "Dropped packet" and immediately
-                 * read+attempted the NEXT TUN packet anyway, which under
-                 * any burst of real traffic (e.g. the camera's own apps
-                 * routed through this tunnel while it's the active
-                 * channel) repeatedly raced the same pending buffer and
-                 * corrupted the TCP-framed control stream — surfacing as
-                 * bogus frame lengths and forced disconnects server-side.
-                 * Fix: stop draining TUN for this cycle so the pending
-                 * send can flush; the kernel's own TUN queue holds the
-                 * rest until we come back on the next event-loop pass. */
-                break;
+                /* rc==1: the destination TCP connection is still flushing.
+                 * Either an earlier frame was pending and this packet was
+                 * dropped, or this frame was queued and is partly sent
+                 * (net_tcp_send_frame(), one pending buffer per fd).  A
+                 * client has a single connection, so stop draining TUN and
+                 * let the flush finish; the kernel's TUN queue holds the
+                 * rest until the next event-loop pass.  A server keeps
+                 * draining: other clients' sockets are not blocked, and one
+                 * stalled client must not hold up their traffic. */
+                if (!server_mode) {
+                    break;
+                }
+                continue;
             }
             if (rc != 0) {
                 log_message(LOG_WARNING, "Dropped packet from tunnel device");
@@ -991,7 +1003,8 @@ void camex_stop(void)
 
     running = 0;
 
-    if (client_mode && current_config.gateway_ip[0] != '\0') {
+    if (client_mode && current_config.gateway_ip[0] != '\0' &&
+        !tun_is_external()) {
         for (i = 0; i < current_config.route_count; ++i) {
             if (camex_del_route(current_config.route_cidrs[i],
                                 current_config.gateway_ip) != 0) {

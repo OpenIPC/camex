@@ -1,4 +1,8 @@
-# Camex — v2.3.8
+![OpenIPC logo][logo]
+
+# OpenIPC Camex
+
+**English** | [Русский](README.ru.md) | [简体中文](README.zh-CN.md)
 
 [![camex CI](https://github.com/OpenIPC/camex/actions/workflows/build.yml/badge.svg)](https://github.com/OpenIPC/camex/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/OpenIPC/camex)](https://github.com/OpenIPC/camex/releases)
@@ -63,7 +67,7 @@ sudo ./camex --mode client \
 |---|---|
 | Linux kernel | 3.10 or later |
 | TUN support | `CONFIG_TUN=y` (`/dev/net/tun`) **or** `camex.ko` loaded (`/dev/camex`) |
-| Privileges | `root` or `CAP_NET_ADMIN` + `CAP_NET_RAW` |
+| Privileges | `root` or `CAP_NET_ADMIN` + `CAP_NET_RAW` (non-root with `camex.ko`: also access to `/dev/camex`, see [Kernel Module](#kernel-module)) |
 | C compiler | C99-compatible (GCC or Clang) |
 
 ## Build
@@ -276,7 +280,22 @@ cannot be unloaded or disabled.
 Using `misc_register()` automatically:
 - allocates a minor number dynamically (no conflicts);
 - creates `/dev/camex` via udev/devtmpfs without any udev rules;
-- sets permissions to `0666` (readable and writable by all users).
+- sets permissions to `0600` (root only).
+
+`open()` additionally requires `CAP_NET_ADMIN`: the device injects
+packets into the network stack and exposes routed traffic, which is a
+network-admin operation, just like configuring a tun device.
+
+A daemon that runs as a non-root user with `CAP_NET_ADMIN` + `CAP_NET_RAW`
+also needs file access to the node, which `0600` does not give it. Grant it
+to a dedicated group with a udev rule (the capability check still applies):
+
+```sh
+# /etc/udev/rules.d/90-camex.rules
+KERNEL=="camex", GROUP="camex", MODE="0660"
+```
+
+or, without udev, after each `insmod`: `chgrp camex /dev/camex && chmod 0660 /dev/camex`.
 
 #### 3. Packet queue protected by `spinlock` + `irqsave`
 
@@ -300,9 +319,11 @@ or non-IPv4 packets from entering the stack.
 
 #### 6. Single user (`EBUSY`)
 
-`g_priv->attached` is a boolean flag. If `/dev/camex` is already open,
-a subsequent `open()` immediately returns `-EBUSY`. This prevents a
-race condition between two processes writing to the same queue.
+`g_priv->attached` is an `atomic_t` taken with `atomic_cmpxchg()`. If
+`/dev/camex` is already open, a subsequent `open()` immediately returns
+`-EBUSY`, and two concurrent `open()` calls can never both succeed. On
+`close()` the queue is flushed and the slot released under the same lock
+that `camex_net_xmit()` takes, so no packet is left for the next `open()`.
 
 #### 7. `ARPHRD_NONE` + `IFF_NOARP`
 
@@ -372,7 +393,7 @@ dmesg | tail -5
 # camex: loaded — /dev/camex <-> net:camex  (kernel 5.15)
 
 ls -la /dev/camex
-# crw-rw-rw- 1 root root 10, 58 ...  /dev/camex
+# crw------- 1 root root 10, 58 ...  /dev/camex
 
 ip link show camex
 # camex: <POINTOPOINT,NOARP> mtu 1500 ...
@@ -401,7 +422,7 @@ sudo rmmod camex
 
 | Operation               | Behaviour                                                         |
 |-------------------------|-------------------------------------------------------------------|
-| `open()`                | Only one fd allowed at a time; returns `EBUSY` otherwise          |
+| `open()`                | Needs `CAP_NET_ADMIN`; one fd at a time, `EBUSY` otherwise        |
 | `read()`                | Returns one IPv4 packet. Blocks when queue is empty               |
 | `read()` + `O_NONBLOCK` | Returns `EAGAIN` when queue is empty                              |
 | `write()`               | Injects one IPv4 packet into the stack. Minimum 20 bytes          |
@@ -413,6 +434,7 @@ sudo rmmod camex
 
 | Code       | Cause                                                        |
 |------------|--------------------------------------------------------------|
+| `EPERM`    | `open()` without `CAP_NET_ADMIN`                             |
 | `EBUSY`    | `/dev/camex` is already open by another process              |
 | `ENODEV`   | Module is being unloaded                                     |
 | `EMSGSIZE` | `read()` buffer smaller than packet length (packet dropped)  |
@@ -594,3 +616,16 @@ set to the tag name (e.g., `v2.3.6`).
 - The server supports per-client PSKs: add `psk=<key>` inside a `[client ID]` block
   in the config file. Clients that authenticate with a per-client key ignore the
   global `--psk` value on the server side.
+
+## License
+
+[MIT](LICENSE). See [LICENSE](LICENSE) for the full terms.
+
+## Support
+
+- Questions and bug reports: [GitHub Issues](https://github.com/OpenIPC/camex/issues)
+- Documentation: [openipc.org](https://openipc.org)
+
+[![Telegram](https://openipc.org/images/telegram_button.svg)](https://openipc.org/our-channels)
+
+[logo]: https://raw.githubusercontent.com/OpenIPC/.github/refs/heads/main/assets/openipc-logo-black.svg

@@ -39,6 +39,7 @@ public class SettingsBottomSheet extends BottomSheetDialogFragment {
     private TextInputEditText mtuInput, keepaliveInput, timeoutInput;
     private TextInputLayout pskLayout;
     private SwitchMaterial encryptSwitch;
+    private SwitchMaterial fullTunnelSwitch;
     private MaterialButtonToggleGroup transportGroup;
 
     @Nullable
@@ -59,6 +60,7 @@ public class SettingsBottomSheet extends BottomSheetDialogFragment {
         pskInput = v.findViewById(R.id.input_psk);
         pskLayout = v.findViewById(R.id.layout_psk);
         encryptSwitch = v.findViewById(R.id.switch_encrypt);
+        fullTunnelSwitch = v.findViewById(R.id.switch_full_tunnel);
         transportGroup = v.findViewById(R.id.group_transport);
         mtuInput = v.findViewById(R.id.input_mtu);
         keepaliveInput = v.findViewById(R.id.input_keepalive);
@@ -71,6 +73,7 @@ public class SettingsBottomSheet extends BottomSheetDialogFragment {
         pskInput.setText(prefs.getString("psk", ""));
         boolean encrypt = prefs.getBoolean("encrypt", false);
         encryptSwitch.setChecked(encrypt);
+        fullTunnelSwitch.setChecked(prefs.getBoolean("full_tunnel", false));
         pskLayout.setEnabled(encrypt);
 
         encryptSwitch.setOnCheckedChangeListener((b, checked) -> pskLayout.setEnabled(checked));
@@ -136,6 +139,7 @@ public class SettingsBottomSheet extends BottomSheetDialogFragment {
             .putString("name", name)
             .putString("transport", transport)
             .putBoolean("encrypt", encryptSwitch.isChecked())
+            .putBoolean("full_tunnel", fullTunnelSwitch.isChecked())
             .putString("psk", text(pskInput))
             .putInt("mtu", mtu)
             .putInt("keepalive", keepalive)
