@@ -62,6 +62,10 @@ void server_expire_clients(void);
 /* Reset replay protection for a client entry */
 void server_reset_replay(server_client_t *entry);
 
+/* After a config reload: end sessions whose key is no longer allowed
+ * for their client (#16 L3). */
+void server_revalidate_keys(void);
+
 /* After a config reload: end sessions of auto clients whose ID is not in
  * the file when allow_unknown_clients = no (#15). */
 void server_revalidate_unknown_clients(void);

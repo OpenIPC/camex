@@ -33,6 +33,7 @@ typedef struct {
     uint8_t psk_key[32];
     uint8_t fingerprint[16];
     uint8_t ready;
+    uint8_t has_global;   /* psk_key is a usable global key */
 } camex_crypto_t;
 
 /* Key derivation from PSK string */
@@ -68,5 +69,10 @@ const camex_crypto_t *crypto_get_ctx(void);
 /* crypto_wipe() is provided by monocypher.h */
 
 void crypto_wipe_ctx(void);
+
+/* Drop the global key but keep encryption working for per-client keys:
+ * the key is wiped and packets without an explicit key are refused
+ * (#16 L3). */
+void crypto_drop_global(void);
 
 #endif /* CAMEX_CRYPTO_H */

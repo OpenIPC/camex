@@ -102,6 +102,10 @@ jobs:
         run: ./docker/test-e2e-auto-pool.sh
         if: matrix.platform.name == 'x86_64'
 
+      - name: E2E test (hardening, issue #16)
+        run: ./docker/test-e2e-hardening.sh
+        if: matrix.platform.name == 'x86_64'
+
       - name: Build cross
         run: |
           make clean
@@ -584,6 +588,7 @@ jobs:
           ls -lh release-binaries/
 
       - name: Create or update release (gh CLI)
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -600,4 +605,35 @@ jobs:
               --title "camex ${{ steps.tag.outputs.tag }}" \
               --generate-notes \
               release-binaries/*
+            echo "new=true" >> "$GITHUB_OUTPUT"
           fi
+
+      # The Telegram channel gets the APK of every new release, as in
+      # OpenIPC/vtesse (#43). Organization secrets; only a signed APK is sent,
+      # and a failed upload is reported but does not fail the release.
+      - name: Telegram
+        if: steps.release.outputs.new == 'true'
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_TOKEN_BOT_OPENIPC }}
+          TG_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL_OPENIPC_DEV }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHANNEL" ]; then
+            echo "::warning::Telegram secrets are not available, APK not posted"; exit 0
+          fi
+          VER="${TAG#v}"
+          APK="release-binaries/camex-${VER}-android.apk"
+          [ -f "$APK" ] || { echo "::warning::no APK in the release, nothing posted"; exit 0; }
+          # An unsigned APK (no release keystore) cannot be installed: do not post it
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$APKSIGNER" ] || ! "$APKSIGNER" verify "$APK" >/dev/null 2>&1; then
+            echo "::warning::$APK is not signed (or apksigner is missing), not posted"; exit 0
+          fi
+          # The commit the tag points to (a manual run may start from another one)
+          COMMIT=$(git rev-list -n 1 "$TAG" 2>/dev/null || echo "$GITHUB_SHA")
+          CAPTION=$(printf 'camex %s for Android\nCommit: %s\nTime: %s\n\n%s' "$VER" "${COMMIT::7}" \
+            "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}")
+          HTTP=$(curl -sS -o tg.json -w '%{http_code}' "https://api.telegram.org/bot${TG_TOKEN}/sendDocument" \
+            -F chat_id="$TG_CHANNEL" -F caption="$CAPTION" -F document=@"$APK") || HTTP=000
+          echo "Telegram response: $HTTP"
+          [ "$HTTP" = 200 ] || echo "::warning::Telegram upload failed (HTTP $HTTP): $(cat tg.json 2>/dev/null)"

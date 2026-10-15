@@ -87,6 +87,10 @@ typedef int socklen_t;
 #include <iphlpapi.h>
 #endif
 
+/* The global key came from psk= in [server], not from --psk: a reload
+ * then replaces it (#16 L3). */
+static uint8_t global_psk_from_config = 0U;
+
 /* Global state */
 camex_config_t current_config;
 volatile sig_atomic_t running = 1;
@@ -428,6 +432,7 @@ int camex_init(camex_config_t *config)
             if (current_config.psk[0] == '\0' && g->psk[0] != '\0') {
                 snprintf(current_config.psk, sizeof(current_config.psk),
                          "%s", g->psk);
+                global_psk_from_config = 1U;
             }
             if (!current_config.encrypt && g->encrypt_set) {
                 current_config.encrypt = g->encrypt;
@@ -449,6 +454,7 @@ int camex_init(camex_config_t *config)
             return -1;
         }
         crypto_wipe(current_config.psk, sizeof(current_config.psk));
+        crypto_wipe(server_db.globals.psk, sizeof(server_db.globals.psk));
     }
 
     if (client_mode) {
@@ -612,7 +618,8 @@ static void drain_udp_packets(void)
                 if (server_handle_packet(buffer, (size_t)len, &from, -1) != 0) {
                     char peer[64];
                     net_sockaddr_to_string(&from, peer, sizeof(peer));
-                    log_message(LOG_WARNING, "Dropped packet from %s", peer);
+                    log_peer(LOG_WARNING,
+                             "Dropped packet from %s", peer);
                 }
                 continue;
             }
@@ -640,7 +647,8 @@ static void drain_udp_packets(void)
                     current_config.server_host, current_config.port);
             }
             if (client_handle_net_packet(buffer, frame_len) != 0) {
-                log_message(LOG_WARNING, "Dropped packet from server");
+                log_peer(LOG_WARNING,
+                         "Dropped packet from server");
             }
         } else if (rc < 0) {
             log_message(LOG_WARNING,
@@ -663,7 +671,8 @@ static void drain_udp_packets(void)
                     current_config.server_host, current_config.port);
             }
             if (client_handle_net_packet(buffer, (size_t)len) != 0) {
-                log_message(LOG_WARNING, "Dropped packet from server");
+                log_peer(LOG_WARNING,
+                         "Dropped packet from server");
             }
             continue;
         }
@@ -698,6 +707,16 @@ static void drain_tcp_server_accept(void)
             continue;
         }
 
+#ifndef _WIN32
+        /* select() can only watch descriptors below FD_SETSIZE (#16 L4) */
+        if (client_fd >= FD_SETSIZE) {
+            net_tcp_close(client_fd);
+            log_peer(LOG_WARNING,
+                     "Refused TCP connection: descriptor %d is beyond "
+                     "FD_SETSIZE", client_fd);
+            continue;
+        }
+#endif
         if (set_fd_nonblocking(client_fd) != 0) {
             net_tcp_close(client_fd);
             continue;
@@ -733,10 +752,10 @@ static void drain_tcp_server_accept(void)
             if (pending_ip >= CAMEX_TCP_PREAUTH_PER_IP) {
                 net_tcp_close(client_fd);
                 net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
-                log_message(LOG_WARNING,
-                            "Refused TCP connection from %s: too many "
-                            "unregistered connections from this address",
-                            peer_str);
+                log_peer(LOG_WARNING,
+                         "Refused TCP connection from %s: too many "
+                         "unregistered connections from this address",
+                         peer_str);
                 continue;
             }
             if (pending >= CAMEX_TCP_PREAUTH_MAX && oldest == NULL) {
@@ -744,17 +763,17 @@ static void drain_tcp_server_accept(void)
                  * period: refuse; the client retries */
                 net_tcp_close(client_fd);
                 net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
-                log_message(LOG_WARNING,
-                            "Refused TCP connection from %s: too many "
-                            "unregistered connections", peer_str);
+                log_peer(LOG_WARNING,
+                         "Refused TCP connection from %s: too many "
+                         "unregistered connections", peer_str);
                 continue;
             }
             if (pending >= CAMEX_TCP_PREAUTH_MAX) {
                 net_sockaddr_to_string(&oldest->addr, peer_str,
                                        sizeof(peer_str));
-                log_message(LOG_WARNING,
-                            "Closed unregistered TCP connection from %s: "
-                            "too many unregistered connections", peer_str);
+                log_peer(LOG_WARNING,
+                         "Closed unregistered TCP connection from %s: "
+                         "too many unregistered connections", peer_str);
                 net_tcp_close(oldest->tcp_fd);
                 memset(oldest, 0, sizeof(*oldest));
             }
@@ -846,8 +865,9 @@ static void drain_tcp_client_read(int fd)
                                      &server_clients[i].addr, fd) != 0) {
                 net_sockaddr_to_string(&server_clients[i].addr,
                                        peer_str, sizeof(peer_str));
-                log_message(LOG_WARNING, "Dropped TCP packet from %s",
-                            peer_str);
+                log_peer(LOG_WARNING,
+                         "Dropped TCP packet from %s",
+                         peer_str);
             }
             return;
         }
@@ -999,6 +1019,7 @@ void camex_run(void)
             }
 
             server_expire_clients();
+            log_limit_tick();
             if (reload_config) {
                 camex_server_db_t saved_db = server_db;
                 static camex_keystore_entry_t saved_keystore[CAMEX_MAX_CLIENTS + 1];
@@ -1017,9 +1038,27 @@ void camex_run(void)
                     log_message(LOG_WARNING,
                                 "Keeping previous server configuration");
                 } else {
+                    /* The global key follows psk= in [server] when it came
+                     * from there (--psk on the command line wins) */
+                    if (global_psk_from_config && current_config.encrypt) {
+                        if (server_db.globals.psk[0] != '\0') {
+                            (void)crypto_init(server_db.globals.psk);
+                            crypto_wipe(server_db.globals.psk,
+                                        sizeof(server_db.globals.psk));
+                        } else {
+                            log_message(LOG_NOTICE,
+                                        "Global key removed by the reload");
+                            crypto_drop_global();
+                        }
+                    }
                     config_build_keystore();
+                    server_revalidate_keys();
                     server_revalidate_unknown_clients();
                 }
+                /* The copies hold passphrases and keys of the previous
+                 * config */
+                crypto_wipe(&saved_db, sizeof(saved_db));
+                crypto_wipe(saved_keystore, sizeof(saved_keystore));
             }
         }
 
@@ -1030,6 +1069,7 @@ void camex_run(void)
     log_message(LOG_INFO, "Client started. Press Ctrl+C to stop.");
     while (running) {
         g_now = time(NULL);
+        log_limit_tick();
 
         if (net_fd < 0) {
             usleep(1000000);
