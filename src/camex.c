@@ -495,8 +495,12 @@ int camex_init(camex_config_t *config)
     }
     /* The private key text is not needed any more (and is unused without
      * encryption) */
-    if (!current_config.encrypt && server_db.globals.server_key[0] != '\0') {
-        log_message(LOG_NOTICE, "server_key= is ignored without encryption");
+    if (!current_config.encrypt &&
+        (server_db.globals.server_key[0] != '\0' ||
+         current_config.server_key_file[0] != '\0' ||
+         current_config.server_pubkey[0] != '\0')) {
+        log_message(LOG_NOTICE, "server_key=, --server-key-file and "
+                    "--server-pubkey are ignored without encryption");
     }
     crypto_wipe(server_db.globals.server_key,
                 sizeof(server_db.globals.server_key));

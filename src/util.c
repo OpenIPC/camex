@@ -458,6 +458,8 @@ int read_key_file(const char *path, char *out, size_t out_size)
     if (fp == NULL) {
         return -1;
     }
+    /* No stdio buffer: it would keep a copy of the key after fclose() */
+    setvbuf(fp, NULL, _IONBF, 0);
 #ifndef _WIN32
     {
         struct stat st;
