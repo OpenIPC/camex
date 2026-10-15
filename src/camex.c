@@ -599,7 +599,9 @@ int camex_init(camex_config_t *config)
         return 0;
     }
 
-    config_build_keystore();
+    if (config_build_keystore() != 0) {
+        return -1;
+    }
 
     if (server_socket_create(current_config.bind_ip, current_config.port,
                              current_config.bind_dev) != 0) {
@@ -1068,6 +1070,7 @@ void camex_run(void)
                 camex_server_db_t saved_db = server_db;
                 static camex_keystore_entry_t saved_keystore[CAMEX_MAX_CLIENTS + 1];
                 size_t saved_keystore_count = server_keystore_count;
+                int restore;
 
                 reload_config = 0;
                 log_message(LOG_INFO, "Reloading config: %s",
@@ -1075,21 +1078,20 @@ void camex_run(void)
                 key_cache_mark();
                 memcpy(saved_keystore, server_keystore,
                        sizeof(saved_keystore));
-                if (config_db_load_file(current_config.config_path) != 0) {
-                    server_db = saved_db;
-                    memcpy(server_keystore, saved_keystore,
-                           sizeof(saved_keystore));
-                    server_keystore_count = saved_keystore_count;
-                    log_message(LOG_WARNING,
-                                "Keeping previous server configuration");
-                } else {
+                restore = config_db_load_file(current_config.config_path) != 0;
+
+                if (!restore) {
                     /* The global key follows psk= in [server] when it came
                      * from there (--psk on the command line wins) */
                     if (global_psk_from_config) {
                         if (server_db.globals.psk[0] != '\0') {
                             /* A bad new key must not leave the old one
                              * working */
-                            if (crypto_init(server_db.globals.psk) != 0) {
+                            int rc = crypto_init(server_db.globals.psk);
+
+                            if (rc == KEY_ERR_NOMEM) {
+                                restore = 1;   /* the key may be fine */
+                            } else if (rc != 0) {
                                 log_message(LOG_ERR, "Invalid global psk= "
                                             "after the reload: the global "
                                             "key is disabled until it is "
@@ -1111,10 +1113,25 @@ void camex_run(void)
                         crypto_wipe(server_db.globals.server_key,
                                     sizeof(server_db.globals.server_key));
                     }
-                    config_build_keystore();
-                    key_cache_sweep();
-                    server_revalidate_keys();
-                    server_revalidate_unknown_clients();
+                    /* Out of memory for Argon2id: nothing is wrong with
+                     * the keys, so keep the previous ones */
+                    if (!restore && config_build_keystore() != 0) {
+                        restore = 1;
+                    }
+                    if (!restore) {
+                        key_cache_sweep();
+                        server_revalidate_keys();
+                        server_revalidate_unknown_clients();
+                    }
+                }
+                if (restore) {
+                    crypto_wipe(&server_db, sizeof(server_db));
+                    server_db = saved_db;
+                    memcpy(server_keystore, saved_keystore,
+                           sizeof(saved_keystore));
+                    server_keystore_count = saved_keystore_count;
+                    log_message(LOG_WARNING,
+                                "Keeping previous server configuration");
                 }
                 /* The copies hold passphrases and keys of the previous
                  * config */

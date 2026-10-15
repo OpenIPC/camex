@@ -82,9 +82,11 @@ int crypto_init(const char *psk)
         /* A bad key must not leave a partly overwritten key behind */
         uint8_t key[32];
 
-        if (derive_psk_key(psk, key) != 0) {
+        int rc = derive_psk_key(psk, key);
+
+        if (rc != 0) {
             crypto_wipe(key, sizeof(key));
-            return -1;
+            return rc;   /* -1, or KEY_ERR_NOMEM */
         }
         memcpy(crypto_ctx.psk_key, key, sizeof(key));
         crypto_wipe(key, sizeof(key));

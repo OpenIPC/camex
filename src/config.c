@@ -8,6 +8,7 @@
 
 #include "config.h"
 #include "crypto.h"
+#include "keys.h"
 #include "log.h"
 #include "util.h"
 
@@ -393,10 +394,11 @@ int config_db_lookup_profile(const char *client_id, camex_profile_t *profile)
     return 0;
 }
 
-void config_build_keystore(void)
+int config_build_keystore(void)
 {
     const camex_crypto_t *ctx;
     size_t i;
+    int rc;
 
     server_keystore_count = 0U;
     memset(server_keystore, 0, sizeof(server_keystore));
@@ -415,9 +417,23 @@ void config_build_keystore(void)
         if (server_db.clients[i].profile.psk[0] == '\0') {
             continue;
         }
-        if (derive_psk_key(server_db.clients[i].profile.psk,
-                           server_keystore[server_keystore_count].psk_key)
-            != 0) {
+        rc = derive_psk_key(server_db.clients[i].profile.psk,
+                            server_keystore[server_keystore_count].psk_key);
+        if (rc == KEY_ERR_NOMEM) {
+            /* Not the key's fault: the caller keeps what it had */
+            log_message(LOG_ERR, "Out of memory deriving the key of "
+                        "client %s", server_db.clients[i].client_id);
+            crypto_wipe(server_keystore, sizeof(server_keystore));
+            server_keystore_count = 0U;
+            for (i = 0U; i < CAMEX_MAX_CLIENTS; ++i) {
+                crypto_wipe(server_db.clients[i].profile.psk,
+                            sizeof(server_db.clients[i].profile.psk));
+            }
+            crypto_wipe(server_db.defaults.psk,
+                        sizeof(server_db.defaults.psk));
+            return KEY_ERR_NOMEM;
+        }
+        if (rc != 0) {
             /* The client keeps a locked owner entry that matches no key:
              * it cannot register until its psk= is fixed, and the global
              * key cannot take its ID over either */
@@ -462,6 +478,7 @@ void config_build_keystore(void)
 
     log_message(LOG_INFO, "Server keystore: %u PSK(s) loaded",
                 (unsigned)server_keystore_count);
+    return 0;
 }
 
 int config_apply_profile(camex_config_t *config, const camex_profile_t *profile)
