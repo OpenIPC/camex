@@ -8,10 +8,13 @@
 
 #include "camex.h"
 #include "client.h"
+#include "config.h"
 #include "proto.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 /* Globals normally provided by camex.c / client.c */
 camex_config_t current_config;
@@ -95,6 +98,36 @@ int main(void)
             fprintf(stderr, "FAIL: rejected CONFIG changed client ID to %s\n",
                     cfg.client_id);
             ++failures;
+        }
+    }
+
+    /* A raw hex: key (68 characters) fits psk= in [server] and in a
+     * [client ID] block */
+    {
+        const char *hex = "hex:000102030405060708090a0b0c0d0e0f"
+                          "101112131415161718191a1b1c1d1e1f";
+        char path[] = "/tmp/test_proto_XXXXXX";
+        int fd = mkstemp(path);
+        FILE *fp = fd >= 0 ? fdopen(fd, "w") : NULL;
+        camex_server_profile_t *c;
+
+        if (fp == NULL) {
+            fprintf(stderr, "FAIL: cannot create a temporary config\n");
+            ++failures;
+        } else {
+            fprintf(fp, "[server]\npsk=%s\n[client CAM1]\npsk=%s\n",
+                    hex, hex);
+            fclose(fp);
+            c = NULL;
+            if (config_db_load_file(path) != 0 ||
+                strcmp(server_db.globals.psk, hex) != 0 ||
+                (c = config_db_find_client("CAM1")) == NULL ||
+                strcmp(c->profile.psk, hex) != 0) {
+                fprintf(stderr, "FAIL: a 64-digit hex: key in the config "
+                        "was not read whole\n");
+                ++failures;
+            }
+            unlink(path);
         }
     }
 

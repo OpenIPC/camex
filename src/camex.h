@@ -46,7 +46,7 @@ typedef struct {
     uint8_t route_count;
     int mtu;
     uint8_t encrypt;
-    char psk[64];
+    char psk[128];   /* hex: + 64 digits fits; passphrases too */
     char client_id[CAMEX_CLIENT_ID_LEN];
     char config_path[CAMEX_CONFIG_PATH_LEN];
     uint8_t auto_config;

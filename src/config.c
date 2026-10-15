@@ -163,10 +163,12 @@ int config_db_apply_kv(camex_profile_t *profile,
     return 0;
 }
 
-int config_db_load_file(const char *path)
+/* The parser proper; line is the caller's buffer, wiped by the caller
+ * on every exit (it can hold psk= and server_key= text) */
+static int config_db_parse_file(const char *path, char *line,
+                                size_t line_size)
 {
     FILE *fp;
-    char line[512];
     camex_profile_t *current = NULL;
     camex_server_profile_t *client = NULL;
     enum {
@@ -192,7 +194,7 @@ int config_db_load_file(const char *path)
         return -1;
     }
 
-    while (fgets(line, sizeof(line), fp) != NULL) {
+    while (fgets(line, (int)line_size, fp) != NULL) {
         char *content;
         char *equals;
         trim_whitespace(line);
@@ -363,6 +365,15 @@ int config_db_load_file(const char *path)
     server_db.loaded = 1U;
     (void)section;
     return 0;
+}
+
+int config_db_load_file(const char *path)
+{
+    char line[512];
+    int rc = config_db_parse_file(path, line, sizeof(line));
+
+    crypto_wipe(line, sizeof(line));
+    return rc;
 }
 
 int config_db_lookup_profile(const char *client_id, camex_profile_t *profile)
