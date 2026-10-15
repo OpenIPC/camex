@@ -568,7 +568,9 @@ int main(int argc, char *argv[])
         }
     }
 
-    if (client_mode) {
+    /* An externally provided TUN (Android) gets its routes from the host
+     * application; camex has no permission to change the routing table. */
+    if (client_mode && !tun_is_external()) {
         size_t i;
 
         for (i = 0; i < current_config.route_count; ++i) {

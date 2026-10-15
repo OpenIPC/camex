@@ -41,6 +41,25 @@ int tun_create_device(const char *local_ip, const char *netmask, int mtu,
 /* Accept TUN fd from environment (CAMEX_TUN_FD) — used by Android VpnService */
 int tun_accept_fd(void);
 
+/*
+ * Optional TUN provider: lets the host application create the TUN device
+ * itself once the tunnel parameters are known (Android: VpnService.Builder
+ * needs the address, MTU and routes from the server's CONFIG). Returns a
+ * TUN fd that camex then owns, or -1.
+ */
+typedef int (*camex_tun_provider_t)(const char *local_ip, int prefix_len,
+                                    int mtu, const char routes[][32],
+                                    uint8_t route_count, void *ctx);
+void tun_set_provider(camex_tun_provider_t provider, void *ctx);
+
+/* Open the TUN device through the provider; -1 if none is set or it fails */
+int tun_open_provided(const char *local_ip, const char *netmask, int mtu,
+                      const char routes[][32], uint8_t route_count);
+
+/* 1 if the TUN device came from outside (provider or CAMEX_TUN_FD): routes
+ * are then managed by the host application, not by camex */
+int tun_is_external(void);
+
 /* Close TUN device */
 void tun_close_device(void);
 

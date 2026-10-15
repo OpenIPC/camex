@@ -334,7 +334,11 @@ void client_reconnect(void)
     client_state.config_received = 0;
     client_state.recv_seq_max = 0;
     client_state.recv_window = 0;
-    client_state.keepalive_acked = 0;
+    /* keepalive_acked is kept: whether the server answers keepalives is a
+     * property of the server, not of the session.  Clearing it here left
+     * silence detection off after a reconnect until the next answered
+     * keepalive, so a server that stopped answering right after the
+     * reconnect was never detected (#10). */
     client_state.last_recv = g_now;
     client_state.last_keepalive = g_now;
     client_reconnect_at = 0;
@@ -360,6 +364,16 @@ void client_reconnect(void)
     }
 }
 
+static int client_keepalive_interval(void)
+{
+    int cap = current_config.server_timeout / 2;
+
+    if (cap < 1) {
+        cap = 1;
+    }
+    return current_config.keepalive < cap ? current_config.keepalive : cap;
+}
+
 void client_tick(void)
 {
     if (net_fd < 0 || client_reconnect_at > 0) {
@@ -371,10 +385,11 @@ void client_tick(void)
     }
 
     /* Silence detection is enforced once the server has answered a
-     * KEEPALIVE in this session: that proves it replies to them, so a
-     * quiet link really means the server is gone. Servers that never
-     * answer keepalives (older versions) keep the previous behaviour. */
-    if (client_state.keepalive_acked &&
+     * KEEPALIVE: that proves it replies to them, so a quiet link really
+     * means the server is gone. Servers that never answer keepalives
+     * (older versions) keep the previous behaviour: silence counts only
+     * in auto mode, with or without keepalives. */
+    if ((client_state.keepalive_acked || current_config.auto_config) &&
         client_state.last_recv > 0 &&
         difftime(g_now, client_state.last_recv) >=
             (double)current_config.server_timeout) {
@@ -388,11 +403,14 @@ void client_tick(void)
         return;
     }
 
-    /* Send keepalive to prevent idle timeout */
+    /* Send keepalive to prevent idle timeout.  The interval is capped at
+     * half the server timeout: otherwise an idle client with a keepalive
+     * longer than the timeout would time out before its next probe and
+     * reconnect over and over. */
     if (current_config.keepalive > 0 &&
         client_state.last_keepalive > 0 &&
         difftime(g_now, client_state.last_keepalive) >=
-            (double)current_config.keepalive) {
+            (double)client_keepalive_interval()) {
         uint8_t packet[CAMEX_HDR_LEN + 1 + 1 + 16U];
         size_t packet_len = 0;
         int sent = 0;
