@@ -225,7 +225,7 @@ sudo ./camex \
 | `--config <path>` | `-f` | Server config file path |
 | `--route-cidr <cidr>` | `-c` | Extra route to install on the client; repeatable |
 | `--mtu <size>` | `-t` | Tunnel MTU, 576–9000 (default: 1500) |
-| `--psk <pass>` | `-k` | Passphrase stretched into a 32-byte key (works for both UDP and TCP) |
+| `--psk <pass>` | `-k` | Passphrase hashed into a 32-byte key, without stretching: use a long random one (works for both UDP and TCP) |
 | `--encrypt` | `-e` | Enable ChaCha20-Poly1305 encryption (master switch; required for all encrypted traffic) |
 | `--tun-dev <path>` | `-T` | TUN device path (default: auto-detect `/dev/net/tun` then `/dev/camex`) |
 | `--pid-file <path>` | `-P` | Write PID to file on startup |
@@ -259,6 +259,86 @@ one from the auto pool `10.200.0.2`–`10.200.0.254` (addresses in use and those
 of `[client ID]` blocks are skipped; addresses of expired clients are reused).
 To serve only the IDs listed in the file, set `allow_unknown_clients=no` in the
 `[server]` block.
+
+## Security Model
+
+camex is a small tunnel for cameras, not a general-purpose VPN. Know what it
+protects before exposing it to an untrusted network.
+
+### With `--encrypt`
+
+- Every packet is authenticated with ChaCha20-Poly1305: the payload is
+  encrypted, the header (packet type, nonce, length, sequence number) is
+  authenticated but readable. Packets that fail authentication are dropped.
+- **Keys.** The key is derived from the passphrase (`--psk` or `psk=`) with a
+  single BLAKE2b-256 hash, without salt or stretching (#14). Anyone who captures
+  traffic can test passphrase guesses offline, so use a long random passphrase
+  (32+ characters from a password generator), not a word.
+- **Per-client keys.** A `psk=` in a `[client ID]` block gives that client its
+  own key; it can register only with it, and the global key no longer works for
+  that ID (unless both passphrases are the same, which makes them one key). See
+  [Notes](#notes) for the exact rules.
+- **Source addresses.** A client may send only from its own tunnel address;
+  packets with another source address are dropped.
+- **Replay protection.** Each session has a 64-packet sliding window. A session
+  is bound to the client's random nonce prefix and its key: a captured
+  `REGISTER` or data packet replayed later, from any address, is rejected. The
+  server remembers the last 256 ended sessions; older sessions and sessions from
+  before a server restart are not remembered (fixed for good by per-session keys,
+  #17).
+- **Config reload.** After `SIGHUP`, a live session whose key was removed or
+  changed, or now belongs to another client, ends.
+
+### What it does not protect
+
+- **Plaintext mode** (no `--encrypt`) has no authentication at all: anyone who
+  can reach the server port can register and inject packets. Use it only on a
+  trusted network.
+- **No forward secrecy.** A leaked passphrase decrypts recorded traffic.
+- **Same key both ways.** One key is used in both directions and for all
+  sessions of a client (#16, #17).
+- **Metadata.** Packet sizes, timing, endpoints and the cleartext header (packet
+  type, sequence number) are visible.
+- **Inside the tunnel** traffic is not filtered: any client can reach the server
+  and other clients on the tunnel network. Restrict that with a firewall on the
+  server's tunnel interface (`tun0` or similar with `/dev/net/tun`, `camex`
+  with the kernel module; the server logs its name at startup).
+
+### Denial of service limits
+
+- TCP connections that have not registered yet are limited (4 per source
+  address, 32 in total) and closed after 10 s.
+- Log messages that a peer can trigger (dropped packets, rejected
+  registrations) are rate-limited; the number suppressed is logged.
+- The auto pool hands out `10.200.0.2`–`.254` and never gives one address to two
+  live clients (an expired client's address is handed out again);
+  `allow_unknown_clients=no` serves only auto-mode IDs listed in the config file
+  (manual clients are bound by their key and address, see [Notes](#notes)).
+
+### Recommended deployment
+
+- Always use `--encrypt` over networks you do not control, with a long random
+  passphrase.
+- Give each camera its own `psk=` in a `[client ID]` block, and set
+  `allow_unknown_clients=no` when all auto-mode cameras are listed.
+- Run the server with only the capabilities it needs (`CAP_NET_ADMIN`; with the
+  kernel module also file access to `/dev/camex`, see below), and firewall the
+  tunnel interface.
+
+### Kernel module permissions
+
+`/dev/camex` is created `0600`, and `open()` requires `CAP_NET_ADMIN`; see
+[Key Design Decisions](#key-design-decisions). The module does no encryption:
+encryption is done by the userspace app.
+
+### Android app
+
+The app uses `VpnService`, so Android shows the VPN key icon while the tunnel is
+up; there is no way around that with `VpnService` (a client without TUN is
+tracked in #21). Only the tunnel network and the routes the server sends go
+through the tunnel; a `0.0.0.0/0` route from the server is ignored unless
+**Route all traffic through the tunnel** is enabled in the settings. That
+switch covers IPv4 only: IPv6 traffic does not go through the tunnel.
 
 ## Kernel Module
 
