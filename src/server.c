@@ -379,19 +379,155 @@ static void server_send_keepalive(server_client_t *entry)
     }
 }
 
-/* Does `used_key` (the key a packet decrypted with) belong to `entry`?
- * An entry without its own key uses the global key. */
-static int server_entry_owns_key(const server_client_t *entry,
-                                 const uint8_t *used_key)
+/*
+ * Key ownership (#5). The keystore holds the global key (owner "") and
+ * one entry per [client ID] that has its own psk=. A client that has its
+ * own key may only use that key; the global key is for clients that have
+ * none.
+ */
+static const char *keystore_owner(const uint8_t *key)
 {
-    const uint8_t *own;
+    size_t i;
 
-    if (entry == NULL || used_key == NULL) {
+    if (key == NULL) {
+        return "";
+    }
+    for (i = 0U; i < server_keystore_count; ++i) {
+        if (memcmp(server_keystore[i].psk_key, key, 32) == 0) {
+            return server_keystore[i].owner;
+        }
+    }
+    return "";
+}
+
+static int keystore_has_owner(const char *client_id)
+{
+    size_t i;
+
+    for (i = 0U; i < server_keystore_count; ++i) {
+        if (server_keystore[i].owner[0] != '\0' &&
+            strcasecmp(server_keystore[i].owner, client_id) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int keystore_key_owned_by(const uint8_t *key, const char *client_id)
+{
+    size_t i;
+
+    if (key == NULL) {
         return 0;
     }
-    own = is_zero_key(entry->psk_key) ? crypto_get_ctx()->psk_key
-                                      : entry->psk_key;
-    return memcmp(own, used_key, 32) == 0;
+    for (i = 0U; i < server_keystore_count; ++i) {
+        if (server_keystore[i].owner[0] != '\0' &&
+            strcasecmp(server_keystore[i].owner, client_id) == 0 &&
+            memcmp(server_keystore[i].psk_key, key, 32) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Tunnel IP configured for client_id in its own [client ID] section. */
+static int profile_ip(const char *client_id, uint32_t *ip_be)
+{
+    camex_server_profile_t *p = config_db_find_client(client_id);
+    char ip[16];
+    char mask[16];
+    struct in_addr a;
+
+    if (p == NULL || p->profile.local_cidr[0] == '\0' ||
+        parse_local_cidr(p->profile.local_cidr, ip, sizeof(ip),
+                         mask, sizeof(mask)) != 0 ||
+        inet_pton(AF_INET, ip, &a) != 1) {
+        return -1;
+    }
+    *ip_be = a.s_addr;
+    return 0;
+}
+
+/* The [client ID] section whose local_cidr address is ip_be, if any. */
+static const char *profile_owner_of_ip(uint32_t ip_be)
+{
+    size_t i;
+
+    for (i = 0U; i < CAMEX_MAX_CLIENTS; ++i) {
+        uint32_t want;
+
+        if (server_db.clients[i].active &&
+            profile_ip(server_db.clients[i].client_id, &want) == 0 &&
+            want == ip_be) {
+            return server_db.clients[i].client_id;
+        }
+    }
+    return NULL;
+}
+
+/*
+ * May a REGISTER authenticated with key claim client_id / local_ip?
+ * For a manual REGISTER without CLIENT_ID the owner of a per-client key
+ * becomes the client ID. Returns 0 if allowed, -1 if rejected.
+ */
+static int server_register_allowed(const uint8_t *key, char *client_id,
+                                   size_t client_id_size,
+                                   const char *local_ip, uint8_t auto_request,
+                                   const struct sockaddr_in *from)
+{
+    char peer[64];
+    const char *owner = keystore_owner(key);
+    int global_key = (owner[0] == '\0');
+
+    net_sockaddr_to_string(from, peer, sizeof(peer));
+
+    if (current_config.encrypt) {
+        if (client_id[0] == '\0' && !global_key) {
+            snprintf(client_id, client_id_size, "%s", owner);
+        }
+        /* The named client's own key always counts as its key, even when
+         * the same bytes are also the global key or another client's key
+         * (keystore_owner() only reports the first match). */
+        if (client_id[0] != '\0' &&
+            !keystore_key_owned_by(key, client_id) &&
+            (!global_key || keystore_has_owner(client_id))) {
+            log_message(LOG_WARNING,
+                        "Rejected REGISTER from %s: key does not belong "
+                        "to client %s", peer, client_id);
+            return -1;
+        }
+    }
+
+    /* Plaintext mode has no keys and no identities to protect: manual
+     * registration there stays as it was. */
+    if (current_config.encrypt && !auto_request) {
+        struct in_addr claimed;
+        uint32_t want;
+        const char *ip_owner;
+
+        if (inet_pton(AF_INET, local_ip, &claimed) != 1) {
+            return -1;
+        }
+        if (client_id[0] != '\0' && profile_ip(client_id, &want) == 0 &&
+            want != claimed.s_addr) {
+            log_message(LOG_WARNING,
+                        "Rejected REGISTER from %s: client %s claims %s, "
+                        "configured address differs", peer, client_id,
+                        local_ip);
+            return -1;
+        }
+        ip_owner = profile_owner_of_ip(claimed.s_addr);
+        if (ip_owner != NULL &&
+            strcasecmp(ip_owner, client_id) != 0 &&
+            keystore_has_owner(ip_owner)) {
+            log_message(LOG_WARNING,
+                        "Rejected REGISTER from %s: address %s belongs "
+                        "to client %s", peer, local_ip, ip_owner);
+            return -1;
+        }
+    }
+
+    return 0;
 }
 
 int server_handle_plain_register(const uint8_t *buffer, size_t len,
@@ -421,6 +557,11 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
     if (proto_parse_register(message, client_id, sizeof(client_id),
                              local_ip, sizeof(local_ip),
                              &auto_request) != 0) {
+        return -1;
+    }
+
+    if (server_register_allowed(used_key, client_id, sizeof(client_id),
+                                local_ip, auto_request, from) != 0) {
         return -1;
     }
 
@@ -526,6 +667,20 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
     {
         server_client_t *by_addr = server_find_by_addr(from);
         server_client_t *by_ip   = server_find_by_ip(addr.s_addr);
+
+        /* The address may be in use by a live session whose address came
+         * from [defaults] or the auto pool, which profile_owner_of_ip()
+         * cannot see. Do not hand it to a different keyed client. */
+        if (current_config.encrypt && by_ip != NULL && by_ip != by_addr &&
+            strcasecmp(by_ip->client_id, client_id) != 0 &&
+            keystore_has_owner(by_ip->client_id)) {
+            char peer[64];
+            net_sockaddr_to_string(from, peer, sizeof(peer));
+            log_message(LOG_WARNING,
+                        "Rejected REGISTER from %s: address %s is in use "
+                        "by client %s", peer, local_ip, by_ip->client_id);
+            return -1;
+        }
 
         if (by_addr != NULL) {
             by_addr->ip_be = addr.s_addr;
@@ -643,48 +798,40 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
     uint32_t src_ip_be = 0;
     uint32_t dst_ip_be = 0;
     server_client_t *src;
-    server_client_t *decrypt_src = NULL;
-    const uint8_t *used_key = NULL;
+    char peer[64];
 
     if (buffer == NULL || from == NULL || len == 0U) {
         return -1;
     }
 
     if (current_config.encrypt) {
-        src = server_find_by_addr(from);
+        const uint8_t *used_key = NULL;
+        /* Only REGISTER may be authenticated with any keystore key: it is
+         * the message that binds a key to a client ID, and it is checked
+         * by server_register_allowed(). Every other packet must use the
+         * key of the session registered for its source address (#5). The
+         * type byte is part of the authenticated header, so a packet
+         * cannot pretend to be a REGISTER. */
+        int is_register = (len > 4U && buffer[4] == CAMEX_PACKET_REGISTER);
 
-        if (src != NULL && !is_zero_key(src->psk_key)) {
-            if (crypto_decrypt_packet(buffer, len, &type, plain,
-                                      sizeof(plain), &plain_len,
-                                      &seq, src->psk_key) == 0) {
-                used_key = src->psk_key;
-                decrypt_src = src;
-            }
+        src = server_find_by_addr(from);
+        if (src != NULL && !is_zero_key(src->psk_key) &&
+            crypto_decrypt_packet(buffer, len, &type, plain, sizeof(plain),
+                                  &plain_len, &seq, src->psk_key) == 0) {
+            used_key = src->psk_key;
+        } else if (is_register) {
+            used_key = server_try_all_keys(buffer, len, &type, plain,
+                                           sizeof(plain), &plain_len, &seq);
         }
 
         if (used_key == NULL) {
-            char peer[64];
             net_sockaddr_to_string(from, peer, sizeof(peer));
             log_message(LOG_WARNING,
-                        "Crypto error from %s: decrypt failed, "
-                        "trying all %u keystore keys",
-                        peer, (unsigned)server_keystore_count);
-
-            used_key = server_try_all_keys(buffer, len, &type, plain,
-                                           sizeof(plain), &plain_len, &seq);
-            if (used_key == NULL) {
-                char peer_str[64];
-                net_sockaddr_to_string(from, peer_str, sizeof(peer_str));
-                log_message(LOG_WARNING,
-                            "Dropped packet from %s: "
-                            "decryption failed with all %u keys "
-                            "(type=%u, len=%u)",
-                            peer_str, (unsigned)server_keystore_count,
-                            (unsigned)(len > 4 ? buffer[4] : 0),
-                            (unsigned)len);
-                return -1;
-            }
-            decrypt_src = server_find_by_addr(from);
+                        "Dropped packet from %s: %s (type=%u, len=%u)", peer,
+                        is_register ? "decryption failed with all keys"
+                                    : "no registered session for this key",
+                        (unsigned)(len > 4U ? buffer[4] : 0U), (unsigned)len);
+            return -1;
         }
 
         if (type == CAMEX_PACKET_REGISTER) {
@@ -692,27 +839,27 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
                                                 used_key, fd);
         }
 
+        /* From here on: authenticated with the session key of src */
         if (type == CAMEX_PACKET_CONFIG) {
             return 0;
         }
 
-        if (type == CAMEX_PACKET_KEEPALIVE) {
-            server_client_t *ka = (decrypt_src != NULL)
-                                  ? decrypt_src : server_find_by_addr(from);
+        if (replay_check(&src->recv_seq_max, &src->recv_window, seq) != 0) {
+            net_sockaddr_to_string(from, peer, sizeof(peer));
+            log_message(LOG_WARNING,
+                        "Dropped packet from %s: replay check failed "
+                        "(seq=%" PRIu64 ", max=%" PRIu64 ")",
+                        peer, seq, src->recv_seq_max);
+            return -1;
+        }
 
-            /* Refresh last_seen and answer, unless the packet was
-             * sealed with another client's key or is a replay */
-            if (ka != NULL && server_entry_owns_key(ka, used_key) &&
-                replay_check(&ka->recv_seq_max, &ka->recv_window,
-                             seq) == 0) {
-                ka->last_seen = g_now;
-                server_send_keepalive(ka);
-            }
+        if (type == CAMEX_PACKET_KEEPALIVE) {
+            src->last_seen = g_now;
+            server_send_keepalive(src);
             return 0;
         }
 
         if (type != CAMEX_PACKET_DATA) {
-            char peer[64];
             net_sockaddr_to_string(from, peer, sizeof(peer));
             log_message(LOG_WARNING,
                         "Dropped packet from %s: unknown type %u",
@@ -720,12 +867,32 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
             return -1;
         }
 
-        buffer = plain;
-        len = plain_len;
+        if (ipv4_parse_endpoints(plain, plain_len,
+                                 &src_ip_be, &dst_ip_be) != 0) {
+            return 0;
+        }
+
+        /* A client may only send from its own tunnel address (#6). */
+        if (src->ip_be == 0U || src_ip_be != src->ip_be) {
+            char claimed[INET_ADDRSTRLEN];
+            struct in_addr a;
+
+            a.s_addr = src_ip_be;
+            inet_ntop(AF_INET, &a, claimed, sizeof(claimed));
+            net_sockaddr_to_string(from, peer, sizeof(peer));
+            log_message(LOG_WARNING,
+                        "Dropped packet from %s (client %s): source address "
+                        "%s is not the client's tunnel address",
+                        peer, src->client_id, claimed);
+            return -1;
+        }
+
+        src->last_seen = g_now;
+        return server_forward_packet(plain, plain_len, src_ip_be, dst_ip_be);
     }
 
-    if (!current_config.encrypt && len >= 4U &&
-        memcmp(buffer, CAMEX_MAGIC, 4) == 0) {
+    /* Plaintext mode: nothing is authenticated */
+    if (len >= 4U && memcmp(buffer, CAMEX_MAGIC, 4) == 0) {
         if (len >= 5U && buffer[4] == CAMEX_PACKET_KEEPALIVE) {
             /* Plaintext keepalive: update client last_seen and answer */
             server_client_t *ka = server_find_by_addr(from);
@@ -736,7 +903,6 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
             return 0;
         }
         if (server_handle_plain_register(buffer, len, from, NULL, fd) != 0) {
-            char peer[64];
             net_sockaddr_to_string(from, peer, sizeof(peer));
             log_message(LOG_WARNING,
                         "Failed to handle plaintext register from %s",
@@ -752,35 +918,6 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
     src = server_upsert_client(src_ip_be, from);
     if (src == NULL) {
         return -1;
-    }
-
-    if (current_config.encrypt) {
-        if (decrypt_src != NULL && src != NULL && decrypt_src != src) {
-            char peer[64];
-            net_sockaddr_to_string(from, peer, sizeof(peer));
-            log_message(LOG_WARNING,
-                        "Key-identity mismatch: decrypted with key of %s "
-                        "but inner IP belongs to %s — dropping",
-                        decrypt_src->client_id, src->client_id);
-            return -1;
-        }
-        if (decrypt_src == NULL && src != NULL) {
-            server_reset_replay(src);
-        }
-        {
-            server_client_t *check_entry = (decrypt_src != NULL)
-                                           ? decrypt_src : src;
-            if (replay_check(&check_entry->recv_seq_max,
-                             &check_entry->recv_window, seq) != 0) {
-                char peer[64];
-                net_sockaddr_to_string(from, peer, sizeof(peer));
-                log_message(LOG_WARNING,
-                            "Dropped packet from %s: replay check failed "
-                            "(seq=%" PRIu64 ", max=%" PRIu64 ")",
-                            peer, seq, check_entry->recv_seq_max);
-                return -1;
-            }
-        }
     }
 
     return server_forward_packet(buffer, len, src_ip_be, dst_ip_be);

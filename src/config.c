@@ -389,6 +389,9 @@ void config_build_keystore(void)
         }
         derive_psk_key(server_db.clients[i].profile.psk,
                        server_keystore[server_keystore_count].psk_key);
+        snprintf(server_keystore[server_keystore_count].owner,
+                 sizeof(server_keystore[server_keystore_count].owner),
+                 "%s", server_db.clients[i].client_id);
         server_keystore_count++;
     }
 
@@ -399,6 +402,24 @@ void config_build_keystore(void)
         }
     }
     crypto_wipe(server_db.defaults.psk, sizeof(server_db.defaults.psk));
+
+    /* Equal keys are allowed (a client's psk may equal the global one),
+     * but they let either holder register as the other: say so. */
+    for (i = 1U; i < server_keystore_count; ++i) {
+        size_t j;
+
+        for (j = 0U; j < i; ++j) {
+            if (memcmp(server_keystore[i].psk_key,
+                       server_keystore[j].psk_key, 32) == 0) {
+                log_message(LOG_WARNING,
+                            "Client %s has the same psk as %s",
+                            server_keystore[i].owner,
+                            server_keystore[j].owner[0] != '\0'
+                                ? server_keystore[j].owner
+                                : "the global --psk");
+            }
+        }
+    }
 
     log_message(LOG_INFO, "Server keystore: %u PSK(s) loaded",
                 (unsigned)server_keystore_count);

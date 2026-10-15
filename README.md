@@ -198,7 +198,7 @@ sudo ./camex \
 |---|---|---|
 | `--mode <mode>` | `-M` | Operation mode: `client` or `server` (required) |
 | `--auto` | `-a` | Fetch tunnel parameters from the server |
-| `--name <id>` | `-n` | Client ID used in auto mode |
+| `--name <id>` | `-n` | Client ID (auto mode; optional in manual mode) |
 | `--local-cidr <cidr>` | `-l` | Tunnel address in `address/prefix` form |
 | `--gateway-ip <addr>` | `-g` | Client gateway inside the tunnel |
 | `--server-host <addr>` | `-s` | Server hostname or IP for client mode |
@@ -614,8 +614,16 @@ set to the tag name (e.g., `v2.3.6`).
 - Encryption (`--encrypt`) works transparently over both UDP and TCP transport.
   Add `--encrypt --psk <key>` to both server and client commands.
 - The server supports per-client PSKs: add `psk=<key>` inside a `[client ID]` block
-  in the config file. Clients that authenticate with a per-client key ignore the
-  global `--psk` value on the server side.
+  in the config file. With `--encrypt`, keys are bound to client IDs:
+  - a client that has its own key can register only with that key;
+  - the global `--psk` key works only for clients without their own key;
+  - a manual client with its own key may omit `--name`: the key identifies it;
+  - a manual client may only claim the `local_cidr` address of its own
+    `[client ID]` block, and never the address of another client that has its
+    own key.
+- With `--encrypt` the server accepts data packets only from a registered
+  session and only with the client's own tunnel address as the source; other
+  source addresses are dropped.
 
 ## License
 
