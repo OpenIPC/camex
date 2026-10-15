@@ -32,9 +32,26 @@ int main(void)
         }
     }
     if (limit.count != LOG_LIMIT_BURST ||
-        limit.suppressed != 20U - LOG_LIMIT_BURST) {
+        limit.suppressed != 20U - LOG_LIMIT_BURST ||
+        limit.suppressed_priority != LOG_DEBUG) {
         fprintf(stderr, "FAIL: burst: count=%u suppressed=%u\n",
                 limit.count, limit.suppressed);
+        ++failures;
+    }
+
+    /* The summary keeps the most severe priority among the suppressed */
+    log_limited(&limit, LOG_ERR, "an error");
+    if (limit.suppressed_priority != LOG_ERR) {
+        fprintf(stderr, "FAIL: suppressed priority %d, want %d\n",
+                limit.suppressed_priority, LOG_ERR);
+        ++failures;
+    }
+
+    /* log_limit_tick() reports a window that has ended */
+    limit.window -= 1;
+    log_limit_tick();
+    if (limit.suppressed != 0U) {
+        fprintf(stderr, "FAIL: tick left %u suppressed\n", limit.suppressed);
         ++failures;
     }
 

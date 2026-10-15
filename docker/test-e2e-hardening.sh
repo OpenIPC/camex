@@ -100,7 +100,8 @@ lines=$(( $(docker logs "$SRV" 2>&1 | wc -l) - before ))
 [ "$lines" -lt 100 ]; check $? "2000 bad packets produce fewer than 100 log lines (got $lines)"
 
 echo "== L7: TCP connect to a server that does not answer times out"
-# 10.200.0.0/24 is not routed on the docker network: SYNs go unanswered
+# 192.0.2.1 (TEST-NET-1) is not routed from the docker network: SYNs go
+# unanswered
 docker run -d --name "$P-tcp" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" --mode client --transport tcp --local-cidr 10.201.0.2/24 \
     --gateway-ip 10.201.0.1 --server-host 192.0.2.1 --port 5800 >/dev/null

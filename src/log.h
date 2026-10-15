@@ -38,16 +38,31 @@ void print_errno_message(int priority, const char *what);
 
 /* Rate limit for messages that a peer can trigger at will, e.g. one per
  * dropped packet (#16 L1): at most LOG_LIMIT_BURST messages per second per
- * limiter; the number suppressed is logged with the next allowed one. */
+ * call site. The number suppressed is logged, at the highest priority among
+ * them, when the next second starts or from log_limit_tick(). */
 #define LOG_LIMIT_BURST 5U
 
 typedef struct {
     long window;            /* second of the current window */
     unsigned int count;     /* messages logged in this window */
     unsigned int suppressed;
+    int suppressed_priority;
+    const char *fmt;        /* names the message in the summary */
+    unsigned char listed;   /* known to log_limit_tick() */
 } log_limit_t;
 
 void log_limited(log_limit_t *limit, int priority, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
+
+/* Report suppressed counts of windows that have ended; call it from the
+ * event loop so the count of a flood that stopped is not lost. */
+void log_limit_tick(void);
+
+/* log_peer(priority, fmt, ...): log_limited() with a limiter of its own
+ * for each call site, so one kind of message cannot hide another. */
+#define log_peer(...) do { \
+        static log_limit_t log_peer_limit_; \
+        log_limited(&log_peer_limit_, __VA_ARGS__); \
+    } while (0)
 
 #endif /* CAMEX_LOG_H */

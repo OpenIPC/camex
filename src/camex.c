@@ -86,10 +86,6 @@ typedef int socklen_t;
 #include <iphlpapi.h>
 #endif
 
-/* Messages a peer can trigger at will (dropped packets, rejected
- * registrations) are rate-limited (#16 L1). */
-static log_limit_t peer_log_limit;
-
 /* Global state */
 camex_config_t current_config;
 volatile sig_atomic_t running = 1;
@@ -606,8 +602,8 @@ static void drain_udp_packets(void)
                 if (server_handle_packet(buffer, (size_t)len, &from, -1) != 0) {
                     char peer[64];
                     net_sockaddr_to_string(&from, peer, sizeof(peer));
-                    log_limited(&peer_log_limit, LOG_WARNING,
-                                "Dropped packet from %s", peer);
+                    log_peer(LOG_WARNING,
+                             "Dropped packet from %s", peer);
                 }
                 continue;
             }
@@ -635,8 +631,8 @@ static void drain_udp_packets(void)
                     current_config.server_host, current_config.port);
             }
             if (client_handle_net_packet(buffer, frame_len) != 0) {
-                log_limited(&peer_log_limit, LOG_WARNING,
-                            "Dropped packet from server");
+                log_peer(LOG_WARNING,
+                         "Dropped packet from server");
             }
         } else if (rc < 0) {
             log_message(LOG_WARNING,
@@ -659,8 +655,8 @@ static void drain_udp_packets(void)
                     current_config.server_host, current_config.port);
             }
             if (client_handle_net_packet(buffer, (size_t)len) != 0) {
-                log_limited(&peer_log_limit, LOG_WARNING,
-                            "Dropped packet from server");
+                log_peer(LOG_WARNING,
+                         "Dropped packet from server");
             }
             continue;
         }
@@ -699,9 +695,9 @@ static void drain_tcp_server_accept(void)
         /* select() can only watch descriptors below FD_SETSIZE (#16 L4) */
         if (client_fd >= FD_SETSIZE) {
             net_tcp_close(client_fd);
-            log_limited(&peer_log_limit, LOG_WARNING,
-                        "Refused TCP connection: descriptor %d is beyond "
-                        "FD_SETSIZE", client_fd);
+            log_peer(LOG_WARNING,
+                     "Refused TCP connection: descriptor %d is beyond "
+                     "FD_SETSIZE", client_fd);
             continue;
         }
 #endif
@@ -740,10 +736,10 @@ static void drain_tcp_server_accept(void)
             if (pending_ip >= CAMEX_TCP_PREAUTH_PER_IP) {
                 net_tcp_close(client_fd);
                 net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
-                log_limited(&peer_log_limit, LOG_WARNING,
-                            "Refused TCP connection from %s: too many "
-                            "unregistered connections from this address",
-                            peer_str);
+                log_peer(LOG_WARNING,
+                         "Refused TCP connection from %s: too many "
+                         "unregistered connections from this address",
+                         peer_str);
                 continue;
             }
             if (pending >= CAMEX_TCP_PREAUTH_MAX && oldest == NULL) {
@@ -751,17 +747,17 @@ static void drain_tcp_server_accept(void)
                  * period: refuse; the client retries */
                 net_tcp_close(client_fd);
                 net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
-                log_limited(&peer_log_limit, LOG_WARNING,
-                            "Refused TCP connection from %s: too many "
-                            "unregistered connections", peer_str);
+                log_peer(LOG_WARNING,
+                         "Refused TCP connection from %s: too many "
+                         "unregistered connections", peer_str);
                 continue;
             }
             if (pending >= CAMEX_TCP_PREAUTH_MAX) {
                 net_sockaddr_to_string(&oldest->addr, peer_str,
                                        sizeof(peer_str));
-                log_limited(&peer_log_limit, LOG_WARNING,
-                            "Closed unregistered TCP connection from %s: "
-                            "too many unregistered connections", peer_str);
+                log_peer(LOG_WARNING,
+                         "Closed unregistered TCP connection from %s: "
+                         "too many unregistered connections", peer_str);
                 net_tcp_close(oldest->tcp_fd);
                 memset(oldest, 0, sizeof(*oldest));
             }
@@ -853,9 +849,9 @@ static void drain_tcp_client_read(int fd)
                                      &server_clients[i].addr, fd) != 0) {
                 net_sockaddr_to_string(&server_clients[i].addr,
                                        peer_str, sizeof(peer_str));
-                log_limited(&peer_log_limit, LOG_WARNING,
-                            "Dropped TCP packet from %s",
-                            peer_str);
+                log_peer(LOG_WARNING,
+                         "Dropped TCP packet from %s",
+                         peer_str);
             }
             return;
         }
@@ -1007,6 +1003,7 @@ void camex_run(void)
             }
 
             server_expire_clients();
+            log_limit_tick();
             if (reload_config) {
                 camex_server_db_t saved_db = server_db;
                 static camex_keystore_entry_t saved_keystore[CAMEX_MAX_CLIENTS + 1];
@@ -1039,6 +1036,7 @@ void camex_run(void)
     log_message(LOG_INFO, "Client started. Press Ctrl+C to stop.");
     while (running) {
         g_now = time(NULL);
+        log_limit_tick();
 
         if (net_fd < 0) {
             usleep(1000000);

@@ -679,7 +679,9 @@ int net_tcp_connect(const char *host, int port)
     }
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         fd_set wset;
+        fd_set eset;
         struct timeval tv;
+        time_t deadline;
         int soerr = 0;
         socklen_t soerr_len = sizeof(soerr);
         int ready;
@@ -689,14 +691,33 @@ int net_tcp_connect(const char *host, int port)
             close(fd);
             return -1;
         }
-        FD_ZERO(&wset);
-        FD_SET(fd, &wset);
-        tv.tv_sec = CAMEX_TCP_CONNECT_TIMEOUT;
-        tv.tv_usec = 0;
-        ready = select(fd + 1, NULL, &wset, NULL, &tv);
+#ifndef _WIN32
+        if (fd >= FD_SETSIZE) {  /* select() cannot watch it (#16 L4) */
+            log_message(LOG_ERR, "connect(TCP): descriptor %d is beyond "
+                        "FD_SETSIZE", fd);
+            close(fd);
+            return -1;
+        }
+#endif
+        /* Winsock reports a failed connect in the except set, POSIX as
+         * writable with SO_ERROR set. A signal does not end the wait,
+         * unless it is a request to stop. */
+        deadline = time(NULL) + CAMEX_TCP_CONNECT_TIMEOUT;
+        do {
+            time_t left = deadline - time(NULL);
+
+            FD_ZERO(&wset);
+            FD_SET(fd, &wset);
+            FD_ZERO(&eset);
+            FD_SET(fd, &eset);
+            tv.tv_sec = left > 0 ? (long)left : 0;
+            tv.tv_usec = 0;
+            ready = select(fd + 1, NULL, &wset, &eset, &tv);
+        } while (ready < 0 && errno == EINTR && running &&
+                 time(NULL) < deadline);
         if (ready <= 0) {
             log_message(LOG_ERR, "connect(TCP): %s",
-                        ready == 0 ? "timed out" : "select failed");
+                        ready == 0 ? "timed out" : "interrupted");
             close(fd);
             return -1;
         }
