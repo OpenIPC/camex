@@ -491,6 +491,13 @@ int camex_init(camex_config_t *config)
                     "public key (--server-pubkey)");
         return -1;
     }
+    /* The private key text is not needed any more (and is unused without
+     * encryption) */
+    if (!current_config.encrypt && server_db.globals.server_key[0] != '\0') {
+        log_message(LOG_NOTICE, "server_key= is ignored without encryption");
+    }
+    crypto_wipe(server_db.globals.server_key,
+                sizeof(server_db.globals.server_key));
 
     if (client_mode) {
         if (!current_config.auto_config &&
@@ -1075,7 +1082,15 @@ void camex_run(void)
                      * from there (--psk on the command line wins) */
                     if (global_psk_from_config) {
                         if (server_db.globals.psk[0] != '\0') {
-                            (void)crypto_init(server_db.globals.psk);
+                            /* A bad new key must not leave the old one
+                             * working */
+                            if (crypto_init(server_db.globals.psk) != 0) {
+                                log_message(LOG_ERR, "Invalid global psk= "
+                                            "after the reload: the global "
+                                            "key is disabled until it is "
+                                            "fixed");
+                                crypto_drop_global();
+                            }
                             crypto_wipe(server_db.globals.psk,
                                         sizeof(server_db.globals.psk));
                         } else {
