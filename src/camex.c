@@ -758,6 +758,7 @@ static void drain_tcp_client_read(int fd)
                             "TCP client disconnected: %s (fd=%d)",
                             peer_str, fd);
                 net_tcp_close(fd);
+                server_forget_session(&server_clients[i]);
                 memset(&server_clients[i], 0, sizeof(server_clients[i]));
                 return;
             }

@@ -1,0 +1,189 @@
+#!/bin/bash
+#
+# Copyright (c) OpenIPC  https://openipc.org  MIT License
+#
+# test-e2e-register-replay.sh — regression test for issue #7
+#
+# An encrypted manual client registers and pings the server while its
+# packets are captured. An attacker then replays the captured packets
+# from its own address:
+#   1. a REGISTER of the live session, then the captured DATA (pings):
+#      the session must not move to the attacker, the pings must not
+#      reach the server again;
+#   2. after the client reconnected (new session): the old session's
+#      REGISTER and DATA must be rejected as well.
+# After each attack the client must still reach the server.
+# Before the fix REGISTER was not replay-checked and reset the receive
+# window, so both replays reached the server.
+#
+# Usage: ./test-e2e-register-replay.sh
+#   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
+#   KEEP=1                      keep containers for debugging
+#
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+CAMEX_BINARY="${CAMEX_BINARY:-$REPO_DIR/camex}"
+IMAGE="camex:e2e-replay"
+P="camex-replay-$$"
+NET_NAME="$P-net"
+SRV="$P-srv"
+CLI="$P-cli"
+CAP="$P-cap"
+ATK="$P-atk"
+BUILD_CTX="$(mktemp -d)"
+PSK="replay-test"
+FAILS=0
+
+cleanup() {
+    docker ps -a --format '{{.Names}}' | grep "^$P-" | xargs -r docker rm -f >/dev/null 2>&1 || true
+    docker network rm "$NET_NAME" >/dev/null 2>&1 || true
+    rm -rf "$BUILD_CTX"
+}
+[ -n "$KEEP" ] || trap cleanup EXIT INT TERM
+
+check() {   # check <condition-exit-code> <message>
+    if [ "$1" = 0 ]; then echo "   ok: $2"; else echo "   FAIL: $2"; FAILS=$((FAILS + 1)); fi
+}
+
+[ -x "$CAMEX_BINARY" ] || { echo "camex binary not found: $CAMEX_BINARY"; exit 1; }
+
+cp "$CAMEX_BINARY" "$BUILD_CTX/camex"
+cat > "$BUILD_CTX/Dockerfile" <<'EOF'
+FROM ubuntu:24.04
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+        iputils-ping python3-minimal tcpdump >/dev/null && rm -rf /var/lib/apt/lists/*
+COPY camex /usr/local/bin/camex
+RUN printf '#!/bin/sh\nmkdir -p /dev/net\n[ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200\nexec /usr/local/bin/camex "$@"\n' \
+        > /usr/local/bin/camex-run && chmod +x /usr/local/bin/camex-run
+ENTRYPOINT ["/usr/local/bin/camex-run"]
+EOF
+# Sends hex payloads from stdin to <host> 5800/udp.
+cat > "$BUILD_CTX/send.py" <<'EOF'
+import socket, sys, time
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+n = 0
+for line in sys.stdin:
+    s.sendto(bytes.fromhex(line.split()[1]), (sys.argv[1], 5800))
+    n += 1
+    time.sleep(0.05)
+print(n)
+EOF
+docker build -q -t "$IMAGE" "$BUILD_CTX" >/dev/null
+docker network create "$NET_NAME" >/dev/null
+set +e   # checks below report failures themselves
+
+icmp_in() {  # ICMP echo requests received by a container
+    docker exec "$1" awk '/^Icmp:/ { if (n++) print $10 }' /proc/net/snmp
+}
+still_up() {
+    docker exec "$CLI" ping -c2 -W2 10.200.0.1 >/dev/null 2>&1
+    check $? "the client still reaches the server"
+}
+start_client() {
+    docker run -d --name "$CLI" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+        "$IMAGE" --mode client --local-cidr 10.200.0.2/24 --gateway-ip 10.200.0.1 \
+        --server-host "$SRV" --port 5800 --encrypt --psk "$PSK" >/dev/null
+}
+wait_ping() {
+    local i
+    for i in $(seq 1 20); do
+        docker exec "$CLI" ping -c1 -W1 10.200.0.1 >/dev/null 2>&1 && return 0
+        sleep 1
+    done
+    return 1
+}
+# replay <file>...: send the captured payloads, in order, from one socket;
+# checks that all of them were sent
+replay() {
+    local want sent
+    want=$(cat "$@" | wc -l)
+    sent=$(cat "$@" | docker exec -i "$ATK" python3 /send.py "$SRV")
+    [ "$sent" = "$want" ]; check $? "attacker sent $want captured packets (sent: ${sent:-none})"
+}
+# dropped_regs: REGISTERs the server rejected as replays so far
+dropped_regs() {
+    docker logs "$SRV" 2>&1 | grep -c "Dropped REGISTER" || true
+}
+
+echo "== start server, capture, client"
+docker run -d --name "$SRV" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    "$IMAGE" --mode server --port 5800 --local-cidr 10.200.0.1/24 \
+    --encrypt --psk "$PSK" >/dev/null
+docker run -d --name "$CAP" --network "container:$SRV" --cap-add NET_RAW --cap-add NET_ADMIN \
+    --entrypoint tcpdump "$IMAGE" -i any -U -w /tmp/c.pcap udp port 5800 >/dev/null
+docker run -d --name "$ATK" --network "$NET_NAME" --entrypoint sleep "$IMAGE" infinity >/dev/null \
+    || { echo "FAIL: attacker container did not start"; exit 2; }
+docker cp "$BUILD_CTX/send.py" "$ATK:/send.py" >/dev/null
+sleep 2
+start_client
+wait_ping || { echo "FAIL: client never reached the server"; exit 2; }
+docker exec "$CLI" ping -q -c 5 -i 0.2 10.200.0.1 >/dev/null 2>&1
+sleep 11   # the client re-sends REGISTER every 10 s: capture one mid-session
+docker exec "$CAP" kill -INT 1 >/dev/null 2>&1; sleep 1
+docker cp "$CAP:/tmp/c.pcap" "$BUILD_CTX/c.pcap" >/dev/null
+# UDP payloads sent to port 5800, as lines "<type> <hex>" (tcpdump -i any
+# writes Linux cooked frames: the link header size depends on the link type).
+python3 - "$BUILD_CTX/c.pcap" > "$BUILD_CTX/old.txt" <<'EOF'
+import struct, sys
+data = open(sys.argv[1], "rb").read()
+link = struct.unpack_from("<I", data, 20)[0]
+hdr = {1: 14, 113: 16, 276: 20}[link]
+off = 24
+while off + 16 <= len(data):
+    incl = struct.unpack_from("<I", data, off + 8)[0]
+    pkt = data[off + 16:off + 16 + incl]
+    off += 16 + incl
+    ip = pkt[hdr:]
+    if len(ip) < 28 or ip[0] >> 4 != 4 or ip[9] != 17:
+        continue
+    udp = (ip[0] & 0x0f) * 4
+    if struct.unpack_from(">H", ip, udp + 2)[0] != 5800:
+        continue
+    payload = ip[udp + 8:]
+    if len(payload) > 5 and payload[:4] == b"CX2P":
+        print(payload[4], payload.hex())
+EOF
+regs=$(grep -c '^1 ' "$BUILD_CTX/old.txt")
+datas=$(grep -c '^2 ' "$BUILD_CTX/old.txt")
+echo "   captured: $regs REGISTER, $datas DATA"
+[ "$regs" -ge 2 ] && [ "$datas" -ge 5 ]; check $? "captured a mid-session REGISTER and the pings"
+
+echo "== 1. replay the live session's REGISTER and DATA from another address"
+sleep 6   # past the server's 5 s per-address REGISTER rate limit
+before=$(icmp_in "$SRV")
+drops=$(dropped_regs)
+grep '^1 ' "$BUILD_CTX/old.txt" | tail -n 1 > "$BUILD_CTX/reg-last.txt"
+grep '^2 ' "$BUILD_CTX/old.txt" > "$BUILD_CTX/data.txt"
+replay "$BUILD_CTX/reg-last.txt" "$BUILD_CTX/data.txt"
+sleep 2
+after=$(icmp_in "$SRV")
+[ "$after" = "$before" ]; check $? "replayed pings do not reach the server (echo requests: $before -> $after)"
+[ "$(dropped_regs)" -gt "$drops" ]; check $? "the server rejected the replayed REGISTER"
+docker logs "$SRV" 2>&1 | grep -q "reconnected: .*$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$ATK")"
+[ $? != 0 ]; check $? "the session did not move to the attacker's address"
+still_up
+
+echo "== 2. the client reconnects; replay the old session"
+docker restart -t 1 "$CLI" >/dev/null
+wait_ping; check $? "the client registered a new session"
+sleep 6
+before=$(icmp_in "$SRV")
+drops=$(dropped_regs)
+grep '^1 ' "$BUILD_CTX/old.txt" > "$BUILD_CTX/regs.txt"
+replay "$BUILD_CTX/regs.txt" "$BUILD_CTX/data.txt"
+sleep 2
+after=$(icmp_in "$SRV")
+[ "$after" = "$before" ]; check $? "old session's pings do not reach the server (echo requests: $before -> $after)"
+[ "$(dropped_regs)" -ge $((drops + regs)) ]; check $? "the server rejected all $regs old REGISTERs"
+still_up
+
+if [ "$FAILS" != 0 ]; then
+    echo "--- server log (tail) ---"
+    docker logs "$SRV" 2>&1 | tail -20
+    echo "FAIL: $FAILS check(s) failed"
+    exit 2
+fi
+echo "PASS: replayed REGISTER and DATA packets are rejected"

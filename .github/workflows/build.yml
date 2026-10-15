@@ -90,6 +90,10 @@ jobs:
         run: ./docker/test-e2e-key-binding.sh
         if: matrix.platform.name == 'x86_64'
 
+      - name: E2E test (REGISTER replay, issue #7)
+        run: ./docker/test-e2e-register-replay.sh
+        if: matrix.platform.name == 'x86_64'
+
       - name: Build cross
         run: |
           make clean

@@ -115,6 +115,155 @@ server_client_t *server_find_by_addr(const struct sockaddr_in *addr)
     return NULL;
 }
 
+/* Sessions that ended (#7): the client's nonce prefix and key, and the
+ * highest sequence number seen with them. A REGISTER of such a session is
+ * accepted only with a newer sequence number, so a captured REGISTER cannot
+ * restart an old session after its entry was replaced or expired. Bounded:
+ * older sessions are forgotten (per-session keys in #17 close this fully). */
+#define SERVER_ENDED_SESSIONS 256U
+
+typedef struct {
+    uint8_t nonce_prefix[4];
+    uint8_t key[32];
+    uint8_t used;
+    uint64_t seq_max;
+} server_ended_session_t;
+
+static server_ended_session_t server_ended[SERVER_ENDED_SESSIONS];
+static size_t server_ended_next = 0U;
+
+/* A session is identified by the client's nonce prefix together with the
+ * key it authenticates with: another client cannot claim it by reusing
+ * the prefix under its own key. */
+static int server_session_is(const uint8_t prefix_a[4], const uint8_t *key_a,
+                             const uint8_t prefix_b[4], const uint8_t *key_b)
+{
+    return memcmp(prefix_a, prefix_b, 4) == 0 &&
+           memcmp(key_a, key_b, 32) == 0;
+}
+
+static server_ended_session_t *server_find_ended(const uint8_t prefix[4],
+                                                 const uint8_t *key)
+{
+    size_t i;
+
+    for (i = 0U; i < SERVER_ENDED_SESSIONS; ++i) {
+        if (server_ended[i].used &&
+            server_session_is(server_ended[i].nonce_prefix,
+                              server_ended[i].key, prefix, key)) {
+            return &server_ended[i];
+        }
+    }
+    return NULL;
+}
+
+void server_forget_session(server_client_t *entry)
+{
+    server_ended_session_t *slot;
+    size_t i;
+
+    if (entry == NULL || !entry->has_recv_prefix) {
+        return;
+    }
+    slot = server_find_ended(entry->recv_nonce_prefix, entry->psk_key);
+    for (i = 0U; slot == NULL && i < SERVER_ENDED_SESSIONS; ++i) {
+        if (!server_ended[i].used) {
+            slot = &server_ended[i];
+        }
+    }
+    if (slot == NULL) {
+        /* Full: replace in round-robin order, i.e. the oldest record */
+        slot = &server_ended[server_ended_next];
+        server_ended_next = (server_ended_next + 1U) % SERVER_ENDED_SESSIONS;
+    }
+    if (!slot->used) {
+        memcpy(slot->nonce_prefix, entry->recv_nonce_prefix, 4);
+        memcpy(slot->key, entry->psk_key, 32);
+        slot->used = 1U;
+        slot->seq_max = 0U;
+    }
+    if (entry->recv_seq_max > slot->seq_max) {
+        slot->seq_max = entry->recv_seq_max;
+    }
+    entry->has_recv_prefix = 0U;
+}
+
+/* Result of the replay check of an encrypted REGISTER */
+typedef struct {
+    server_client_t *live;    /* live session it continues, or NULL */
+    int resume;               /* continue above resume_seq_max */
+    uint64_t resume_seq_max;
+} server_register_state_t;
+
+/* Replay check for an encrypted REGISTER (#7), done before anything else
+ * acts on it (including the rate limit, so a dropped REGISTER is still
+ * marked as seen). Returns 0 to accept, -1 for a replay. */
+static int server_register_replay_check(const server_register_seq_t *rseq,
+                                        server_register_state_t *state)
+{
+    server_ended_session_t *ended;
+    size_t i;
+
+    memset(state, 0, sizeof(*state));
+    if (rseq == NULL || rseq->key == NULL) {
+        return 0;  /* plaintext: nothing to check */
+    }
+    for (i = 0U; i < CAMEX_MAX_CLIENTS; ++i) {
+        server_client_t *c = &server_clients[i];
+
+        if (c->active && c->has_recv_prefix &&
+            server_session_is(c->recv_nonce_prefix, c->psk_key,
+                              rseq->nonce_prefix, rseq->key)) {
+            if (replay_check(&c->recv_seq_max, &c->recv_window,
+                             rseq->seq) != 0) {
+                return -1;
+            }
+            /* If it ends up in another entry (a new TCP connection), that
+             * one continues above what this session has seen. */
+            state->live = c;
+            state->resume = 1;
+            state->resume_seq_max = c->recv_seq_max;
+            return 0;
+        }
+    }
+    ended = server_find_ended(rseq->nonce_prefix, rseq->key);
+    if (ended != NULL) {
+        if (rseq->seq <= ended->seq_max) {
+            return -1;
+        }
+        state->resume = 1;
+        state->resume_seq_max = ended->seq_max;
+    }
+    return 0;
+}
+
+/* Start the replay state of a session registered with rseq in entry.
+ * Uses the values captured by the check: the ended-session record may
+ * have been replaced since (slot eviction writes to the same table). */
+static void server_begin_session(server_client_t *entry,
+                                 const server_register_seq_t *rseq,
+                                 const server_register_state_t *state)
+{
+    server_ended_session_t *ended;
+
+    server_forget_session(entry);
+    server_reset_replay(entry);
+    if (rseq == NULL || rseq->key == NULL) {
+        return;
+    }
+    memcpy(entry->recv_nonce_prefix, rseq->nonce_prefix, 4);
+    entry->has_recv_prefix = 1U;
+    if (state->resume) {
+        entry->recv_seq_max = state->resume_seq_max;
+        entry->recv_window = ~(uint64_t)0;
+    }
+    ended = server_find_ended(rseq->nonce_prefix, rseq->key);
+    if (ended != NULL) {
+        ended->used = 0U;  /* live again: forgotten again when it ends */
+    }
+    (void)replay_check(&entry->recv_seq_max, &entry->recv_window, rseq->seq);
+}
+
 server_client_t *server_alloc_client(void)
 {
     size_t i;
@@ -145,6 +294,7 @@ server_client_t *server_alloc_client(void)
 
     /* Close old TCP fd before evicting, then memset */
     int old_tcp_fd = server_clients[oldest].tcp_fd;
+    server_forget_session(&server_clients[oldest]);
     memset(&server_clients[oldest], 0, sizeof(server_clients[oldest]));
     server_clients[oldest].tcp_fd = -1;
     if (old_tcp_fd >= 0) {
@@ -211,6 +361,7 @@ void server_expire_clients(void)
                 net_tcp_close(server_clients[i].tcp_fd);
                 server_clients[i].tcp_fd = -1;
             }
+            server_forget_session(&server_clients[i]);
             memset(&server_clients[i], 0, sizeof(server_clients[i]));
         }
     }
@@ -530,10 +681,23 @@ static int server_register_allowed(const uint8_t *key, char *client_id,
     return 0;
 }
 
+static void server_log_register_replay(const struct sockaddr_in *from,
+                                       const char *who)
+{
+    char peer[64];
+
+    net_sockaddr_to_string(from, peer, sizeof(peer));
+    log_message(LOG_WARNING,
+                "Dropped REGISTER from %s (%s): replayed or out-of-date "
+                "sequence number", peer, who);
+}
+
 int server_handle_plain_register(const uint8_t *buffer, size_t len,
                                  const struct sockaddr_in *from,
-                                 const uint8_t *used_key, int fd)
+                                 const uint8_t *used_key, int fd,
+                                 const server_register_seq_t *rseq)
 {
+    server_register_state_t rstate;
     char message[CAMEX_CONTROL_MAX];
     char local_ip[16];
     char client_id[CAMEX_CLIENT_ID_LEN];
@@ -562,6 +726,12 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
 
     if (server_register_allowed(used_key, client_id, sizeof(client_id),
                                 local_ip, auto_request, from) != 0) {
+        return -1;
+    }
+
+    if (server_register_replay_check(rseq, &rstate) != 0) {
+        server_log_register_replay(from,
+                                   auto_request ? client_id : local_ip);
         return -1;
     }
 
@@ -600,6 +770,7 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
                     if (server_clients[j].active &&
                         server_clients[j].tcp_fd == fd &&
                         &server_clients[j] != entry) {
+                        server_forget_session(&server_clients[j]);
                         memset(&server_clients[j], 0, sizeof(server_clients[j]));
                     }
                 }
@@ -631,7 +802,9 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
             entry->last_seen = g_now;
         }
         snprintf(entry->client_id, sizeof(entry->client_id), "%s", client_id);
-        server_reset_replay(entry);
+        if (rstate.live != entry) {
+            server_begin_session(entry, rseq, &rstate);
+        }
         entry->last_register_time = g_now;
         if (used_key != NULL) {
             memcpy(entry->psk_key, used_key, 32);
@@ -687,7 +860,9 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
             by_addr->last_seen = g_now;
             by_addr->last_register_time = g_now;
             snprintf(by_addr->client_id, sizeof(by_addr->client_id), "%s", client_id);
-            server_reset_replay(by_addr);
+            if (rstate.live != by_addr) {
+                server_begin_session(by_addr, rseq, &rstate);
+            }
             if (used_key != NULL) {
                 memcpy(by_addr->psk_key, used_key, 32);
             }
@@ -704,7 +879,9 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
             by_ip->last_seen = g_now;
             by_ip->last_register_time = g_now;
             snprintf(by_ip->client_id, sizeof(by_ip->client_id), "%s", client_id);
-            server_reset_replay(by_ip);
+            if (rstate.live != by_ip) {
+                server_begin_session(by_ip, rseq, &rstate);
+            }
             if (used_key != NULL) {
                 memcpy(by_ip->psk_key, used_key, 32);
             }
@@ -721,7 +898,7 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
         entry->last_seen = g_now;
         entry->last_register_time = g_now;
         snprintf(entry->client_id, sizeof(entry->client_id), "%s", client_id);
-        server_reset_replay(entry);
+        server_begin_session(entry, rseq, &rstate);
         if (used_key != NULL) {
             memcpy(entry->psk_key, used_key, 32);
         }
@@ -835,13 +1012,29 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
         }
 
         if (type == CAMEX_PACKET_REGISTER) {
+            server_register_seq_t rseq;
+
+            memcpy(rseq.nonce_prefix, buffer + 5, 4);
+            rseq.seq = seq;
+            rseq.key = used_key;
             return server_handle_plain_register(plain, plain_len, from,
-                                                used_key, fd);
+                                                used_key, fd, &rseq);
         }
 
         /* From here on: authenticated with the session key of src */
         if (type == CAMEX_PACKET_CONFIG) {
             return 0;
+        }
+
+        /* Only packets of the client's current session: a packet with an
+         * older nonce prefix belongs to an ended session (#7). */
+        if (src->has_recv_prefix &&
+            memcmp(src->recv_nonce_prefix, buffer + 5, 4) != 0) {
+            net_sockaddr_to_string(from, peer, sizeof(peer));
+            log_message(LOG_WARNING,
+                        "Dropped packet from %s: not from the client's "
+                        "current session", peer);
+            return -1;
         }
 
         if (replay_check(&src->recv_seq_max, &src->recv_window, seq) != 0) {
@@ -902,7 +1095,7 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
             }
             return 0;
         }
-        if (server_handle_plain_register(buffer, len, from, NULL, fd) != 0) {
+        if (server_handle_plain_register(buffer, len, from, NULL, fd, NULL) != 0) {
             net_sockaddr_to_string(from, peer, sizeof(peer));
             log_message(LOG_WARNING,
                         "Failed to handle plaintext register from %s",
