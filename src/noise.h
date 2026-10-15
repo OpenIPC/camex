@@ -81,8 +81,9 @@ size_t noise_write_msg1(noise_hs_t *hs, const uint8_t psk[NOISE_KEYLEN],
 /*
  * Message 1 on the server. The ephemeral DH (es) does not depend on the
  * PSK: noise_msg1_es() computes it once, then noise_read_msg1() can be
- * tried with each candidate PSK on a copy of the initialised state.
- * Return 0 on success, -1 on failure.
+ * tried with each candidate PSK (a failed read leaves the state as it
+ * was). Return 0 on success, -1 on failure. Message 1 replay protection
+ * (e.g. a timestamp in the payload) is the caller's job.
  */
 int noise_msg1_es(const noise_hs_t *hs, const uint8_t *msg, size_t len,
                   uint8_t es[NOISE_DHLEN]);
@@ -92,7 +93,8 @@ int noise_read_msg1(noise_hs_t *hs, const uint8_t psk[NOISE_KEYLEN],
                     uint8_t *payload, size_t payload_size,
                     size_t *payload_len);
 
-/* Message 2 (server -> client): e.pub || AEAD(payload). */
+/* Message 2 (server -> client): e.pub || AEAD(payload). A failed read
+ * leaves the state as it was, so a valid reply can still be processed. */
 size_t noise_write_msg2(noise_hs_t *hs, const uint8_t e_seed[NOISE_DHLEN],
                         const uint8_t *payload, size_t payload_len,
                         uint8_t *out, size_t out_size);

@@ -165,12 +165,22 @@ static void encrypt_and_hash(noise_hs_t *hs, const uint8_t *plain,
 static int decrypt_and_hash(noise_hs_t *hs, const uint8_t *in, size_t len,
                             uint8_t *plain)
 {
+    crypto_blake2b_ctx ctx;
+    uint8_t next_h[NOISE_HASHLEN];
+
+    /* The transcript takes the ciphertext: hash it before decrypting, in
+     * case plain and in are the same buffer */
+    crypto_blake2b_init(&ctx, NOISE_HASHLEN);
+    crypto_blake2b_update(&ctx, hs->h, NOISE_HASHLEN);
+    crypto_blake2b_update(&ctx, in, len);
+    crypto_blake2b_final(&ctx, next_h);
     if (noise_decrypt(hs->cs.k, hs->cs.n, hs->h, NOISE_HASHLEN, in, len,
                       plain) != 0) {
+        crypto_wipe(next_h, sizeof(next_h));
         return -1;
     }
     hs->cs.n++;
-    mix_hash(hs, in, len);
+    memcpy(hs->h, next_h, NOISE_HASHLEN);
     return 0;
 }
 
@@ -230,11 +240,13 @@ size_t noise_write_msg1(noise_hs_t *hs, const uint8_t psk[NOISE_KEYLEN],
                         uint8_t *out, size_t out_size)
 {
     uint8_t shared[NOISE_DHLEN];
-    size_t len = NOISE_MSG1_OVERHEAD + payload_len;
+    size_t len;
 
-    if (!hs->initiator || out_size < len) {
+    if (!hs->initiator || out_size < NOISE_MSG1_OVERHEAD ||
+        payload_len > out_size - NOISE_MSG1_OVERHEAD) {
         return 0U;
     }
+    len = NOISE_MSG1_OVERHEAD + payload_len;
     mix_key_and_hash(hs, psk, NOISE_KEYLEN);              /* psk */
     noise_keypair(hs->e_priv, hs->e_pub, e_seed);         /* e */
     memcpy(out, hs->e_pub, NOISE_DHLEN);
@@ -259,7 +271,7 @@ int noise_msg1_es(const noise_hs_t *hs, const uint8_t *msg, size_t len,
     return dh(es, hs->s_priv, msg);
 }
 
-int noise_read_msg1(noise_hs_t *hs, const uint8_t psk[NOISE_KEYLEN],
+static int read_msg1(noise_hs_t *hs, const uint8_t psk[NOISE_KEYLEN],
                     const uint8_t es[NOISE_DHLEN],
                     const uint8_t *msg, size_t len,
                     uint8_t *payload, size_t payload_size,
@@ -292,11 +304,13 @@ size_t noise_write_msg2(noise_hs_t *hs, const uint8_t e_seed[NOISE_DHLEN],
                         uint8_t *out, size_t out_size)
 {
     uint8_t shared[NOISE_DHLEN];
-    size_t len = NOISE_MSG2_OVERHEAD + payload_len;
+    size_t len;
 
-    if (hs->initiator || out_size < len) {
+    if (hs->initiator || out_size < NOISE_MSG2_OVERHEAD ||
+        payload_len > out_size - NOISE_MSG2_OVERHEAD) {
         return 0U;
     }
+    len = NOISE_MSG2_OVERHEAD + payload_len;
     noise_keypair(hs->e_priv, hs->e_pub, e_seed);         /* e */
     memcpy(out, hs->e_pub, NOISE_DHLEN);
     mix_hash(hs, hs->e_pub, NOISE_DHLEN);
@@ -311,7 +325,7 @@ size_t noise_write_msg2(noise_hs_t *hs, const uint8_t e_seed[NOISE_DHLEN],
     return len;
 }
 
-int noise_read_msg2(noise_hs_t *hs, const uint8_t *msg, size_t len,
+static int read_msg2(noise_hs_t *hs, const uint8_t *msg, size_t len,
                     uint8_t *payload, size_t payload_size,
                     size_t *payload_len)
 {
@@ -340,6 +354,39 @@ int noise_read_msg2(noise_hs_t *hs, const uint8_t *msg, size_t len,
     }
     *payload_len = plen;
     return 0;
+}
+
+/* The read functions work on a copy: a message that fails leaves the
+ * handshake state as it was, so a valid message can still follow */
+int noise_read_msg1(noise_hs_t *hs, const uint8_t psk[NOISE_KEYLEN],
+                    const uint8_t es[NOISE_DHLEN],
+                    const uint8_t *msg, size_t len,
+                    uint8_t *payload, size_t payload_size,
+                    size_t *payload_len)
+{
+    noise_hs_t t = *hs;
+    int rc = read_msg1(&t, psk, es, msg, len, payload, payload_size,
+                       payload_len);
+
+    if (rc == 0) {
+        *hs = t;
+    }
+    noise_wipe(&t);
+    return rc;
+}
+
+int noise_read_msg2(noise_hs_t *hs, const uint8_t *msg, size_t len,
+                    uint8_t *payload, size_t payload_size,
+                    size_t *payload_len)
+{
+    noise_hs_t t = *hs;
+    int rc = read_msg2(&t, msg, len, payload, payload_size, payload_len);
+
+    if (rc == 0) {
+        *hs = t;
+    }
+    noise_wipe(&t);
+    return rc;
 }
 
 void noise_split(noise_hs_t *hs, uint8_t c1[NOISE_KEYLEN],
