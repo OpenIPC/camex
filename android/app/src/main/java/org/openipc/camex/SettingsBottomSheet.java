@@ -8,6 +8,7 @@ package org.openipc.camex;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.text.TextUtils;
+import android.util.Base64;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -125,7 +126,7 @@ public class SettingsBottomSheet extends BottomSheetDialogFragment {
 
         // Protocol v2 is always encrypted: both keys are required
         String pubkey = text(pubkeyInput).trim();
-        if (pubkey.length() != 44) {
+        if (!isServerPubkey(pubkey)) {
             pubkeyInput.setError(getString(R.string.err_server_pubkey));
             return;
         }
@@ -166,6 +167,16 @@ public class SettingsBottomSheet extends BottomSheetDialogFragment {
             return Integer.parseInt(s);
         } catch (NumberFormatException ignored) {
             return fallback;
+        }
+    }
+
+    /** A server public key: base64 of exactly 32 bytes (camex --genkey). */
+    static boolean isServerPubkey(String key) {
+        if (key == null || key.length() != 44) return false;
+        try {
+            return Base64.decode(key, Base64.NO_WRAP).length == 32;
+        } catch (IllegalArgumentException e) {
+            return false;
         }
     }
 }

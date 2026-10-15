@@ -25,6 +25,8 @@ import java.util.concurrent.Executors;
 public class TunnelService extends VpnService {
     /** Intent action that stops the tunnel (see onStartCommand). */
     public static final String ACTION_STOP = "org.openipc.camex.STOP";
+    /** Sent (to this app only) when camex has exited: the UI shows it. */
+    public static final String ACTION_EXITED = "org.openipc.camex.EXITED";
     private static final String CHANNEL_ID = "camex_vpn";
     private static final int NOTIFY_ID = 1;
     private static final String TAG = "camex";
@@ -115,6 +117,9 @@ public class TunnelService extends VpnService {
                     updateNotification("Running...");
                     int ret = nativeRun(-1, argv);
                     updateNotification("Exited (code " + ret + ")");
+                    sendBroadcast(new Intent(ACTION_EXITED)
+                        .setPackage(getPackageName())
+                        .putExtra("code", ret));
                 } finally {
                     synchronized (lock) {
                         acquired = false;
