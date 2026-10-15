@@ -85,6 +85,11 @@ int main(void)
     /* close without open does not reach the backend */
     mem_opened = 7;
     packet_backend_set(&mem_backend);
+    if (packet_write((const uint8_t *)"\x45", 1U) == 0 || mem_out_len != 0U ||
+        packet_fd() != -1) {
+        fprintf(stderr, "FAIL: an unopened backend was used\n");
+        ++failures;
+    }
     packet_close();
     if (mem_opened != 7) {
         fprintf(stderr, "FAIL: close reached a backend that was not open\n");
@@ -101,6 +106,10 @@ int main(void)
     params.mtu = 1400;
     if (packet_open(&params) != 0 || !mem_opened || mem_mtu != 1400) {
         fprintf(stderr, "FAIL: open did not reach the backend\n");
+        ++failures;
+    }
+    if (packet_open(&params) == 0) {
+        fprintf(stderr, "FAIL: a second open succeeded\n");
         ++failures;
     }
     if (packet_write((const uint8_t *)"\x45\x00", 2U) != 0 ||

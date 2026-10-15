@@ -64,25 +64,31 @@ const camex_packet_backend_t *packet_backend_get(void)
 
 int packet_open(const camex_packet_open_t *params)
 {
-    int rc = backend->open(params);
+    int rc;
 
+    if (backend_open) {
+        return -1;  /* already open: close it first */
+    }
+    rc = backend->open(params);
     backend_open = (rc == 0);
     return rc;
 }
 
+/* An unopened backend (e.g. a server without a tunnel address) is never
+ * called: no packets, no descriptor */
 ssize_t packet_read(uint8_t *buffer, size_t size)
 {
-    return backend->read_packet(buffer, size);
+    return backend_open ? backend->read_packet(buffer, size) : -1;
 }
 
 int packet_write(const uint8_t *buffer, size_t len)
 {
-    return backend->write_packet(buffer, len);
+    return backend_open ? backend->write_packet(buffer, len) : -1;
 }
 
 intptr_t packet_fd(void)
 {
-    return backend->get_fd();
+    return backend_open ? backend->get_fd() : -1;
 }
 
 void packet_close(void)
