@@ -4,6 +4,7 @@ camex.exe
 build/
 src/camex
 *.o
+*.d
 tests/test_net_tcp
 tests/test_proto
 tests/test_packet

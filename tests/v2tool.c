@@ -144,8 +144,14 @@ static void handshake(const char *host, const char *port, int tcp,
     pkt[4] = V2_TYPE_INIT;
     v2_write_u32(pkt + 5, idx);
     len = noise_write_msg1(&hs, psk, seed, payload, V2_TIMESTAMP_LEN + tlen,
-                           pkt + V2_INIT_HDR, sizeof(pkt) - V2_INIT_HDR);
-    if (len > 0U && send_packet(fd, tcp, pkt, V2_INIT_HDR + len) == 0 &&
+                           pkt + V2_INIT_HDR,
+                           sizeof(pkt) - V2_INIT_HDR - V2_MAC_LEN);
+    if (len > 0U) {
+        len += V2_INIT_HDR;
+        v2_mac1(pub, pkt, len, pkt + len);
+        len += V2_MAC_LEN;
+    }
+    if (len > 0U && send_packet(fd, tcp, pkt, len) == 0 &&
         (n = recv_packet(fd, tcp, pkt, sizeof(pkt))) > 0 &&
         v2_packet_type(pkt, (size_t)n) == V2_TYPE_RESP &&
         v2_read_u32(pkt + 9) == idx &&

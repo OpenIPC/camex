@@ -32,6 +32,7 @@ typedef struct {
     struct sockaddr_in addr;
     uint32_t ip_be;
     time_t last_seen;
+    time_t last_data;     /* last authenticated DATA (not a handshake) */
     char client_id[CAMEX_CLIENT_ID_LEN];
     uint8_t active;
     uint8_t registered;   /* a handshake was accepted for this entry; until
@@ -41,7 +42,12 @@ typedef struct {
                            * from here, not from last_seen (#9) */
     int tcp_fd;           /* TCP socket fd for this client (-1 = UDP) */
     uint8_t psk_key[32];  /* key of the last handshake (for reloads) */
-    session_t cur;        /* current session */
+    uint8_t hs_ts[V2_TIMESTAMP_LEN];  /* its timestamp: a live session
+                                       * takes only newer ones */
+    session_t cur;        /* current session: the server sends on it */
+    session_t next;       /* from the latest handshake: receives only, and
+                           * becomes cur with the client's first packet on
+                           * it (so a rekey loses nothing in flight) */
     session_t prev;       /* previous session, receives until prev_until */
     time_t prev_until;
     tcp_recv_state_t recv_state;  /* per-connection partial-read tracker —

@@ -59,7 +59,8 @@ uint8_t v2_packet_type(const uint8_t *pkt, size_t len)
     }
     switch (pkt[4]) {
     case V2_TYPE_INIT:
-        return len >= V2_INIT_HDR + NOISE_MSG1_OVERHEAD + V2_TIMESTAMP_LEN
+        return len >= V2_INIT_HDR + NOISE_MSG1_OVERHEAD + V2_TIMESTAMP_LEN +
+                          V2_MAC_LEN
                    ? V2_TYPE_INIT : 0U;
     case V2_TYPE_RESP:
         return len >= V2_RESP_HDR + NOISE_MSG2_OVERHEAD ? V2_TYPE_RESP : 0U;
@@ -215,13 +216,27 @@ uint32_t v2_new_index(void)
 {
     uint8_t b[4];
     uint32_t v = 0U;
+    int tries;
 
-    while (v == 0U) {
+    for (tries = 0; v == 0U && tries < 8; ++tries) {
         if (get_random_bytes(b, sizeof(b)) != 0) {
-            b[0] ^= (uint8_t)time(NULL);   /* never 0 forever */
-            b[3] |= 1U;
+            return 0U;
         }
         v = v2_read_u32(b);
     }
     return v;
+}
+
+void v2_mac1(const uint8_t server_pub[32], const uint8_t *pkt, size_t len,
+             uint8_t out[V2_MAC_LEN])
+{
+    crypto_blake2b_ctx ctx;
+    uint8_t key[32];
+
+    crypto_blake2b_init(&ctx, sizeof(key));
+    crypto_blake2b_update(&ctx, (const uint8_t *)"mac1----", 8);
+    crypto_blake2b_update(&ctx, server_pub, 32);
+    crypto_blake2b_final(&ctx, key);
+    crypto_blake2b_keyed(out, V2_MAC_LEN, key, sizeof(key), pkt, len);
+    crypto_wipe(key, sizeof(key));
 }

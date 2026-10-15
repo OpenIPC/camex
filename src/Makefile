@@ -73,7 +73,10 @@ $(BUILD_DIR)/$(TARGET): $(OBJS)
 
 $(objdir)/%.o: %.c
 	mkdir -p $(objdir)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
+
+# Header dependencies: an edited header rebuilds every object using it
+-include $(OBJS:.o=.d)
 
 # Kernel module (Linux only)
 kmod:

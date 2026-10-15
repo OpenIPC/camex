@@ -301,9 +301,12 @@ protects before exposing it to an untrusted network.
   [Notes](#notes) for the exact rules.
 - **Source addresses.** A client may send only from its own tunnel address;
   packets with another source address are dropped.
-- **Replay protection.** Data packets have a 2048-packet window per session; a
-  replayed handshake carries an old timestamp and is rejected. Packets of an
-  ended session cannot be replayed into a new one: its keys are different.
+- **Replay protection.** Data packets have a 2048-packet window per session.
+  While a client has a live session, a handshake with an older timestamp is
+  rejected; a replayed handshake can never take a working session over, since
+  a new session replaces the old one only with the client's first packet on it
+  (a client whose clock went back after a reboot still reconnects). Packets of
+  an ended session cannot be replayed into a new one: its keys are different.
 - **Roaming.** A session is found by its index, not by the client's address:
   after a NAT rebinding the client keeps its session.
 - **Config reload.** After `SIGHUP`, a live session whose key was removed or
@@ -325,12 +328,16 @@ protects before exposing it to an untrusted network.
 ### Denial of service limits
 
 - TCP connections that have not completed a handshake are limited (4 per
-  source address, 32 in total) and closed after 10 s; the server processes at
-  most 200 handshakes per second.
+  source address, 32 in total) and closed after 10 s. A handshake carries a
+  MAC keyed with the server's public key: packets from anyone who does not know
+  it are dropped after one hash. The server processes at most 200 handshakes
+  per second.
 - Log messages that a peer can trigger (dropped packets, rejected
   registrations) are rate-limited; the number suppressed is logged.
 - The auto pool hands out `10.200.0.2`–`.254` and never gives one address to two
-  live clients (an expired client's address is handed out again);
+  live clients (an expired client's address is handed out again; a client that
+  reconnects, also after a server restart, gets its previous address back while
+  it is free);
   `allow_unknown_clients=no` serves only auto-mode IDs listed in the config file
   (manual clients are bound by their key and address, see [Notes](#notes)).
 

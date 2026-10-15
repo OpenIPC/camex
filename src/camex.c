@@ -889,11 +889,14 @@ static void drain_tcp_client_read(int fd)
             server_clients[i].tcp_fd == fd) {
             /* last_seen is refreshed by server_handle_packet() only for
              * packets that were accepted: a frame that fails to decrypt
-             * must not keep the connection alive (#9). */
-            if (server_handle_packet(buffer, frame_len,
-                                     &server_clients[i].addr, fd) != 0) {
-                net_sockaddr_to_string(&server_clients[i].addr,
-                                       peer_str, sizeof(peer_str));
+             * must not keep the connection alive (#9). A positive result
+             * is a forwarded frame still queued for a slow TCP peer.
+             * from is a copy: a handshake may move this connection to the
+             * client's existing entry and wipe this slot. */
+            struct sockaddr_in from = server_clients[i].addr;
+
+            if (server_handle_packet(buffer, frame_len, &from, fd) < 0) {
+                net_sockaddr_to_string(&from, peer_str, sizeof(peer_str));
                 log_peer(LOG_WARNING,
                          "Dropped TCP packet from %s",
                          peer_str);

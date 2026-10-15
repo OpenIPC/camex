@@ -45,11 +45,18 @@ int proto_build_register(const camex_config_t *config,
     }
 
     /* An auto client stays MODE=AUTO in every handshake (reconnects and
-     * rekeys); the server answers with its CONFIG each time. */
+     * rekeys); the server answers with its CONFIG each time. Once it has
+     * an address it sends it along: the server's auto pool gives the same
+     * one back while it is free (reconnects, a server restart). */
     if (config->auto_config) {
         if (append_control_field(buffer, size, &offset,
                                  " MODE=AUTO CLIENT_ID=%s",
                                  config->client_id) != 0) {
+            return -1;
+        }
+        if (config->local_ip[0] != '\0' &&
+            append_control_field(buffer, size, &offset,
+                                 " LOCAL_IP=%s", config->local_ip) != 0) {
             return -1;
         }
     } else {

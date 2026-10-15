@@ -18,6 +18,7 @@
 #include "camex.h"
 
 #include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
@@ -60,7 +61,8 @@ static int client_send_init(void)
 {
     const camex_crypto_t *ctx = crypto_get_ctx();
     uint8_t payload[V2_TIMESTAMP_LEN + CAMEX_CONTROL_MAX];
-    uint8_t packet[V2_INIT_HDR + NOISE_MSG1_OVERHEAD + sizeof(payload)];
+    uint8_t packet[V2_INIT_HDR + NOISE_MSG1_OVERHEAD + sizeof(payload) +
+                   V2_MAC_LEN];
     uint8_t e_seed[NOISE_DHLEN];
     char message[CAMEX_CONTROL_MAX];
     size_t msg_len;
@@ -86,25 +88,60 @@ static int client_send_init(void)
                          (const uint8_t *)CAMEX_NOISE_PROLOGUE,
                          sizeof(CAMEX_NOISE_PROLOGUE) - 1U, ctx->server_pub);
     client_state.hs_index = v2_new_index();
+    if (client_state.hs_index == 0U) {
+        crypto_wipe(e_seed, sizeof(e_seed));
+        return -1;
+    }
     memcpy(packet, CAMEX_MAGIC, 4);
     packet[4] = V2_TYPE_INIT;
     v2_write_u32(packet + 5, client_state.hs_index);
     len = noise_write_msg1(&client_state.hs, ctx->psk_key, e_seed, payload,
                            V2_TIMESTAMP_LEN + msg_len, packet + V2_INIT_HDR,
-                           sizeof(packet) - V2_INIT_HDR);
+                           sizeof(packet) - V2_INIT_HDR - V2_MAC_LEN);
     crypto_wipe(e_seed, sizeof(e_seed));
     if (len == 0U) {
         return -1;
     }
+    len += V2_INIT_HDR;
+    v2_mac1(ctx->server_pub, packet, len, packet + len);
+    len += V2_MAC_LEN;
     client_state.hs_pending = 1U;
     client_state.hs_sent = g_now;
-    return net_client_send(packet, V2_INIT_HDR + len) < 0 ? -1 : 0;
+    return net_client_send(packet, len) < 0 ? -1 : 0;
 }
 
 int client_start_handshake(void)
 {
     client_state.hs_started = g_now;
     return client_send_init();
+}
+
+/* The tunnel is configured once per run: a different CONFIG in a later
+ * handshake (the server's profile changed) is reported, not applied */
+static void client_check_config_change(const uint8_t *payload, size_t len)
+{
+    char message[CAMEX_CONTROL_MAX];
+    camex_config_t probe = current_config;
+
+    if (len >= sizeof(message)) {
+        return;
+    }
+    memcpy(message, payload, len);
+    message[len] = '\0';
+    if (proto_parse_config(message, &probe) != 0) {
+        return;
+    }
+    if (strcmp(probe.local_cidr, current_config.local_cidr) != 0 ||
+        strcmp(probe.gateway_ip, current_config.gateway_ip) != 0 ||
+        probe.mtu != current_config.mtu ||
+        probe.route_count != current_config.route_count ||
+        memcmp(probe.route_cidrs, current_config.route_cidrs,
+               sizeof(probe.route_cidrs)) != 0) {
+        log_message(LOG_WARNING, "The server sent a different tunnel "
+                    "configuration (CIDR=%s GW=%s MTU=%d routes=%u): "
+                    "restart camex to apply it", probe.local_cidr,
+                    probe.gateway_ip, probe.mtu, (unsigned)probe.route_count);
+    }
 }
 
 static int client_handle_resp(const uint8_t *buffer, size_t len)
@@ -129,10 +166,15 @@ static int client_handle_resp(const uint8_t *buffer, size_t len)
                  "to authenticate (wrong server key or PSK?)");
         return -1;
     }
-    if (current_config.auto_config && !client_state.config_received &&
-        client_apply_config_response(payload, payload_len) != 0) {
-        noise_wipe(&hs);
-        return -1;
+    if (current_config.auto_config) {
+        if (!client_state.config_received) {
+            if (client_apply_config_response(payload, payload_len) != 0) {
+                noise_wipe(&hs);
+                return -1;
+            }
+        } else {
+            client_check_config_change(payload, payload_len);
+        }
     }
     noise_split(&hs, c1, c2);
     noise_wipe(&hs);
@@ -153,11 +195,23 @@ static int client_handle_resp(const uint8_t *buffer, size_t len)
     client_state.last_recv = g_now;
     client_state.established = 1U;
     reconnect_backoff = 0;
+    /* The server sends on a new session only after the first packet on
+     * it: confirm at once */
+    {
+        uint8_t ka[V2_OVERHEAD];
+        size_t ka_len = session_seal(&client_state.cur, NULL, 0U, ka,
+                                     sizeof(ka));
+
+        if (ka_len > 0U) {
+            (void)net_client_send(ka, ka_len);
+            client_state.last_keepalive = g_now;
+        }
+    }
     if (first) {
         log_message(LOG_NOTICE, "Connection to server %s:%d established",
                     current_config.server_host, current_config.port);
     } else {
-        log_message(LOG_DEBUG, "Session keys renewed");
+        log_message(LOG_INFO, "Session keys renewed");
     }
     return 0;
 }
@@ -362,17 +416,41 @@ void client_reconnect(void)
     client_reconnect_at = 0;
 
     if (client_start_handshake() != 0) {
+        /* Nothing pending would retry it: start over later */
         log_message(LOG_WARNING, "Failed to send the handshake after "
-                    "reconnect");
+                    "reconnect; will retry in %ds", CAMEX_RECONNECT_INTERVAL);
+        net_close();
+        client_reconnect_at = g_now + (time_t)CAMEX_RECONNECT_INTERVAL;
+        client_state.last_recv = 0;
     } else {
         client_link_up = 1U;
     }
+}
+
+/* Seconds between rekeys: V2_REKEY_AFTER_TIME; the environment variable
+ * CAMEX_REKEY_AFTER (5..600) shortens it, for tests */
+static double client_rekey_after(void)
+{
+    static int value = 0;
+
+    if (value == 0) {
+        const char *env = getenv("CAMEX_REKEY_AFTER");
+        int v = env != NULL ? atoi(env) : 0;
+
+        value = (v >= 5 && v <= V2_REKEY_AFTER_TIME) ? v : V2_REKEY_AFTER_TIME;
+    }
+    return (double)value;
 }
 
 static int client_keepalive_interval(void)
 {
     int cap = current_config.server_timeout / 2;
 
+    /* --keepalive 0 turns off frequent probes and loss detection, but the
+     * server still needs a sign of life before it expires the client */
+    if (current_config.keepalive == 0) {
+        return CAMEX_CLIENT_TIMEOUT / 2;
+    }
     if (cap < 1) {
         cap = 1;
     }
@@ -390,16 +468,16 @@ void client_tick(void)
     }
 
     /* The server answers every keepalive, so with keepalives on a quiet
-     * link means the server is gone (#10). Without keepalives an idle
-     * link is normal and cannot be told apart. A handshake that gets no
-     * answer counts the same way. */
-    if (current_config.keepalive > 0 &&
-        ((client_state.established && client_state.last_recv > 0 &&
-          difftime(g_now, client_state.last_recv) >=
-              (double)current_config.server_timeout) ||
-         (!client_state.established && client_state.hs_pending &&
-          difftime(g_now, client_state.hs_started) >=
-              (double)current_config.server_timeout))) {
+     * link means the server is gone (#10); with --keepalive 0 probes are
+     * too rare to tell. A handshake that gets no answer counts the same
+     * way, keepalives or not. */
+    if ((current_config.keepalive > 0 && client_state.established &&
+         client_state.last_recv > 0 &&
+         difftime(g_now, client_state.last_recv) >=
+             (double)current_config.server_timeout) ||
+        (!client_state.established && client_state.hs_pending &&
+         difftime(g_now, client_state.hs_started) >=
+             (double)current_config.server_timeout)) {
         log_message(LOG_ERR,
                     "Connection lost: no answer from server %s:%d for %ds",
                     current_config.server_host, current_config.port,
@@ -426,14 +504,15 @@ void client_tick(void)
     /* Rekey: fresh keys every V2_REKEY_AFTER_TIME or V2_REKEY_AFTER_MSGS;
      * the current session keeps working until the new one is up */
     if (client_state.cur.valid && !client_state.hs_pending &&
-        (difftime(g_now, client_state.cur.created) >= V2_REKEY_AFTER_TIME ||
+        (difftime(g_now, client_state.cur.created) >= client_rekey_after() ||
          client_state.cur.send_n >= V2_REKEY_AFTER_MSGS)) {
         (void)client_start_handshake();
     }
 
     /* Keepalive: an empty DATA packet. The interval is capped at half the
-     * server timeout, so an idle client never times out between probes. */
-    if (client_state.cur.valid && current_config.keepalive > 0 &&
+     * server timeout, so an idle client never times out between probes;
+     * with --keepalive 0 it is half the server's client timeout. */
+    if (client_state.cur.valid &&
         difftime(g_now, client_state.last_keepalive) >=
             (double)client_keepalive_interval()) {
         uint8_t packet[V2_OVERHEAD];

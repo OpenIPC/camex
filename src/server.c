@@ -185,6 +185,11 @@ void server_expire_clients(void)
         if (c->prev.valid && now > c->prev_until) {
             session_wipe(&c->prev);
         }
+        /* A handshake the client never confirmed */
+        if (c->next.valid &&
+            difftime(now, c->next.created) > (double)V2_PREV_SESSION_GRACE) {
+            session_wipe(&c->next);
+        }
         /* Pre-auth: counted from the accept, so frames that arrive without
          * a handshake cannot keep an unregistered connection open. */
         if (preauth ? difftime(now, c->connected_at) >
@@ -267,11 +272,14 @@ void server_revalidate_unknown_clients(void)
 }
 
 /* CONFIG for an auto client (the handshake response payload); takes an
- * auto-pool address when the profile has none (#15). */
+ * auto-pool address when the profile has none (#15), preferring hint_ip
+ * (the client's previous address) when it is free. */
 static int server_build_config(server_client_t *entry, const char *client_id,
+                               const char *hint_ip,
                                char *message, size_t message_size)
 {
     camex_profile_t profile;
+    uint32_t old_ip_be = entry != NULL ? entry->ip_be : 0U;
 
     if (config_db_lookup_profile(client_id, &profile) != 0) {
         log_message(LOG_ERR, "Missing config for client %s",
@@ -284,7 +292,22 @@ static int server_build_config(server_client_t *entry, const char *client_id,
         if (entry != NULL && client_id != NULL && client_id[0] != '\0') {
             uint8_t octet;
 
-            /* Reuse existing auto-IP if client already has one */
+            /* Reuse existing auto-IP if client already has one, else the
+             * address the client asks for (its previous one) when free */
+            if (entry->ip_be == 0U && hint_ip != NULL &&
+                hint_ip[0] != '\0') {
+                struct in_addr h;
+                server_client_t *user;
+
+                if (inet_pton(AF_INET, hint_ip, &h) == 1 &&
+                    server_find_auto_ip_octet(h.s_addr, &octet) == 0 &&
+                    octet >= AUTO_POOL_FIRST && octet <= AUTO_POOL_LAST &&
+                    profile_owner_of_ip(h.s_addr) == NULL &&
+                    ((user = server_find_by_ip(h.s_addr)) == NULL ||
+                     user == entry)) {
+                    entry->ip_be = h.s_addr;
+                }
+            }
             if (entry->ip_be != 0U &&
                 server_find_auto_ip_octet(entry->ip_be, &octet) == 0 &&
                 octet >= AUTO_POOL_FIRST && octet <= AUTO_POOL_LAST &&
@@ -300,10 +323,6 @@ static int server_build_config(server_client_t *entry, const char *client_id,
                      AUTO_POOL_BASE ".%u/24", (unsigned)octet);
             snprintf(profile.gateway_ip, sizeof(profile.gateway_ip),
                      "%s", AUTO_POOL_GATEWAY);
-            log_message(LOG_INFO,
-                        "Auto-assigned %s to client %s (no config file)",
-                        profile.local_cidr, client_id);
-
             /* Store assigned IP in client entry for packet forwarding */
             {
                 struct in_addr a;
@@ -313,6 +332,12 @@ static int server_build_config(server_client_t *entry, const char *client_id,
                 if (inet_pton(AF_INET, ip, &a) == 1) {
                     entry->ip_be = a.s_addr;
                 }
+            }
+            /* Rekeys repeat the CONFIG: log new assignments only */
+            if (entry->ip_be != old_ip_be) {
+                log_message(LOG_INFO,
+                            "Auto-assigned %s to client %s (no config file)",
+                            profile.local_cidr, client_id);
             }
         } else {
             log_message(LOG_ERR, "Incomplete config for client %s",
@@ -532,56 +557,6 @@ static int server_register_allowed(const uint8_t *key, char *client_id,
     return 0;
 }
 
-/*
- * Message 1 replay protection: the newest handshake timestamp seen for each
- * identity (key + client ID or claimed address). Kept apart from the client
- * table, so it survives entry expiry; bounded, oldest records are reused.
- */
-#define SERVER_TS_RECORDS 512U
-
-typedef struct {
-    uint8_t id[16];
-    uint8_t ts[V2_TIMESTAMP_LEN];
-    uint8_t used;
-} server_ts_record_t;
-
-static server_ts_record_t server_ts[SERVER_TS_RECORDS];
-static size_t server_ts_next = 0U;
-
-/* 0 if ts is newer than any handshake seen for this identity (and records
- * it), -1 for a replay or an out-of-date timestamp */
-static int server_check_timestamp(const uint8_t *key, const char *identity,
-                                  const uint8_t ts[V2_TIMESTAMP_LEN])
-{
-    crypto_blake2b_ctx ctx;
-    uint8_t id[16];
-    server_ts_record_t *slot = NULL;
-    size_t i;
-
-    crypto_blake2b_init(&ctx, sizeof(id));
-    crypto_blake2b_update(&ctx, key, 32);
-    crypto_blake2b_update(&ctx, (const uint8_t *)identity, strlen(identity));
-    crypto_blake2b_final(&ctx, id);
-    for (i = 0U; i < SERVER_TS_RECORDS; ++i) {
-        if (server_ts[i].used && memcmp(server_ts[i].id, id, sizeof(id)) == 0) {
-            slot = &server_ts[i];
-            break;
-        }
-    }
-    if (slot != NULL) {
-        if (v2_timestamp_cmp(ts, slot->ts) <= 0) {
-            return -1;
-        }
-    } else {
-        slot = &server_ts[server_ts_next];
-        server_ts_next = (server_ts_next + 1U) % SERVER_TS_RECORDS;
-        memcpy(slot->id, id, sizeof(id));
-        slot->used = 1U;
-    }
-    memcpy(slot->ts, ts, V2_TIMESTAMP_LEN);
-    return 0;
-}
-
 /* At most SERVER_HANDSHAKES_PER_SEC INIT messages per second */
 static int server_handshake_budget(void)
 {
@@ -608,6 +583,58 @@ static int server_send(server_client_t *entry, const uint8_t *pkt, size_t len)
         return -1;
     }
     return net_send_payload(net_fd, &entry->addr, pkt, len);
+}
+
+/* A random session index no session uses, or 0 */
+static uint32_t server_new_index(void)
+{
+    int tries;
+
+    for (tries = 0; tries < 16; ++tries) {
+        uint32_t idx = v2_new_index();
+        size_t i;
+        int used = 0;
+
+        if (idx == 0U) {
+            return 0U;
+        }
+        for (i = 0U; i < CAMEX_MAX_CLIENTS && !used; ++i) {
+            const server_client_t *c = &server_clients[i];
+
+            used = c->active &&
+                   ((c->cur.valid && c->cur.local_index == idx) ||
+                    (c->next.valid && c->next.local_index == idx) ||
+                    (c->prev.valid && c->prev.local_index == idx));
+        }
+        if (!used) {
+            return idx;
+        }
+    }
+    return 0U;
+}
+
+/* A client that came back on a new TCP connection: the entry takes the new
+ * fd, the slot that connection got at accept() is freed, the old
+ * connection is closed */
+static void server_adopt_tcp(server_client_t *entry, int fd)
+{
+    size_t j;
+
+    if (fd < 0 || entry->tcp_fd == fd) {
+        return;
+    }
+    for (j = 0; j < CAMEX_MAX_CLIENTS; ++j) {
+        if (server_clients[j].active && server_clients[j].tcp_fd == fd &&
+            &server_clients[j] != entry) {
+            crypto_wipe(&server_clients[j], sizeof(server_clients[j]));
+            server_clients[j].tcp_fd = -1;
+        }
+    }
+    if (entry->tcp_fd >= 0) {
+        net_tcp_close(entry->tcp_fd);
+    }
+    entry->tcp_fd = fd;
+    memset(&entry->recv_state, 0, sizeof(entry->recv_state));
 }
 
 /* The client entry a handshake belongs to (created or reused), or NULL if
@@ -644,26 +671,7 @@ static server_client_t *server_entry_for(const char *client_id,
                 log_message(LOG_INFO, "Client %s reconnected: %s -> %s",
                             client_id, old_peer, peer);
             }
-            /* A new TCP connection: adopt its fd, free the slot it took at
-             * accept() and close the old connection */
-            if (fd >= 0 && entry->tcp_fd != fd) {
-                size_t j;
-
-                for (j = 0; j < CAMEX_MAX_CLIENTS; ++j) {
-                    if (server_clients[j].active &&
-                        server_clients[j].tcp_fd == fd &&
-                        &server_clients[j] != entry) {
-                        crypto_wipe(&server_clients[j],
-                                    sizeof(server_clients[j]));
-                        server_clients[j].tcp_fd = -1;
-                    }
-                }
-                if (entry->tcp_fd >= 0) {
-                    net_tcp_close(entry->tcp_fd);
-                }
-                entry->tcp_fd = fd;
-                memset(&entry->recv_state, 0, sizeof(entry->recv_state));
-            }
+            server_adopt_tcp(entry, fd);
             return entry;
         }
         /* TCP clients already have a slot allocated at accept() */
@@ -699,15 +707,22 @@ static server_client_t *server_entry_for(const char *client_id,
                      "by client %s", peer, local_ip, by_ip->client_id);
             return NULL;
         }
-        if (by_addr != NULL) {
-            entry = by_addr;
-        } else if (by_ip != NULL) {
-            char old_peer[64];
+        if (by_ip != NULL && (by_addr == NULL || by_addr == by_ip ||
+                              (by_addr->tcp_fd >= 0 && !by_addr->registered))) {
+            /* The client's own entry, also when it came back on a new TCP
+             * connection (whose pre-auth slot by_addr is then freed) */
+            if (!net_sockaddr_equal(&by_ip->addr, from)) {
+                char old_peer[64];
 
-            net_sockaddr_to_string(&by_ip->addr, old_peer, sizeof(old_peer));
-            log_message(LOG_INFO, "Client %s reconnected: %s -> %s",
-                        local_ip, old_peer, peer);
+                net_sockaddr_to_string(&by_ip->addr, old_peer,
+                                       sizeof(old_peer));
+                log_message(LOG_INFO, "Client %s reconnected: %s -> %s",
+                            local_ip, old_peer, peer);
+            }
+            server_adopt_tcp(by_ip, fd);
             entry = by_ip;
+        } else if (by_addr != NULL) {
+            entry = by_addr;
         } else {
             entry = server_alloc_client();
             if (entry == NULL) {
@@ -735,7 +750,6 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     char reply[CAMEX_CONTROL_MAX];
     char client_id[CAMEX_CLIENT_ID_LEN];
     char local_ip[16];
-    char identity[CAMEX_CLIENT_ID_LEN + 20];
     uint8_t auto_request = 0U;
     uint8_t e_seed[NOISE_DHLEN];
     uint8_t resp[V2_RESP_HDR + NOISE_MSG2_OVERHEAD + CAMEX_CONTROL_MAX];
@@ -753,6 +767,19 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     net_sockaddr_to_string(from, peer, sizeof(peer));
     if (!ctx->has_server_key) {
         return -1;
+    }
+    /* mac1 first: packets from anyone who does not know the server's
+     * public key cost one hash, and do not count against the budget */
+    {
+        uint8_t mac[V2_MAC_LEN];
+
+        len -= V2_MAC_LEN;
+        v2_mac1(ctx->server_pub, buffer, len, mac);
+        if (crypto_verify16(mac, buffer + len) != 0) {
+            log_peer(LOG_WARNING, "Dropped handshake from %s: bad mac1 "
+                     "(wrong server public key?)", peer);
+            return -1;
+        }
     }
     if (server_handshake_budget() != 0) {
         log_peer(LOG_WARNING, "Dropped handshake from %s: more than %u "
@@ -808,17 +835,34 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         return -1;
     }
 
-    /* A captured message 1 replayed later carries an old timestamp */
-    if (client_id[0] != '\0') {
-        snprintf(identity, sizeof(identity), "id:%s", client_id);
-    } else {
-        snprintf(identity, sizeof(identity), "ip:%s", local_ip);
-    }
-    if (server_check_timestamp(used_key, identity, payload) != 0) {
-        log_peer(LOG_WARNING, "Dropped handshake from %s (%s): replayed "
-                 "or out-of-date timestamp", peer, identity + 3);
-        noise_wipe(&hs);
-        return -1;
+    /* A captured message 1 replayed later carries an old timestamp. While
+     * the client has a live session (authenticated data recently; a
+     * replayed message 1 alone never makes it live), its timestamps must
+     * grow. Otherwise any timestamp is taken: a client whose clock went
+     * back (reboot without NTP) can still connect, and a replayed message
+     * 1 only leaves a session nobody can use. It never replaces a working
+     * one either: a new session waits in next until the client's first
+     * packet on it. */
+    {
+        server_client_t *owner = auto_request
+                                     ? server_find_by_client_id(client_id)
+                                     : NULL;
+        struct in_addr a;
+
+        if (!auto_request && inet_pton(AF_INET, local_ip, &a) == 1) {
+            owner = server_find_by_ip(a.s_addr);
+        }
+        if (owner != NULL && owner->cur.valid && owner->last_data != 0 &&
+            memcmp(owner->psk_key, used_key, 32) == 0 &&
+            difftime(g_now, owner->last_data) <=
+                (double)CAMEX_CLIENT_TIMEOUT &&
+            v2_timestamp_cmp(payload, owner->hs_ts) <= 0) {
+            log_peer(LOG_WARNING, "Dropped handshake from %s (%s): replayed "
+                     "or out-of-date timestamp", peer,
+                     client_id[0] != '\0' ? client_id : local_ip);
+            noise_wipe(&hs);
+            return -1;
+        }
     }
 
     entry = server_entry_for(client_id, local_ip, auto_request, from, fd,
@@ -828,7 +872,12 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         return -1;
     }
     first = !entry->registered;
-    entry->addr = *from;
+    /* A UDP entry with a working session keeps its address until the first
+     * packet on the new one (server_handle_data), so a replayed message 1
+     * cannot redirect its traffic; over TCP the connection carries it */
+    if (!entry->cur.valid || fd >= 0) {
+        entry->addr = *from;
+    }
     entry->last_seen = g_now;
     entry->auto_client = auto_request;
     snprintf(entry->client_id, sizeof(entry->client_id), "%s", client_id);
@@ -848,7 +897,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
                 entry->ip_be = a.s_addr;
             }
         }
-        if (server_build_config(entry, client_id, reply,
+        if (server_build_config(entry, client_id, local_ip, reply,
                                 sizeof(reply)) != 0) {
             /* No configuration (e.g. the auto pool is full): a slot taken
              * for this handshake must not stay behind (#15) */
@@ -869,7 +918,11 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         noise_wipe(&hs);
         return -1;
     }
-    server_index = v2_new_index();
+    server_index = server_new_index();
+    if (server_index == 0U) {
+        noise_wipe(&hs);
+        return -1;
+    }
     memcpy(resp, CAMEX_MAGIC, 4);
     resp[4] = V2_TYPE_RESP;
     v2_write_u32(resp + 5, server_index);
@@ -885,20 +938,30 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     noise_split(&hs, c1, c2);
     noise_wipe(&hs);
 
-    /* The new session becomes current; the old one keeps receiving for
-     * a while (packets in flight during a rekey) */
-    session_wipe(&entry->prev);
+    /* With a current session (rekey, reconnect) the new one waits in next
+     * until the client's first packet on it: until then the server keeps
+     * sending on cur, so nothing in flight is lost and a lost RESP does
+     * not break the working session. A first session is used at once. */
     if (entry->cur.valid) {
-        entry->prev = entry->cur;
-        entry->prev_until = g_now + V2_PREV_SESSION_GRACE;
+        session_wipe(&entry->next);
+        session_init(&entry->next, server_index, client_index, c2, c1, g_now);
+    } else {
+        session_init(&entry->cur, server_index, client_index, c2, c1, g_now);
     }
-    session_init(&entry->cur, server_index, client_index, c2, c1, g_now);
     crypto_wipe(c1, sizeof(c1));
     crypto_wipe(c2, sizeof(c2));
     memcpy(entry->psk_key, used_key, 32);
+    memcpy(entry->hs_ts, payload, V2_TIMESTAMP_LEN);
     entry->registered = 1U;
 
-    if (server_send(entry, resp, V2_RESP_HDR + resp_len) < 0) {
+    /* The reply goes where message 1 came from */
+    if (entry->tcp_fd >= 0) {
+        if (net_tcp_send_frame(entry->tcp_fd, resp,
+                               V2_RESP_HDR + resp_len) < 0) {
+            return -1;
+        }
+    } else if (net_send_payload(net_fd, from, resp,
+                                V2_RESP_HDR + resp_len) < 0) {
         return -1;
     }
     if (first) {
@@ -934,6 +997,9 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
         if (c->cur.valid && c->cur.local_index == idx) {
             entry = c;
             s = &c->cur;
+        } else if (c->next.valid && c->next.local_index == idx) {
+            entry = c;
+            s = &c->next;
         } else if (c->prev.valid && c->prev.local_index == idx &&
                    g_now <= c->prev_until) {
             entry = c;
@@ -949,11 +1015,23 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
         return -1;
     }
 
+    /* The client's first packet on the new session: it becomes current,
+     * the old one keeps receiving for a while */
+    if (s == &entry->next) {
+        session_wipe(&entry->prev);
+        entry->prev = entry->cur;
+        entry->prev_until = g_now + V2_PREV_SESSION_GRACE;
+        entry->cur = entry->next;
+        session_wipe(&entry->next);
+        s = &entry->cur;
+    }
+
     /* Authenticated: the client may have moved (NAT rebinding, roaming) */
     if (fd < 0 && !net_sockaddr_equal(&entry->addr, from)) {
         entry->addr = *from;
     }
     entry->last_seen = g_now;
+    entry->last_data = g_now;
 
     if (plain_len == 0U) {
         /* Keepalive: answer, so the client can tell a live server (#10) */

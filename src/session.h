@@ -7,14 +7,16 @@
  * Every packet (UDP datagram or TCP frame) starts with the magic "CXv2"
  * and a type byte:
  *
- *   INIT  client -> server  | sender_index 4 | Noise message 1
+ *   INIT  client -> server  | sender_index 4 | Noise message 1 | mac1 16
  *   RESP  server -> client  | sender_index 4 | receiver_index 4 | message 2
  *   DATA  both ways         | receiver_index 4 | counter 8 LE | AEAD
  *
  * Indexes are big-endian random numbers chosen by each side for its own
  * end of a session; a DATA packet carries the index of the receiver's
  * end. DATA authenticates its 17-byte header as associated data. An empty
- * DATA payload is a keepalive.
+ * DATA payload is a keepalive. mac1 (keyed with the server's public key)
+ * lets the server drop INIT packets from anyone who does not know that key
+ * before any public-key work.
  *
  */
 
@@ -36,6 +38,7 @@
 #define V2_TYPE_DATA 3U
 
 #define V2_INIT_HDR 9U    /* magic, type, sender */
+#define V2_MAC_LEN 16U    /* mac1 at the end of INIT */
 #define V2_RESP_HDR 13U   /* magic, type, sender, receiver */
 #define V2_DATA_HDR 17U   /* magic, type, receiver, counter */
 #define V2_OVERHEAD (V2_DATA_HDR + NOISE_TAGLEN)
@@ -99,7 +102,12 @@ void v2_timestamp(uint8_t out[V2_TIMESTAMP_LEN]);
 int v2_timestamp_cmp(const uint8_t a[V2_TIMESTAMP_LEN],
                      const uint8_t b[V2_TIMESTAMP_LEN]);
 
-/* Random nonzero session index */
+/* Random nonzero session index, or 0 if the random source failed */
 uint32_t v2_new_index(void);
+
+/* mac1 of an INIT packet (everything before the mac):
+ * BLAKE2b-128 keyed with BLAKE2b-256("mac1----" || server public key) */
+void v2_mac1(const uint8_t server_pub[32], const uint8_t *pkt, size_t len,
+             uint8_t out[V2_MAC_LEN]);
 
 #endif /* CAMEX_SESSION_H */

@@ -106,6 +106,10 @@ jobs:
         run: ./docker/test-e2e-hardening.sh
         if: matrix.platform.name == 'x86_64'
 
+      - name: E2E test (rekeying under traffic, issue #17)
+        run: ./docker/test-e2e-rekey.sh
+        if: matrix.platform.name == 'x86_64'
+
       - name: Build cross
         run: |
           make clean
