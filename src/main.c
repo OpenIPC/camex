@@ -497,7 +497,7 @@ void print_usage(const char *progname)
     printf("Examples:\n");
     printf("  # Server key pair (once): keep server_key secret, give\n"
            "  # public_key to the clients\n");
-    printf("  %s --genkey > /etc/camex/server.key\n\n", progname);
+    printf("  (umask 077; %s --genkey > /etc/camex/server.key)\n\n", progname);
     printf("  # Server (UDP)\n");
     printf("  %s --mode server --port 5800"
            " --config /etc/camex/camex.conf"

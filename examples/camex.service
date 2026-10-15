@@ -14,7 +14,7 @@
 #     --server-host vpn.example.org --port 5800 \
 #     --server-pubkey <server public key> --psk secret"
 #
-# For server mode (key pair: camex --genkey > /etc/camex/server.key):
+# For server mode (key pair: umask 077; camex --genkey > /etc/camex/server.key):
 #   Environment="CAMEX_ARGS=--mode server --port 5800 \
 #     --config /etc/camex/camex.conf \
 #     --server-key-file /etc/camex/server.key --psk secret"

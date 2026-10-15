@@ -34,7 +34,7 @@
 и предварительный ключ (глобальный или свой `psk=` из конфигурации сервера).
 
 ```sh
-camex --genkey > server.key       # server_key=… (секрет) и public_key=…
+(umask 077; camex --genkey > server.key)   # server_key=… (секрет) и public_key=…
 ```
 
 ### Сервер

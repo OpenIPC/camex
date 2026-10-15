@@ -14,6 +14,7 @@ gen_server_key() {
     local dir="$1" bin="${2:-$CAMEX_BINARY}" keys
     keys=$("$bin" --genkey) || return 1
     printf '%s\n' "$keys" | sed -n 's/^server_key=/server_key=/p' > "$dir/server.key"
+    chmod 600 "$dir/server.key" 2>/dev/null
     SERVER_PUBKEY=$(printf '%s\n' "$keys" | sed -n 's/^public_key=//p')
     [ -s "$dir/server.key" ] && [ -n "$SERVER_PUBKEY" ]
 }

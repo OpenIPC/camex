@@ -34,7 +34,7 @@
 或服务器配置中该客户端自己的 `psk=`）。
 
 ```sh
-camex --genkey > server.key       # server_key=…（保密）和 public_key=…
+(umask 077; camex --genkey > server.key)   # server_key=…（保密）和 public_key=…
 ```
 
 ### 服务器

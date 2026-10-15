@@ -34,7 +34,7 @@ The server has a key pair; every client needs the server's **public** key and
 a pre-shared key (the global one, or its own `psk=` from the server config).
 
 ```sh
-camex --genkey > server.key       # server_key=… (secret) and public_key=…
+(umask 077; camex --genkey > server.key)   # server_key=… (secret) and public_key=…
 ```
 
 ### Server
