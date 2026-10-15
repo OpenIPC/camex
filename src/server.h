@@ -32,6 +32,8 @@ typedef struct {
     uint64_t send_seq;
     char client_id[CAMEX_CLIENT_ID_LEN];
     uint8_t active;
+    uint8_t registered;   /* a REGISTER was accepted for this entry; until
+                           * then a TCP slot is pre-auth (#9) */
     uint8_t send_nonce_prefix[4];
     int tcp_fd;         /* TCP socket fd for this client (-1 = UDP) */
     uint8_t psk_key[32];

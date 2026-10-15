@@ -693,6 +693,51 @@ static void drain_tcp_server_accept(void)
             continue;
         }
 
+        /* Until it registers, a connection holds a pre-auth slot (#9):
+         * at most CAMEX_TCP_PREAUTH_PER_IP per source address (more are
+         * refused) and CAMEX_TCP_PREAUTH_MAX in total (the oldest one is
+         * closed to make room: a real client registers within a round
+         * trip, a flood cannot keep it out), each closed after
+         * CAMEX_TCP_PREAUTH_TIMEOUT without a REGISTER. */
+        {
+            size_t pending = 0U;
+            size_t pending_ip = 0U;
+            server_client_t *oldest = NULL;
+
+            for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
+                server_client_t *c = &server_clients[i];
+
+                if (!c->active || c->tcp_fd < 0 || c->registered) {
+                    continue;
+                }
+                ++pending;
+                if (c->addr.sin_addr.s_addr == peer.sin_addr.s_addr) {
+                    ++pending_ip;
+                }
+                if (oldest == NULL || c->last_seen < oldest->last_seen) {
+                    oldest = c;
+                }
+            }
+            if (pending_ip >= CAMEX_TCP_PREAUTH_PER_IP) {
+                net_tcp_close(client_fd);
+                net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
+                log_message(LOG_WARNING,
+                            "Refused TCP connection from %s: too many "
+                            "unregistered connections from this address",
+                            peer_str);
+                continue;
+            }
+            if (pending >= CAMEX_TCP_PREAUTH_MAX && oldest != NULL) {
+                net_sockaddr_to_string(&oldest->addr, peer_str,
+                                       sizeof(peer_str));
+                log_message(LOG_WARNING,
+                            "Closed unregistered TCP connection from %s: "
+                            "too many unregistered connections", peer_str);
+                net_tcp_close(oldest->tcp_fd);
+                memset(oldest, 0, sizeof(*oldest));
+            }
+        }
+
         for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
             if (!server_clients[i].active) {
                 memset(&server_clients[i], 0, sizeof(server_clients[i]));
@@ -770,7 +815,9 @@ static void drain_tcp_client_read(int fd)
     for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
         if (server_clients[i].active &&
             server_clients[i].tcp_fd == fd) {
-            server_clients[i].last_seen = g_now;
+            /* last_seen is refreshed by server_handle_packet() only for
+             * packets that were accepted: a frame that fails to decrypt
+             * must not keep the connection alive (#9). */
             if (server_handle_packet(buffer, frame_len,
                                      &server_clients[i].addr, fd) != 0) {
                 net_sockaddr_to_string(&server_clients[i].addr,

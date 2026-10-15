@@ -19,6 +19,11 @@
 #define CAMEX_CLIENT_TIMEOUT    120
 #define CAMEX_SERVER_TIMEOUT     20
 #define CAMEX_RECONNECT_INTERVAL  5
+/* TCP connections that have not registered yet (#9): they hold a client
+ * slot only briefly, and their number is limited overall and per address. */
+#define CAMEX_TCP_PREAUTH_TIMEOUT 10
+#define CAMEX_TCP_PREAUTH_MAX     32
+#define CAMEX_TCP_PREAUTH_PER_IP   4
 #define CAMEX_CLIENT_TOKEN_LEN 64
 #define CAMEX_CONTROL_MAX 1024U
 

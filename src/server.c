@@ -198,15 +198,29 @@ void server_expire_clients(void)
     last_expire_check = now;
 
     for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
+        int preauth = server_clients[i].tcp_fd >= 0 &&
+                      !server_clients[i].registered;
+
         if (server_clients[i].active &&
             difftime(now, server_clients[i].last_seen) >
-                (double)CAMEX_CLIENT_TIMEOUT) {
+                (double)(preauth ? CAMEX_TCP_PREAUTH_TIMEOUT
+                                 : CAMEX_CLIENT_TIMEOUT)) {
             char ipbuf[INET_ADDRSTRLEN];
             struct in_addr addr;
 
             addr.s_addr = server_clients[i].ip_be;
             inet_ntop(AF_INET, &addr, ipbuf, sizeof(ipbuf));
-            log_message(LOG_INFO, "Expired client %s", ipbuf);
+            if (preauth) {
+                char peer[64];
+
+                net_sockaddr_to_string(&server_clients[i].addr, peer,
+                                       sizeof(peer));
+                log_message(LOG_INFO,
+                            "Closed TCP connection from %s: no REGISTER "
+                            "within %ds", peer, CAMEX_TCP_PREAUTH_TIMEOUT);
+            } else {
+                log_message(LOG_INFO, "Expired client %s", ipbuf);
+            }
             if (server_clients[i].tcp_fd >= 0) {
                 net_tcp_close(server_clients[i].tcp_fd);
                 server_clients[i].tcp_fd = -1;
@@ -632,6 +646,7 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
         }
         snprintf(entry->client_id, sizeof(entry->client_id), "%s", client_id);
         server_reset_replay(entry);
+        entry->registered = 1U;
         entry->last_register_time = g_now;
         if (used_key != NULL) {
             memcpy(entry->psk_key, used_key, 32);
@@ -688,6 +703,7 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
             by_addr->last_register_time = g_now;
             snprintf(by_addr->client_id, sizeof(by_addr->client_id), "%s", client_id);
             server_reset_replay(by_addr);
+            by_addr->registered = 1U;
             if (used_key != NULL) {
                 memcpy(by_addr->psk_key, used_key, 32);
             }
@@ -705,6 +721,7 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
             by_ip->last_register_time = g_now;
             snprintf(by_ip->client_id, sizeof(by_ip->client_id), "%s", client_id);
             server_reset_replay(by_ip);
+            by_ip->registered = 1U;
             if (used_key != NULL) {
                 memcpy(by_ip->psk_key, used_key, 32);
             }
@@ -722,6 +739,7 @@ int server_handle_plain_register(const uint8_t *buffer, size_t len,
         entry->last_register_time = g_now;
         snprintf(entry->client_id, sizeof(entry->client_id), "%s", client_id);
         server_reset_replay(entry);
+        entry->registered = 1U;
         if (used_key != NULL) {
             memcpy(entry->psk_key, used_key, 32);
         }

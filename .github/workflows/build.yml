@@ -90,6 +90,10 @@ jobs:
         run: ./docker/test-e2e-key-binding.sh
         if: matrix.platform.name == 'x86_64'
 
+      - name: E2E test (TCP pre-auth connections, issue #9)
+        run: ./docker/test-e2e-tcp-preauth.sh
+        if: matrix.platform.name == 'x86_64'
+
       - name: Build cross
         run: |
           make clean
