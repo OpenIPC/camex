@@ -32,8 +32,10 @@ typedef struct {
 typedef struct {
     const char *name;
     int (*open)(const camex_packet_open_t *params);
-    /* Non-blocking: returns <= 0 when no packet is queued. The event loop
-     * reads several packets per readable event. */
+    /* Non-blocking. Returns the packet length; 0 when no packet is
+     * queued; -1 on an error (-1 with errno EAGAIN also means "no packet",
+     * as for a non-blocking fd). The event loop reads several packets per
+     * readable event and stops at the first result <= 0. */
     ssize_t (*read_packet)(uint8_t *buffer, size_t size);
     int (*write_packet)(const uint8_t *buffer, size_t len);
     /* Descriptor the event loop watches with select(): readable when a
