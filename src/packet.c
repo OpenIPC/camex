@@ -30,20 +30,31 @@ static intptr_t tun_backend_fd(void)
     return (intptr_t)tun_fd;
 }
 
+static int tun_backend_host_routes(void)
+{
+    return !tun_is_external();
+}
+
 const camex_packet_backend_t camex_tun_backend = {
     "tun",
     tun_backend_open,
     tun_read_packet,
     tun_write_packet,
     tun_backend_fd,
-    tun_close_device
+    tun_close_device,
+    tun_backend_host_routes
 };
 
 static const camex_packet_backend_t *backend = &camex_tun_backend;
+static int backend_open = 0;
 
-void packet_backend_set(const camex_packet_backend_t *b)
+int packet_backend_set(const camex_packet_backend_t *b)
 {
+    if (backend_open) {
+        return -1;
+    }
     backend = (b != NULL) ? b : &camex_tun_backend;
+    return 0;
 }
 
 const camex_packet_backend_t *packet_backend_get(void)
@@ -53,7 +64,10 @@ const camex_packet_backend_t *packet_backend_get(void)
 
 int packet_open(const camex_packet_open_t *params)
 {
-    return backend->open(params);
+    int rc = backend->open(params);
+
+    backend_open = (rc == 0);
+    return rc;
 }
 
 ssize_t packet_read(uint8_t *buffer, size_t size)
@@ -74,4 +88,10 @@ intptr_t packet_fd(void)
 void packet_close(void)
 {
     backend->close();
+    backend_open = 0;
+}
+
+int packet_host_routes(void)
+{
+    return backend->host_routes != NULL && backend->host_routes();
 }

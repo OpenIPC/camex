@@ -15,6 +15,7 @@
 #include "log.h"
 #include "util.h"
 #include "net.h"
+#include "packet.h"
 #include "tun.h"
 #include "version.h"
 
@@ -569,8 +570,9 @@ int main(int argc, char *argv[])
     }
 
     /* An externally provided TUN (Android) gets its routes from the host
-     * application; camex has no permission to change the routing table. */
-    if (client_mode && !tun_is_external()) {
+     * application, which camex has no permission to change; other packet
+     * backends may have no host interface at all. */
+    if (client_mode && packet_host_routes()) {
         size_t i;
 
         for (i = 0; i < current_config.route_count; ++i) {

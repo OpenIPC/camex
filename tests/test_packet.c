@@ -68,7 +68,7 @@ static void mem_close(void)
 }
 
 static const camex_packet_backend_t mem_backend = {
-    "memory", mem_open, mem_read, mem_write, mem_fd, mem_close
+    "memory", mem_open, mem_read, mem_write, mem_fd, mem_close, NULL
 };
 
 int main(void)
@@ -82,7 +82,10 @@ int main(void)
         ++failures;
     }
 
-    packet_backend_set(&mem_backend);
+    if (packet_backend_set(&mem_backend) != 0) {
+        fprintf(stderr, "FAIL: could not select a backend\n");
+        ++failures;
+    }
     memset(&params, 0, sizeof(params));
     params.mtu = 1400;
     if (packet_open(&params) != 0 || !mem_opened || mem_mtu != 1400) {
@@ -100,6 +103,15 @@ int main(void)
         fprintf(stderr, "FAIL: read did not come from the backend\n");
         ++failures;
     }
+    if (packet_backend_set(NULL) == 0 ||
+        packet_backend_get() != &mem_backend) {
+        fprintf(stderr, "FAIL: the backend changed while open\n");
+        ++failures;
+    }
+    if (packet_host_routes()) {
+        fprintf(stderr, "FAIL: a backend without host_routes got routes\n");
+        ++failures;
+    }
     if (packet_fd() != 42) {
         fprintf(stderr, "FAIL: fd did not come from the backend\n");
         ++failures;
@@ -110,8 +122,8 @@ int main(void)
         ++failures;
     }
 
-    packet_backend_set(NULL);
-    if (packet_backend_get() != &camex_tun_backend) {
+    if (packet_backend_set(NULL) != 0 ||
+        packet_backend_get() != &camex_tun_backend) {
         fprintf(stderr, "FAIL: NULL does not restore the TUN backend\n");
         ++failures;
     }

@@ -1081,7 +1081,7 @@ void camex_stop(void)
     running = 0;
 
     if (client_mode && current_config.gateway_ip[0] != '\0' &&
-        !tun_is_external()) {
+        packet_host_routes()) {
         for (i = 0; i < current_config.route_count; ++i) {
             if (camex_del_route(current_config.route_cidrs[i],
                                 current_config.gateway_ip) != 0) {
