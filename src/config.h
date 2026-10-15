@@ -18,6 +18,8 @@
 typedef struct {
     uint8_t psk_key[32];
     char owner[CAMEX_CLIENT_ID_LEN];  /* client ID; empty = global key */
+    uint8_t locked;   /* the client's psk= is invalid: the entry keeps the
+                       * ID owned but matches no key */
 } camex_keystore_entry_t;
 
 /* Per-client profile (from [client X] or defaults) */

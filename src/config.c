@@ -407,14 +407,14 @@ void config_build_keystore(void)
         if (derive_psk_key(server_db.clients[i].profile.psk,
                            server_keystore[server_keystore_count].psk_key)
             != 0) {
-            /* The client keeps an owner entry, with a random key nobody
-             * has: it cannot register until its psk= is fixed, and the
-             * global key cannot take its ID over either */
+            /* The client keeps a locked owner entry that matches no key:
+             * it cannot register until its psk= is fixed, and the global
+             * key cannot take its ID over either */
             log_message(LOG_ERR, "Invalid psk= for client %s: it cannot "
                         "register until the key is fixed",
                         server_db.clients[i].client_id);
-            (void)get_random_bytes(
-                server_keystore[server_keystore_count].psk_key, 32);
+            crypto_wipe(server_keystore[server_keystore_count].psk_key, 32);
+            server_keystore[server_keystore_count].locked = 1U;
         }
         snprintf(server_keystore[server_keystore_count].owner,
                  sizeof(server_keystore[server_keystore_count].owner),
@@ -436,7 +436,8 @@ void config_build_keystore(void)
         size_t j;
 
         for (j = 0U; j < i; ++j) {
-            if (memcmp(server_keystore[i].psk_key,
+            if (!server_keystore[i].locked && !server_keystore[j].locked &&
+                memcmp(server_keystore[i].psk_key,
                        server_keystore[j].psk_key, 32) == 0) {
                 log_message(LOG_WARNING,
                             "Client %s has the same psk as %s",
