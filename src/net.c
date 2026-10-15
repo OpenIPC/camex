@@ -717,6 +717,11 @@ int net_tcp_connect(const char *host, int port)
         do {
             time_t left = deadline - time(NULL);
 
+            /* A clock set back must not stretch the wait */
+            if (left > CAMEX_TCP_CONNECT_TIMEOUT) {
+                left = CAMEX_TCP_CONNECT_TIMEOUT;
+            }
+
             FD_ZERO(&wset);
             FD_SET(fd, &wset);
             FD_ZERO(&eset);
@@ -728,6 +733,11 @@ int net_tcp_connect(const char *host, int port)
                  time(NULL) < deadline);
         if (ready == 0) {
             log_message(LOG_ERR, "connect(TCP): timed out");
+            close(fd);
+            return -1;
+        }
+        if (ready < 0 && !running) {
+            log_message(LOG_INFO, "connect(TCP): stopped");
             close(fd);
             return -1;
         }
