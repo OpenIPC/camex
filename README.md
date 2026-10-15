@@ -283,7 +283,8 @@ protects before exposing it to an untrusted network.
   type, sequence number) are visible.
 - **Inside the tunnel** traffic is not filtered: any client can reach the server
   and other clients on the tunnel network. Restrict that with a firewall on the
-  server (e.g. on `camex0`).
+  server's tunnel interface (`tun0` or similar with `/dev/net/tun`, `camex`
+  with the kernel module; the server logs its name at startup).
 
 ### Denial of service limits
 
@@ -301,8 +302,9 @@ protects before exposing it to an untrusted network.
   passphrase.
 - Give each camera its own `psk=` in a `[client ID]` block, and set
   `allow_unknown_clients=no` when all cameras are listed.
-- Run the server with only the capabilities it needs (`CAP_NET_ADMIN`), and
-  firewall the tunnel interface.
+- Run the server with only the capabilities it needs (`CAP_NET_ADMIN`; with the
+  kernel module also file access to `/dev/camex`, see below), and firewall the
+  tunnel interface.
 
 ### Kernel module permissions
 
@@ -315,8 +317,9 @@ encryption is done by the userspace app.
 The app uses `VpnService`, so Android shows the VPN key icon while the tunnel is
 up; there is no way around that with `VpnService` (a client without TUN is
 tracked in #21). Only the tunnel network and the routes the server sends go
-through the tunnel, unless **Route all traffic through the tunnel** is enabled
-in the settings.
+through the tunnel; a `0.0.0.0/0` route from the server is ignored unless
+**Route all traffic through the tunnel** is enabled in the settings. That
+switch covers IPv4 only: IPv6 traffic does not go through the tunnel.
 
 ## Kernel Module
 
