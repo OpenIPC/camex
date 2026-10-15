@@ -31,7 +31,8 @@ typedef struct {
 } camex_crypto_t;
 
 /* Key from a PSK string: hex:/base64: raw key, or Argon2id (keys.h).
- * Returns 0 or -1. */
+ * Returns 0, -1 (malformed key) or KEY_ERR_NOMEM (no memory for
+ * Argon2id: the key itself may be fine). */
 int derive_psk_key(const char *psk, uint8_t key[32]);
 
 /* Server: its static key pair from a base64 private key.
@@ -40,7 +41,9 @@ int crypto_set_server_key(const char *priv_b64);
 int crypto_set_server_pub(const char *pub_b64);
 
 /* Init the key context. psk may be empty on a server whose clients all
- * have their own keys: there is no global key then. */
+ * have their own keys: there is no global key then. On failure the context
+ * is left as it was. Returns 0, -1 or KEY_ERR_NOMEM (see
+ * derive_psk_key()). */
 int crypto_init(const char *psk);
 
 /* Log the fingerprint */

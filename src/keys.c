@@ -157,12 +157,19 @@ typedef struct {
     uint8_t key[KEY_LEN];
     uint8_t used;
     uint8_t seen;    /* looked up since key_cache_mark() */
+    uint8_t fresh;   /* added since key_cache_mark() */
 } key_cache_entry_t;
 
 static key_cache_entry_t key_cache[KEY_CACHE_SIZE];
 static size_t key_cache_next = 0U;
 static uint8_t key_cache_id_key[KEY_LEN];
 static int key_cache_id_ready = 0;
+static int key_memory_locked = 0;
+
+void key_set_memory_locked(int locked)
+{
+    key_memory_locked = locked;
+}
 
 void key_cache_clear(void)
 {
@@ -178,6 +185,18 @@ void key_cache_mark(void)
 
     for (i = 0U; i < KEY_CACHE_SIZE; ++i) {
         key_cache[i].seen = 0U;
+        key_cache[i].fresh = 0U;
+    }
+}
+
+void key_cache_drop_new(void)
+{
+    size_t i;
+
+    for (i = 0U; i < KEY_CACHE_SIZE; ++i) {
+        if (key_cache[i].used && key_cache[i].fresh) {
+            crypto_wipe(&key_cache[i], sizeof(key_cache[i]));
+        }
     }
 }
 
@@ -217,7 +236,7 @@ static int argon2id(const char *pass, uint8_t key[KEY_LEN])
      * non-root) the 8 MiB work area cannot be locked, so the allocation
      * fails. Unlock for the derivation (the area is wiped afterwards) and
      * lock again. */
-    if (work == NULL && munlockall() == 0) {
+    if (work == NULL && key_memory_locked && munlockall() == 0) {
         relock = 1;
         work = malloc((size_t)KEY_ARGON2_BLOCKS * 1024U);
     }
@@ -322,6 +341,7 @@ int key_from_psk(const char *psk, uint8_t key[KEY_LEN])
     memcpy(slot->key, key, KEY_LEN);
     slot->used = 1U;
     slot->seen = 1U;
+    slot->fresh = 1U;
     crypto_wipe(id, sizeof(id));
     return 0;
 }
