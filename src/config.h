@@ -29,7 +29,7 @@ typedef struct {
     char route_cidrs[CAMEX_MAX_ROUTES][32];
     uint8_t route_count;
     int mtu;
-    char psk[64];
+    char psk[128];   /* hex: + 64 digits fits; passphrases too */
 } camex_profile_t;
 
 /* Server profile for a named client */
@@ -46,7 +46,7 @@ typedef struct {
     char tun_dev[256];
     char bind_dev[IFNAMSIZ];
     char pid_file[256];
-    char psk[64];
+    char psk[128];   /* hex: + 64 digits fits; passphrases too */
     int  port;
     int  mtu;
     uint8_t encrypt;
