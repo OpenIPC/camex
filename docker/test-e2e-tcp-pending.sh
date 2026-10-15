@@ -111,6 +111,25 @@ while time.time() - t < 3:
         pass
 '
 
+echo "== the server's socket to A must hold unsent data"
+# Precondition for the rest of the test: A registered (otherwise the flood
+# never reaches its socket) and the server's send queue to A is not empty.
+A_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CLA")
+txq=$(docker exec "$SRV" python3 -c '
+import socket, struct, sys
+want = "%08X" % struct.unpack("<I", socket.inet_aton(sys.argv[1]))[0]
+best = 0
+for line in open("/proc/net/tcp").readlines()[1:]:
+    f = line.split()
+    local, remote, txrx = f[1], f[2], f[4]
+    if local.endswith(":16A8") and remote.split(":")[0] == want:
+        best = max(best, int(txrx.split(":")[0], 16))
+print(best)
+' "$A_IP")
+[ "${txq:-0}" -gt 0 ] || \
+    fail "no pending data on the server's socket to A (send queue: ${txq:-none}); the scenario did not run"
+echo "   server send queue to A: $txq bytes"
+
 echo "== B must reach the server while A is blocked"
 docker exec "$CLB" ping -c3 -W1 10.200.0.1 >/dev/null 2>&1 || \
     fail "head-of-line blocking: client B is starved while A is not reading"
