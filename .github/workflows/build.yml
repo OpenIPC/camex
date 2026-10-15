@@ -98,6 +98,10 @@ jobs:
         run: ./docker/test-e2e-tcp-preauth.sh
         if: matrix.platform.name == 'x86_64'
 
+      - name: E2E test (auto pool and unknown clients, issue #15)
+        run: ./docker/test-e2e-auto-pool.sh
+        if: matrix.platform.name == 'x86_64'
+
       - name: E2E test (hardening, issue #16)
         run: ./docker/test-e2e-hardening.sh
         if: matrix.platform.name == 'x86_64'

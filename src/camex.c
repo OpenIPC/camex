@@ -1027,6 +1027,7 @@ void camex_run(void)
                 } else {
                     config_build_keystore();
                     server_revalidate_keys();
+                    server_revalidate_unknown_clients();
                 }
             }
         }
