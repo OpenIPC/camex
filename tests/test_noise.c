@@ -54,6 +54,16 @@ int main(void)
     check(len == v_cl[0] && memcmp(msg, v_c[0], len) == 0,
           "message 1 matches the vector");
     check(noise_msg1_es(&resp, msg, len, es) == 0, "es computed");
+    {
+        noise_hs_t big;
+        uint8_t small[64];
+
+        noise_init_initiator(&big, v_prologue, sizeof(v_prologue), s_pub);
+        check(noise_write_msg1(&big, v_psk, v_init_e, v_p[0], (size_t)-8,
+                               small, sizeof(small)) == 0,
+              "an overflowing payload length is rejected");
+        noise_wipe(&big);
+    }
 
     /* A wrong PSK is rejected and leaves the template untouched */
     memset(wrong_psk, 0x11, sizeof(wrong_psk));
@@ -82,9 +92,30 @@ int main(void)
                            msg, sizeof(msg));
     check(len == v_cl[1] && memcmp(msg, v_c[1], len) == 0,
           "message 2 matches the vector");
+    {
+        /* A forged reply first: rejected, and the state stays usable */
+        uint8_t forged[256];
+        uint8_t inplace[256];
+        noise_hs_t copy;
+
+        memcpy(forged, msg, len);
+        forged[len - 1] ^= 0x01U;
+        check(noise_read_msg2(&ini, forged, len, plain, sizeof(plain),
+                              &plen) != 0, "forged message 2 is rejected");
+
+        /* Decrypting in place (payload over the ciphertext) gives the
+         * same transcript */
+        copy = ini;
+        memcpy(inplace, msg, len);
+        check(noise_read_msg2(&copy, inplace, len, inplace + NOISE_DHLEN,
+                              sizeof(inplace) - NOISE_DHLEN, &plen) == 0 &&
+              memcmp(copy.h, v_hash, NOISE_HASHLEN) == 0,
+              "message 2 decrypts in place");
+        noise_wipe(&copy);
+    }
     check(noise_read_msg2(&ini, msg, len, plain, sizeof(plain), &plen) == 0 &&
           plen == v_pl[1] && memcmp(plain, v_p[1], plen) == 0,
-          "message 2 decrypts");
+          "message 2 decrypts after a forged one");
     check(memcmp(ini.h, v_hash, NOISE_HASHLEN) == 0 &&
           memcmp(resp.h, v_hash, NOISE_HASHLEN) == 0,
           "handshake hash matches the vector");
@@ -112,6 +143,10 @@ int main(void)
                             v_cl[m], plain) == 0 &&
               memcmp(plain, v_p[m], v_pl[m]) == 0, what);
     }
+    /* A valid transport message with one bit flipped is rejected */
+    noise_encrypt(i_c1, 0U, NULL, 0U, v_p[2], v_pl[2], msg);
+    check(noise_decrypt(r_c1, 0U, NULL, 0U, msg, v_cl[2], plain) == 0,
+          "transport message decrypts before tampering");
     msg[0] ^= 0x01U;
     check(noise_decrypt(r_c1, 0U, NULL, 0U, msg, v_cl[2], plain) != 0,
           "tampered transport message is rejected");
