@@ -1008,6 +1008,7 @@ void camex_run(void)
                                 "Keeping previous server configuration");
                 } else {
                     config_build_keystore();
+                    server_revalidate_unknown_clients();
                 }
             }
         }
