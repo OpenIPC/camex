@@ -239,12 +239,17 @@ int proto_parse_config(char *message, camex_config_t *config)
     char *saveptr = NULL;
     char *token;
     camex_profile_t profile;
+    char client_id[sizeof(config->client_id)];
 
     if (message == NULL || config == NULL) {
         return -1;
     }
 
     config_profile_reset(&profile);
+    /* CLIENT_ID is staged and stored only once the whole CONFIG has been
+     * accepted: a rejected message must not change the ID that later
+     * registration retries send. */
+    memcpy(client_id, config->client_id, sizeof(client_id));
 
     token = strtok_r(message, " \t\r\n", &saveptr);
     if (token == NULL || strcmp(token, CAMEX_MAGIC) != 0) {
@@ -260,7 +265,7 @@ int proto_parse_config(char *message, camex_config_t *config)
         char value[CAMEX_CLIENT_TOKEN_LEN];
 
         if (token_value(token, "CLIENT_ID", value, sizeof(value)) == 0) {
-            if (copy_option(config->client_id, sizeof(config->client_id),
+            if (copy_option(client_id, sizeof(client_id),
                             value, "client ID") != 0) {
                 return -1;
             }
@@ -327,6 +332,7 @@ int proto_parse_config(char *message, camex_config_t *config)
         log_message(LOG_ERR, "Invalid config response");
         return -1;
     }
+    memcpy(config->client_id, client_id, sizeof(config->client_id));
 
     return 0;
 }
