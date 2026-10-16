@@ -72,6 +72,9 @@ extern uint8_t server_mode;
 int camex_init(camex_config_t *config);
 void camex_run(void);
 void camex_stop(void);
+/* Wipes the keys and closes the sockets and the tunnel; camex_stop() does it
+ * too (after removing routes), a failed camex_init() needs it alone */
+void camex_cleanup(void);
 int camex_add_route(const char *cidr, const char *gateway);
 int camex_del_route(const char *cidr, const char *gateway);
 

@@ -15,7 +15,6 @@ import android.net.VpnService;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
-import android.text.TextUtils;
 import android.util.Log;
 import androidx.annotation.Keep;
 import androidx.core.app.ServiceCompat;
@@ -26,6 +25,8 @@ import java.util.concurrent.Executors;
 public class TunnelService extends VpnService {
     /** Intent action that stops the tunnel (see onStartCommand). */
     public static final String ACTION_STOP = "org.openipc.camex.STOP";
+    /** Sent (to this app only) when camex has exited: the UI shows it. */
+    public static final String ACTION_EXITED = "org.openipc.camex.EXITED";
     private static final String CHANNEL_ID = "camex_vpn";
     private static final int NOTIFY_ID = 1;
     private static final String TAG = "camex";
@@ -103,13 +104,9 @@ public class TunnelService extends VpnService {
                 args.add("--keepalive"); args.add(String.valueOf(getInt("keepalive", 10)));
                 args.add("--server-timeout");
                 args.add(String.valueOf(getInt("server_timeout", 20)));
-                if (getEncrypt()) {
-                    args.add("--encrypt");
-                    String psk = getPsk();
-                    if (!TextUtils.isEmpty(psk)) {
-                        args.add("--psk"); args.add(psk);
-                    }
-                }
+                // Protocol v2: always encrypted
+                args.add("--server-pubkey"); args.add(getServerPubkey());
+                args.add("--psk"); args.add(getPsk());
                 String[] argv = args.toArray(new String[0]);
 
                 if (!acquireRun(generation)) {
@@ -120,6 +117,9 @@ public class TunnelService extends VpnService {
                     updateNotification("Running...");
                     int ret = nativeRun(-1, argv);
                     updateNotification("Exited (code " + ret + ")");
+                    sendBroadcast(new Intent(ACTION_EXITED)
+                        .setPackage(getPackageName())
+                        .putExtra("code", ret));
                 } finally {
                     synchronized (lock) {
                         acquired = false;
@@ -268,9 +268,9 @@ public class TunnelService extends VpnService {
         return getSharedPreferences("camex", MODE_PRIVATE).getInt(key, def);
     }
 
-    private boolean getEncrypt() {
+    private String getServerPubkey() {
         return getSharedPreferences("camex", MODE_PRIVATE)
-            .getBoolean("encrypt", false);
+            .getString("server_pubkey", "");
     }
 
     private String getPsk() {

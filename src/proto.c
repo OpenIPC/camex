@@ -2,7 +2,8 @@
  *
  * Copyright (c) OpenIPC  https://openipc.org  MIT License
  *
- * proto.c — control protocol (REGISTER / CONFIG message builders and parsers)
+ * proto.c — control messages (REGISTER / CONFIG), carried as the payloads
+ *           of the v2 handshake messages
  *
  */
 
@@ -33,7 +34,7 @@ int proto_build_register(const camex_config_t *config,
     }
 
     if (append_control_field(buffer, size, &offset,
-                             "%s REGISTER", CAMEX_MAGIC) != 0) {
+                             "%s REGISTER", CAMEX_CTRL_WORD) != 0) {
         return -1;
     }
 
@@ -43,10 +44,19 @@ int proto_build_register(const camex_config_t *config,
         return -1;
     }
 
-    if (config->auto_config && !client_state.config_received) {
+    /* An auto client stays MODE=AUTO in every handshake (reconnects and
+     * rekeys); the server answers with its CONFIG each time. Once it has
+     * an address it sends it along: the server's auto pool gives the same
+     * one back while it is free (reconnects, a server restart). */
+    if (config->auto_config) {
         if (append_control_field(buffer, size, &offset,
                                  " MODE=AUTO CLIENT_ID=%s",
                                  config->client_id) != 0) {
+            return -1;
+        }
+        if (config->local_ip[0] != '\0' &&
+            append_control_field(buffer, size, &offset,
+                                 " LOCAL_IP=%s", config->local_ip) != 0) {
             return -1;
         }
     } else {
@@ -86,7 +96,7 @@ int proto_parse_register(char *message,
     }
 
     token = strtok_r(message, " \t\r\n", &saveptr);
-    if (token == NULL || strcmp(token, CAMEX_MAGIC) != 0) {
+    if (token == NULL || strcmp(token, CAMEX_CTRL_WORD) != 0) {
         return -1;
     }
 
@@ -193,7 +203,7 @@ int proto_build_config(const char *client_id,
     }
 
     if (append_control_field(buffer, size, &offset,
-                             "%s CONFIG", CAMEX_MAGIC) != 0) {
+                             "%s CONFIG", CAMEX_CTRL_WORD) != 0) {
         return -1;
     }
 
@@ -261,7 +271,7 @@ int proto_parse_config(char *message, camex_config_t *config)
     memcpy(client_id, config->client_id, sizeof(client_id));
 
     token = strtok_r(message, " \t\r\n", &saveptr);
-    if (token == NULL || strcmp(token, CAMEX_MAGIC) != 0) {
+    if (token == NULL || strcmp(token, CAMEX_CTRL_WORD) != 0) {
         return -1;
     }
 

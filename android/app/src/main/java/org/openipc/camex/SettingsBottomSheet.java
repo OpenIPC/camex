@@ -8,6 +8,7 @@ package org.openipc.camex;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.text.TextUtils;
+import android.util.Base64;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -19,7 +20,6 @@ import com.google.android.material.button.MaterialButton;
 import com.google.android.material.button.MaterialButtonToggleGroup;
 import com.google.android.material.switchmaterial.SwitchMaterial;
 import com.google.android.material.textfield.TextInputEditText;
-import com.google.android.material.textfield.TextInputLayout;
 
 /**
  * Editable connection settings persisted to the "camex" SharedPreferences, read
@@ -36,9 +36,8 @@ public class SettingsBottomSheet extends BottomSheetDialogFragment {
     private static final int DEFAULT_TIMEOUT = 20;
 
     private TextInputEditText hostInput, portInput, nameInput, pskInput;
+    private TextInputEditText pubkeyInput;
     private TextInputEditText mtuInput, keepaliveInput, timeoutInput;
-    private TextInputLayout pskLayout;
-    private SwitchMaterial encryptSwitch;
     private SwitchMaterial fullTunnelSwitch;
     private MaterialButtonToggleGroup transportGroup;
 
@@ -58,8 +57,7 @@ public class SettingsBottomSheet extends BottomSheetDialogFragment {
         portInput = v.findViewById(R.id.input_server_port);
         nameInput = v.findViewById(R.id.input_name);
         pskInput = v.findViewById(R.id.input_psk);
-        pskLayout = v.findViewById(R.id.layout_psk);
-        encryptSwitch = v.findViewById(R.id.switch_encrypt);
+        pubkeyInput = v.findViewById(R.id.input_server_pubkey);
         fullTunnelSwitch = v.findViewById(R.id.switch_full_tunnel);
         transportGroup = v.findViewById(R.id.group_transport);
         mtuInput = v.findViewById(R.id.input_mtu);
@@ -71,12 +69,8 @@ public class SettingsBottomSheet extends BottomSheetDialogFragment {
         portInput.setText(String.valueOf(prefs.getInt("server_port", DEFAULT_PORT)));
         nameInput.setText(prefs.getString("name", DEFAULT_NAME));
         pskInput.setText(prefs.getString("psk", ""));
-        boolean encrypt = prefs.getBoolean("encrypt", false);
-        encryptSwitch.setChecked(encrypt);
+        pubkeyInput.setText(prefs.getString("server_pubkey", ""));
         fullTunnelSwitch.setChecked(prefs.getBoolean("full_tunnel", false));
-        pskLayout.setEnabled(encrypt);
-
-        encryptSwitch.setOnCheckedChangeListener((b, checked) -> pskLayout.setEnabled(checked));
 
         // Transport: default UDP unless "tcp" was saved.
         boolean tcp = "tcp".equals(prefs.getString("transport", "udp"));
@@ -130,6 +124,18 @@ public class SettingsBottomSheet extends BottomSheetDialogFragment {
             return;
         }
 
+        // Protocol v2 is always encrypted: both keys are required
+        String pubkey = text(pubkeyInput).trim();
+        if (!isServerPubkey(pubkey)) {
+            pubkeyInput.setError(getString(R.string.err_server_pubkey));
+            return;
+        }
+        String psk = text(pskInput);
+        if (TextUtils.isEmpty(psk)) {
+            pskInput.setError(getString(R.string.err_psk));
+            return;
+        }
+
         String transport =
             transportGroup.getCheckedButtonId() == R.id.btn_tcp ? "tcp" : "udp";
 
@@ -138,9 +144,9 @@ public class SettingsBottomSheet extends BottomSheetDialogFragment {
             .putInt("server_port", port)
             .putString("name", name)
             .putString("transport", transport)
-            .putBoolean("encrypt", encryptSwitch.isChecked())
             .putBoolean("full_tunnel", fullTunnelSwitch.isChecked())
-            .putString("psk", text(pskInput))
+            .putString("server_pubkey", pubkey)
+            .putString("psk", psk)
             .putInt("mtu", mtu)
             .putInt("keepalive", keepalive)
             .putInt("server_timeout", timeout)
@@ -161,6 +167,17 @@ public class SettingsBottomSheet extends BottomSheetDialogFragment {
             return Integer.parseInt(s);
         } catch (NumberFormatException ignored) {
             return fallback;
+        }
+    }
+
+    /** A server public key: base64 of exactly 32 bytes (camex --genkey). */
+    static boolean isServerPubkey(String key) {
+        // Exactly what camex accepts: 43 base64 characters and '='
+        if (key == null || !key.matches("[A-Za-z0-9+/]{43}=")) return false;
+        try {
+            return Base64.decode(key, Base64.NO_WRAP).length == 32;
+        } catch (IllegalArgumentException e) {
+            return false;
         }
     }
 }

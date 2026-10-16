@@ -485,6 +485,22 @@ int config_build_keystore(void)
         }
     }
 
+    {
+        size_t usable = 0U;
+
+        for (i = 0U; i < server_keystore_count; ++i) {
+            if (!server_keystore[i].locked) {
+                ++usable;
+            }
+        }
+        /* Without a key no client can ever connect: say so instead of
+         * dropping every handshake */
+        if (usable == 0U) {
+            log_message(LOG_ERR, "No usable PSK: give --psk, psk= in "
+                        "[server], or psk= for each client");
+            return -1;
+        }
+    }
     log_message(LOG_INFO, "Server keystore: %u PSK(s) loaded",
                 (unsigned)server_keystore_count);
     return 0;

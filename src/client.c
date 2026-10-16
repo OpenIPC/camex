@@ -2,7 +2,7 @@
  *
  * Copyright (c) OpenIPC  https://openipc.org  MIT License
  *
- * client.c — client-side state machine (register, reconnect, packet handling)
+ * client.c — client side of protocol v2: handshake, sessions, reconnect
  *
  */
 
@@ -18,6 +18,7 @@
 #include "camex.h"
 
 #include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
@@ -48,149 +49,236 @@ void client_state_init(client_state_t *state)
     memset(state, 0, sizeof(*state));
 }
 
-int client_send_register(void)
+void client_wipe(void)
 {
-    uint8_t packet[CAMEX_HDR_LEN + 1 + 16U + CAMEX_CONTROL_MAX];
-    char message[CAMEX_CONTROL_MAX];
-    size_t packet_len = 0;
-    size_t message_len;
+    noise_wipe(&client_state.hs);
+    session_wipe(&client_state.cur);
+    session_wipe(&client_state.prev);
+    client_state.hs_pending = 0U;
+}
 
-    if (proto_build_register(&current_config, message,
-                             sizeof(message)) != 0) {
+static int client_send_init(void)
+{
+    const camex_crypto_t *ctx = crypto_get_ctx();
+    uint8_t payload[V2_TIMESTAMP_LEN + CAMEX_CONTROL_MAX];
+    uint8_t packet[V2_INIT_HDR + NOISE_MSG1_OVERHEAD + sizeof(payload) +
+                   V2_MAC_LEN];
+    uint8_t e_seed[NOISE_DHLEN];
+    char message[CAMEX_CONTROL_MAX];
+    size_t msg_len;
+    size_t len;
+
+    if (!ctx->has_server_pub || !ctx->has_global) {
+        log_message(LOG_ERR, "Missing the server public key or the PSK");
         return -1;
     }
+    if (proto_build_register(&current_config, message, sizeof(message)) != 0) {
+        return -1;
+    }
+    msg_len = strlen(message);
+    v2_timestamp(payload);
+    memcpy(payload + V2_TIMESTAMP_LEN, message, msg_len);
 
-    message_len = strlen(message);
-    if (current_config.encrypt) {
-        uint64_t seq = client_state.send_seq;
-        if (crypto_encrypt_packet(CAMEX_PACKET_REGISTER, seq,
-                client_state.send_nonce_prefix,
-                NULL,
-                (const uint8_t *)message, message_len,
-                packet, sizeof(packet), &packet_len) != 0) {
-            return -1;
-        }
-        client_state.send_seq = seq + 1U;
-        if (net_client_send(packet, packet_len) != 0) {
-            return -1;
-        }
-    } else {
-        if (current_config.transport == CAMEX_TRANSPORT_TCP) {
-            if (net_tcp_send_frame(net_fd, (const uint8_t *)message,
-                                   message_len) != 0) {
+    if (get_random_bytes(e_seed, sizeof(e_seed)) != 0) {
+        return -1;
+    }
+    /* A new ephemeral key and index for every INIT */
+    noise_wipe(&client_state.hs);
+    noise_init_initiator(&client_state.hs,
+                         (const uint8_t *)CAMEX_NOISE_PROLOGUE,
+                         sizeof(CAMEX_NOISE_PROLOGUE) - 1U, ctx->server_pub);
+    client_state.hs_index = v2_new_index();
+    if (client_state.hs_index == 0U) {
+        crypto_wipe(e_seed, sizeof(e_seed));
+        return -1;
+    }
+    memcpy(packet, CAMEX_MAGIC, 4);
+    packet[4] = V2_TYPE_INIT;
+    v2_write_u32(packet + 5, client_state.hs_index);
+    len = noise_write_msg1(&client_state.hs, ctx->psk_key, e_seed, payload,
+                           V2_TIMESTAMP_LEN + msg_len, packet + V2_INIT_HDR,
+                           sizeof(packet) - V2_INIT_HDR - V2_MAC_LEN);
+    crypto_wipe(e_seed, sizeof(e_seed));
+    if (len == 0U) {
+        return -1;
+    }
+    len += V2_INIT_HDR;
+    v2_mac1(ctx->server_pub, packet, len, packet + len);
+    len += V2_MAC_LEN;
+    client_state.hs_pending = 1U;
+    client_state.hs_sent = g_now;
+    return net_client_send(packet, len) < 0 ? -1 : 0;
+}
+
+int client_start_handshake(void)
+{
+    client_state.hs_started = g_now;
+    return client_send_init();
+}
+
+/* The tunnel is configured once per run: a different CONFIG in a later
+ * handshake (the server's profile changed) is reported, not applied */
+static void client_check_config_change(const uint8_t *payload, size_t len)
+{
+    char message[CAMEX_CONTROL_MAX];
+    camex_config_t probe = current_config;
+
+    if (len >= sizeof(message)) {
+        return;
+    }
+    memcpy(message, payload, len);
+    message[len] = '\0';
+    if (proto_parse_config(message, &probe) != 0) {
+        return;
+    }
+    if (strcmp(probe.local_cidr, current_config.local_cidr) != 0 ||
+        strcmp(probe.gateway_ip, current_config.gateway_ip) != 0 ||
+        probe.mtu != current_config.mtu ||
+        probe.route_count != current_config.route_count ||
+        memcmp(probe.route_cidrs, current_config.route_cidrs,
+               sizeof(probe.route_cidrs)) != 0) {
+        log_message(LOG_WARNING, "The server sent a different tunnel "
+                    "configuration (CIDR=%s GW=%s MTU=%d routes=%u): "
+                    "restart camex to apply it", probe.local_cidr,
+                    probe.gateway_ip, probe.mtu, (unsigned)probe.route_count);
+    }
+}
+
+static int client_handle_resp(const uint8_t *buffer, size_t len)
+{
+    noise_hs_t hs;
+    uint8_t payload[CAMEX_CONTROL_MAX];
+    size_t payload_len = 0U;
+    uint8_t c1[NOISE_KEYLEN];
+    uint8_t c2[NOISE_KEYLEN];
+    uint32_t server_index = v2_read_u32(buffer + 5);
+    int first = !client_state.established;
+
+    if (!client_state.hs_pending ||
+        v2_read_u32(buffer + 9) != client_state.hs_index) {
+        return -1;   /* not for our current handshake */
+    }
+    hs = client_state.hs;   /* keep the state if this RESP is bogus */
+    if (noise_read_msg2(&hs, buffer + V2_RESP_HDR, len - V2_RESP_HDR,
+                        payload, sizeof(payload) - 1U, &payload_len) != 0) {
+        noise_wipe(&hs);
+        log_peer(LOG_WARNING, "Handshake response from the server failed "
+                 "to authenticate (wrong server key or PSK?)");
+        return -1;
+    }
+    if (current_config.auto_config) {
+        if (!client_state.config_received) {
+            if (client_apply_config_response(payload, payload_len) != 0) {
+                noise_wipe(&hs);
                 return -1;
             }
         } else {
-            if (net_send_text(net_fd, NULL, message) != 0) {
-                return -1;
-            }
+            client_check_config_change(payload, payload_len);
         }
     }
+    noise_split(&hs, c1, c2);
+    noise_wipe(&hs);
+    noise_wipe(&client_state.hs);
+    client_state.hs_pending = 0U;
 
-    client_state.last_register = g_now;
-    client_state.registered = 1U;
+    /* The old session keeps receiving for a while: packets in flight */
+    session_wipe(&client_state.prev);
+    if (client_state.cur.valid) {
+        client_state.prev = client_state.cur;
+        client_state.prev_until = g_now + V2_PREV_SESSION_GRACE;
+    }
+    session_init(&client_state.cur, client_state.hs_index, server_index,
+                 c1, c2, g_now);
+    crypto_wipe(c1, sizeof(c1));
+    crypto_wipe(c2, sizeof(c2));
+
+    client_state.last_recv = g_now;
+    client_state.established = 1U;
+    client_state.confirm_pending = 1U;
+    reconnect_backoff = 0;
+    /* The server sends on a new session only after the first packet on
+     * it: confirm at once (and again in client_tick() until the server
+     * answers on it) */
+    {
+        uint8_t ka[V2_OVERHEAD];
+        size_t ka_len = session_seal(&client_state.cur, NULL, 0U, ka,
+                                     sizeof(ka));
+
+        if (ka_len > 0U) {
+            (void)net_client_send(ka, ka_len);
+            client_state.last_keepalive = g_now;
+        }
+    }
+    if (first) {
+        log_message(LOG_NOTICE, "Connection to server %s:%d established",
+                    current_config.server_host, current_config.port);
+    } else {
+        log_message(LOG_INFO, "Session keys renewed");
+    }
     return 0;
 }
 
 int client_handle_net_packet(const uint8_t *buffer, size_t len)
 {
     uint8_t plain[TUN_PACKET_MAX];
-    uint8_t type = 0U;
     size_t plain_len = 0U;
-    uint64_t seq = 0;
+    session_t *s = NULL;
+    uint32_t idx;
 
-    if (buffer == NULL || len == 0U) {
+    switch (v2_packet_type(buffer, len)) {
+    case V2_TYPE_RESP:
+        return client_handle_resp(buffer, len);
+    case V2_TYPE_DATA:
+        break;
+    default:
+        log_peer(LOG_WARNING, "Dropped packet from server: not a v2 packet "
+                 "(len=%u)", (unsigned)len);
         return -1;
     }
 
-    if (current_config.encrypt) {
-        if (crypto_decrypt_packet(buffer, len, &type, plain,
-                                  sizeof(plain), &plain_len, &seq,
-                                  NULL) != 0) {
-            char peer[64];
-            net_sockaddr_to_string(&server_addr, peer, sizeof(peer));
-            log_peer(LOG_WARNING,
-                     "Crypto error: failed to decrypt packet "
-                     "from server %s (len=%u)",
-                     peer, (unsigned)len);
-            return -1;
-        }
-        /* Every authenticated packet goes through the replay window before
-         * it counts as a sign of life: after a server restart its sequence
-         * numbers start again from 0, are rejected here, and the client
-         * then times out and reconnects with a fresh window (#10). */
-        if (replay_check(&client_state.recv_seq_max,
-                         &client_state.recv_window, seq) != 0) {
-            log_peer(LOG_WARNING,
-                     "Replay check failed for packet type %u "
-                     "(seq=%" PRIu64 ", max=%" PRIu64 ")",
-                     (unsigned)type, seq, client_state.recv_seq_max);
-            return -1;
-        }
-        client_state.last_recv = g_now;
-        if (type == CAMEX_PACKET_CONFIG && current_config.auto_config) {
-            int ret = client_apply_config_response(plain, plain_len);
-            if (ret == 0) {
-                reconnect_backoff = 0;
-            }
-            return ret;
-        }
-        if (type == CAMEX_PACKET_KEEPALIVE) {
-            client_state.keepalive_acked = 1U;
-            reconnect_backoff = 0;
-            return 0;
-        }
-        if (type != CAMEX_PACKET_DATA) {
-            return 0;
-        }
-        buffer = plain;
-        len = plain_len;
-    } else {
-        /* Plaintext: only recognised packets count as server activity, so
-         * stray datagrams cannot hide a dead server (#10). */
-        /* Inbound keepalive from server */
-        if (len == 5U && memcmp(buffer, CAMEX_MAGIC, 4) == 0 &&
-            buffer[4] == CAMEX_PACKET_KEEPALIVE) {
-            client_state.last_recv = g_now;
-            client_state.keepalive_acked = 1U;
-            reconnect_backoff = 0;
-            return 0;
-        }
-        /* Config response from server */
-        if (current_config.auto_config && len >= 4U &&
-            memcmp(buffer, CAMEX_MAGIC, 4) == 0) {
-            int ret = client_apply_config_response(buffer, len);
-            if (ret == 0) {
-                client_state.last_recv = g_now;
-                reconnect_backoff = 0;
-            }
-            return ret;
-        }
-        /* Tunnel data must at least look like an IPv4/IPv6 header */
-        if (len < 20U || ((buffer[0] >> 4) != 4 && (buffer[0] >> 4) != 6)) {
-            return 0;
-        }
-        client_state.last_recv = g_now;
+    idx = v2_data_receiver(buffer);
+    if (client_state.cur.valid && idx == client_state.cur.local_index) {
+        s = &client_state.cur;
+    } else if (client_state.prev.valid &&
+               idx == client_state.prev.local_index &&
+               g_now <= client_state.prev_until) {
+        s = &client_state.prev;
     }
-
-    /* Successful data packet received — reset exponential backoff */
+    if (s == NULL ||
+        session_open(s, buffer, len, plain, sizeof(plain), &plain_len) != 0) {
+        log_peer(LOG_WARNING, "Dropped packet from server: unknown session "
+                 "or failed to authenticate (len=%u)", (unsigned)len);
+        return -1;
+    }
+    client_state.last_recv = g_now;
+    if (s == &client_state.cur) {
+        client_state.confirm_pending = 0U;
+    }
     reconnect_backoff = 0;
-    return packet_write(buffer, len);
+    if (plain_len == 0U) {
+        return 0;   /* keepalive answer */
+    }
+    return packet_write(plain, plain_len);
 }
 
 int client_wait_for_config(void)
 {
-    uint8_t buffer[CAMEX_CONTROL_MAX];
+    uint8_t buffer[V2_RESP_HDR + NOISE_MSG2_OVERHEAD + CAMEX_CONTROL_MAX];
     fd_set readset;
     struct timeval tv;
     int ready;
-    unsigned int probe = 0;
+    unsigned int waited;
 
     log_message(LOG_INFO, "Waiting for auto-config from server...");
 
-    unsigned int wait_retries;
-    for (wait_retries = 0; wait_retries < 300; wait_retries++) {
+    for (waited = 0U; waited < 300U; ) {
         if (!running) {
+            return -1;
+        }
+        g_now = time(NULL);
+        if (client_state.hs_pending &&
+            difftime(g_now, client_state.hs_sent) >= V2_HANDSHAKE_RETRY &&
+            client_send_init() != 0) {
             return -1;
         }
 
@@ -207,24 +295,24 @@ int client_wait_for_config(void)
             print_errno_message(LOG_ERR, "select");
             return -1;
         }
-
         if (ready == 0 || !FD_ISSET(net_fd, &readset)) {
-            ++probe;
-            if (probe % 10 == 0) {
+            ++waited;
+            if (waited % 10U == 0U) {
                 log_message(LOG_INFO,
-                            "Still waiting for server config (%us)...", probe);
-            }
-            /* Retry register every 5s — matches server rate-limit window */
-            if (probe % 5 == 0 && client_send_register() != 0) {
-                return -1;
+                            "Still waiting for server config (%us)...", waited);
             }
             continue;
         }
 
         if (current_config.transport == CAMEX_TRANSPORT_TCP) {
             size_t frame_len;
-            if (net_tcp_recv_frame(net_fd, buffer, sizeof(buffer),
-                                   &frame_len, &client_recv_state) != 0) {
+            int rc = net_tcp_recv_frame(net_fd, buffer, sizeof(buffer),
+                                        &frame_len, &client_recv_state);
+            if (rc < 0) {
+                log_message(LOG_ERR, "Connection to the server closed");
+                return -1;
+            }
+            if (rc != 0) {
                 continue;
             }
             ready = (int)frame_len;
@@ -235,13 +323,14 @@ int client_wait_for_config(void)
             }
         }
         if (client_handle_net_packet(buffer, (size_t)ready) == 0 &&
+            client_state.config_received &&
             current_config.local_cidr[0] != '\0' &&
             current_config.gateway_ip[0] != '\0') {
             return 0;
         }
     }
 
-    log_message(LOG_ERR, "Timeout: server did not provide config after 300 retries");
+    log_message(LOG_ERR, "Timeout: server did not provide config");
     return -1;
 }
 
@@ -284,32 +373,29 @@ int client_apply_config_response(const uint8_t *payload, size_t payload_len)
 
 int client_handle_tun_packet(const uint8_t *buffer, size_t len)
 {
-    uint8_t packet[TUN_PACKET_MAX + CAMEX_HDR_LEN + 1 + 16U];
-    size_t packet_len = 0;
+    uint8_t packet[TUN_PACKET_MAX + V2_OVERHEAD];
+    size_t packet_len;
 
     if (buffer == NULL || len == 0U || len > TUN_PACKET_MAX) {
         return -1;
     }
-
-    if (current_config.encrypt) {
-        uint64_t seq = client_state.send_seq;
-        if (crypto_encrypt_packet(CAMEX_PACKET_DATA, seq,
-                client_state.send_nonce_prefix,
-                NULL, buffer, len,
-                packet, sizeof(packet), &packet_len) != 0) {
-            return -1;
-        }
-        client_state.send_seq = seq + 1U;
-        return net_client_send(packet, packet_len);
+    if (!client_state.cur.valid) {
+        return 0;   /* no session yet: the packet is dropped quietly */
     }
-
-    return net_client_send(buffer, len);
+    packet_len = session_seal(&client_state.cur, buffer, len, packet,
+                              sizeof(packet));
+    if (packet_len == 0U) {
+        return -1;
+    }
+    return net_client_send(packet, packet_len);
 }
 
 void client_reconnect(void)
 {
     net_close();
     memset(&client_recv_state, 0, sizeof(client_recv_state));
+    client_wipe();
+    client_state.established = 0U;
 
     log_message(LOG_INFO, "Reconnecting to server %s:%d...",
                 current_config.server_host, current_config.port);
@@ -330,45 +416,46 @@ void client_reconnect(void)
         return;
     }
 
-    client_state.registered = 0;
-    client_state.last_register = 0;
-    client_state.config_received = 0;
-    client_state.recv_seq_max = 0;
-    client_state.recv_window = 0;
-    /* keepalive_acked is kept: whether the server answers keepalives is a
-     * property of the server, not of the session.  Clearing it here left
-     * silence detection off after a reconnect until the next answered
-     * keepalive, so a server that stopped answering right after the
-     * reconnect was never detected (#10). */
     client_state.last_recv = g_now;
     client_state.last_keepalive = g_now;
     client_reconnect_at = 0;
 
-    /* Generate a fresh nonce_prefix for the new session to prevent
-     * cross-session replay attacks. */
-    if (get_random_bytes(client_state.send_nonce_prefix,
-                         sizeof(client_state.send_nonce_prefix)) != 0) {
-        log_message(LOG_WARNING,
-                    "getrandom failed: using weak nonce prefix for reconnect");
-    }
-
-    if (client_send_register() != 0) {
-        log_message(LOG_WARNING, "Failed to send register after reconnect");
+    if (client_start_handshake() != 0) {
+        /* Nothing pending would retry it: start over later */
+        log_message(LOG_WARNING, "Failed to send the handshake after "
+                    "reconnect; will retry in %ds", CAMEX_RECONNECT_INTERVAL);
+        net_close();
+        client_reconnect_at = g_now + (time_t)CAMEX_RECONNECT_INTERVAL;
+        client_state.last_recv = 0;
     } else {
-        log_message(LOG_NOTICE, "Connection to server %s:%d restored",
-                    current_config.server_host, current_config.port);
         client_link_up = 1U;
-        if (current_config.auto_config) {
-            log_message(LOG_INFO,
-                        "Auto-config mode: waiting for server config response");
-        }
     }
+}
+
+/* Seconds between rekeys: V2_REKEY_AFTER_TIME; the environment variable
+ * CAMEX_REKEY_AFTER (5..600) shortens it, for tests */
+static double client_rekey_after(void)
+{
+    static int value = 0;
+
+    if (value == 0) {
+        const char *env = getenv("CAMEX_REKEY_AFTER");
+        int v = env != NULL ? atoi(env) : 0;
+
+        value = (v >= 5 && v <= V2_REKEY_AFTER_TIME) ? v : V2_REKEY_AFTER_TIME;
+    }
+    return (double)value;
 }
 
 static int client_keepalive_interval(void)
 {
     int cap = current_config.server_timeout / 2;
 
+    /* --keepalive 0 turns off frequent probes and loss detection, but the
+     * server still needs a sign of life before it expires the client */
+    if (current_config.keepalive == 0) {
+        return CAMEX_CLIENT_TIMEOUT / 2;
+    }
     if (cap < 1) {
         cap = 1;
     }
@@ -385,17 +472,19 @@ void client_tick(void)
         return;
     }
 
-    /* Silence detection is enforced once the server has answered a
-     * KEEPALIVE: that proves it replies to them, so a quiet link really
-     * means the server is gone. Servers that never answer keepalives
-     * (older versions) keep the previous behaviour: silence counts only
-     * in auto mode, with or without keepalives. */
-    if ((client_state.keepalive_acked || current_config.auto_config) &&
-        client_state.last_recv > 0 &&
-        difftime(g_now, client_state.last_recv) >=
-            (double)current_config.server_timeout) {
+    /* The server answers every keepalive, so with keepalives on a quiet
+     * link means the server is gone (#10); with --keepalive 0 probes are
+     * too rare to tell. A handshake that gets no answer counts the same
+     * way, keepalives or not. */
+    if ((current_config.keepalive > 0 && client_state.established &&
+         client_state.last_recv > 0 &&
+         difftime(g_now, client_state.last_recv) >=
+             (double)current_config.server_timeout) ||
+        (!client_state.established && client_state.hs_pending &&
+         difftime(g_now, client_state.hs_started) >=
+             (double)current_config.server_timeout)) {
         log_message(LOG_ERR,
-                    "Connection lost: no data from server %s:%d for %ds",
+                    "Connection lost: no answer from server %s:%d for %ds",
                     current_config.server_host, current_config.port,
                     current_config.server_timeout);
         client_link_up = 0U;
@@ -404,58 +493,61 @@ void client_tick(void)
         return;
     }
 
-    /* Send keepalive to prevent idle timeout.  The interval is capped at
-     * half the server timeout: otherwise an idle client with a keepalive
-     * longer than the timeout would time out before its next probe and
-     * reconnect over and over. */
-    if (current_config.keepalive > 0 &&
-        client_state.last_keepalive > 0 &&
-        difftime(g_now, client_state.last_keepalive) >=
-            (double)client_keepalive_interval()) {
-        uint8_t packet[CAMEX_HDR_LEN + 1 + 1 + 16U];
-        size_t packet_len = 0;
-        int sent = 0;
+    /* A rekey that gets no answer while the old session still works
+     * (handshakes blocked, say) must not keep the old keys forever */
+    if (client_state.established && client_state.hs_pending &&
+        difftime(g_now, client_state.hs_started) >= V2_REKEY_TIMEOUT) {
+        log_message(LOG_ERR, "Session renewal got no answer from %s:%d "
+                    "for %ds — reconnecting", current_config.server_host,
+                    current_config.port, V2_REKEY_TIMEOUT);
+        client_link_up = 0U;
+        client_state.last_recv = 0;
+        client_reconnect();
+        return;
+    }
 
-        if (current_config.encrypt) {
-            uint64_t seq = client_state.send_seq;
-            if (crypto_encrypt_packet(CAMEX_PACKET_KEEPALIVE, seq,
-                    client_state.send_nonce_prefix,
-                    NULL,
-                    NULL, 0,
-                    packet, sizeof(packet), &packet_len) == 0) {
-                client_state.send_seq = seq + 1U;
-                sent = net_client_send(packet, packet_len);
-            }
-        } else {
-            /* Unencrypted keepalive: single magic+type byte */
-            uint8_t plain[5];
-            memcpy(plain, CAMEX_MAGIC, 4);
-            plain[4] = CAMEX_PACKET_KEEPALIVE;
-            if (current_config.transport == CAMEX_TRANSPORT_TCP) {
-                sent = net_tcp_send_frame(net_fd, plain, 5);
-            } else {
-                sent = (int)send(net_fd, (const char *)plain, 5, 0);
-            }
+    /* Handshake retransmission (a new INIT, new ephemeral key) */
+    if (client_state.hs_pending &&
+        difftime(g_now, client_state.hs_sent) >= V2_HANDSHAKE_RETRY) {
+        if (client_send_init() != 0) {
+            log_message(LOG_ERR, "Failed to send the handshake to %s:%d — "
+                        "forcing reconnect", current_config.server_host,
+                        current_config.port);
+            net_close();
+            client_reconnect_at = 0;
+            return;
         }
+    }
 
-        if (sent < 0) {
+    /* Rekey: fresh keys every V2_REKEY_AFTER_TIME or V2_REKEY_AFTER_MSGS;
+     * the current session keeps working until the new one is up */
+    if (client_state.cur.valid && !client_state.hs_pending &&
+        (difftime(g_now, client_state.cur.created) >= client_rekey_after() ||
+         client_state.cur.send_n >= V2_REKEY_AFTER_MSGS)) {
+        (void)client_start_handshake();
+    }
+
+    /* Keepalive: an empty DATA packet. The interval is capped at half the
+     * server timeout, so an idle client never times out between probes;
+     * with --keepalive 0 it is half the server's client timeout. Until the
+     * server answers on a new session (its confirmation may be lost), one
+     * goes every V2_HANDSHAKE_RETRY seconds: the server drops a session
+     * nobody confirmed after V2_PREV_SESSION_GRACE. */
+    if (client_state.cur.valid &&
+        difftime(g_now, client_state.last_keepalive) >=
+            (client_state.confirm_pending
+                 ? (double)V2_HANDSHAKE_RETRY
+                 : (double)client_keepalive_interval())) {
+        uint8_t packet[V2_OVERHEAD];
+        size_t packet_len = session_seal(&client_state.cur, NULL, 0U, packet,
+                                         sizeof(packet));
+
+        if (packet_len == 0U || net_client_send(packet, packet_len) < 0) {
             log_message(LOG_WARNING,
                         "Failed to send keepalive to %s:%d",
                         current_config.server_host, current_config.port);
         }
         client_state.last_keepalive = g_now;
-    }
-
-    if (!client_state.registered ||
-        difftime(g_now, client_state.last_register) >=
-            (double)CAMEX_REGISTER_INTERVAL) {
-        if (client_send_register() != 0) {
-            log_message(LOG_ERR,
-                "Failed to send REGISTER to server %s:%d — forcing reconnect",
-                current_config.server_host, current_config.port);
-            net_close();
-            client_reconnect_at = 0;
-        }
     }
 }
 

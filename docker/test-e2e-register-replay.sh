@@ -2,19 +2,20 @@
 #
 # Copyright (c) OpenIPC  https://openipc.org  MIT License
 #
-# test-e2e-register-replay.sh — regression test for issue #7
+# test-e2e-register-replay.sh — regression test for issue #7 (protocol v2)
 #
 # An encrypted manual client registers and pings the server while its
 # packets are captured. An attacker then replays the captured packets
 # from its own address:
-#   1. a REGISTER of the live session, then the captured DATA (pings):
+#   1. the handshake (INIT) of the live session, then the captured DATA
+#      (pings):
 #      the session must not move to the attacker, the pings must not
 #      reach the server again;
 #   2. after the client reconnected (new session): the old session's
-#      REGISTER and DATA must be rejected as well.
+#      INIT and DATA must be rejected as well.
 # After each attack the client must still reach the server.
-# Before the fix REGISTER was not replay-checked and reset the receive
-# window, so both replays reached the server.
+# In protocol v2 a replayed INIT carries an old timestamp, and replayed
+# DATA fails the replay window or names a session that no longer exists.
 #
 # Usage: ./test-e2e-register-replay.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
@@ -51,11 +52,14 @@ check() {   # check <condition-exit-code> <message>
 [ -x "$CAMEX_BINARY" ] || { echo "camex binary not found: $CAMEX_BINARY"; exit 1; }
 
 cp "$CAMEX_BINARY" "$BUILD_CTX/camex"
+. "$SCRIPT_DIR/lib-keys.sh"
+gen_server_key "$BUILD_CTX" "$CAMEX_BINARY" || { echo "cannot create a server key"; exit 1; }
 cat > "$BUILD_CTX/Dockerfile" <<'EOF'
 FROM ubuntu:24.04
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
         iputils-ping python3-minimal tcpdump >/dev/null && rm -rf /var/lib/apt/lists/*
 COPY camex /usr/local/bin/camex
+COPY server.key /etc/camex/server.key
 RUN printf '#!/bin/sh\nmkdir -p /dev/net\n[ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200\nexec /usr/local/bin/camex "$@"\n' \
         > /usr/local/bin/camex-run && chmod +x /usr/local/bin/camex-run
 ENTRYPOINT ["/usr/local/bin/camex-run"]
@@ -85,7 +89,7 @@ still_up() {
 start_client() {
     docker run -d --name "$CLI" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
         "$IMAGE" --mode client --local-cidr 10.200.0.2/24 --gateway-ip 10.200.0.1 \
-        --server-host "$SRV" --port 5800 --encrypt --psk "$PSK" >/dev/null
+        --server-host "$SRV" --port 5800 --server-pubkey "$SERVER_PUBKEY" --psk "$PSK" >/dev/null
 }
 wait_ping() {
     local i
@@ -103,15 +107,15 @@ replay() {
     sent=$(cat "$@" | docker exec -i "$ATK" python3 /send.py "$SRV")
     [ "$sent" = "$want" ]; check $? "attacker sent $want captured packets (sent: ${sent:-none})"
 }
-# dropped_regs: REGISTERs the server rejected as replays so far
+# dropped_regs: handshakes the server rejected as replays so far
 dropped_regs() {
-    docker logs "$SRV" 2>&1 | grep -c "Dropped REGISTER" || true
+    docker logs "$SRV" 2>&1 | grep -c "Dropped handshake.*replayed" || true
 }
 
 echo "== start server, capture, client"
 docker run -d --name "$SRV" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" --mode server --port 5800 --local-cidr 10.200.0.1/24 \
-    --encrypt --psk "$PSK" >/dev/null
+    $SERVER_KEY_ARGS --psk "$PSK" >/dev/null
 docker run -d --name "$CAP" --network "container:$SRV" --cap-add NET_RAW --cap-add NET_ADMIN \
     --entrypoint tcpdump "$IMAGE" -i any -U -w /tmp/c.pcap udp port 5800 >/dev/null
 docker run -d --name "$ATK" --network "$NET_NAME" --entrypoint sleep "$IMAGE" infinity >/dev/null \
@@ -121,7 +125,7 @@ sleep 2
 start_client
 wait_ping || { echo "FAIL: client never reached the server"; exit 2; }
 docker exec "$CLI" ping -q -c 5 -i 0.2 10.200.0.1 >/dev/null 2>&1
-sleep 11   # the client re-sends REGISTER every 10 s: capture one mid-session
+sleep 3
 docker exec "$CAP" kill -INT 1 >/dev/null 2>&1; sleep 1
 docker cp "$CAP:/tmp/c.pcap" "$BUILD_CTX/c.pcap" >/dev/null
 # UDP payloads sent to port 5800, as lines "<type> <hex>" (tcpdump -i any
@@ -143,25 +147,24 @@ while off + 16 <= len(data):
     if struct.unpack_from(">H", ip, udp + 2)[0] != 5800:
         continue
     payload = ip[udp + 8:]
-    if len(payload) > 5 and payload[:4] == b"CX2P":
+    if len(payload) > 5 and payload[:4] == b"CXv2":
         print(payload[4], payload.hex())
 EOF
 regs=$(grep -c '^1 ' "$BUILD_CTX/old.txt")
-datas=$(grep -c '^2 ' "$BUILD_CTX/old.txt")
-echo "   captured: $regs REGISTER, $datas DATA"
-[ "$regs" -ge 2 ] && [ "$datas" -ge 5 ]; check $? "captured a mid-session REGISTER and the pings"
+datas=$(grep -c '^3 ' "$BUILD_CTX/old.txt")
+echo "   captured: $regs INIT, $datas DATA"
+[ "$regs" -ge 1 ] && [ "$datas" -ge 5 ]; check $? "captured the handshake and the pings"
 
-echo "== 1. replay the live session's REGISTER and DATA from another address"
-sleep 6   # past the server's 5 s per-address REGISTER rate limit
+echo "== 1. replay the live session's INIT and DATA from another address"
 before=$(icmp_in "$SRV")
 drops=$(dropped_regs)
 grep '^1 ' "$BUILD_CTX/old.txt" | tail -n 1 > "$BUILD_CTX/reg-last.txt"
-grep '^2 ' "$BUILD_CTX/old.txt" > "$BUILD_CTX/data.txt"
+grep '^3 ' "$BUILD_CTX/old.txt" > "$BUILD_CTX/data.txt"
 replay "$BUILD_CTX/reg-last.txt" "$BUILD_CTX/data.txt"
 sleep 2
 after=$(icmp_in "$SRV")
 [ "$after" = "$before" ]; check $? "replayed pings do not reach the server (echo requests: $before -> $after)"
-[ "$(dropped_regs)" -gt "$drops" ]; check $? "the server rejected the replayed REGISTER"
+[ "$(dropped_regs)" -gt "$drops" ]; check $? "the server rejected the replayed handshake"
 docker logs "$SRV" 2>&1 | grep -q "reconnected: .*$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$ATK")"
 [ $? != 0 ]; check $? "the session did not move to the attacker's address"
 still_up
@@ -177,7 +180,7 @@ replay "$BUILD_CTX/regs.txt" "$BUILD_CTX/data.txt"
 sleep 2
 after=$(icmp_in "$SRV")
 [ "$after" = "$before" ]; check $? "old session's pings do not reach the server (echo requests: $before -> $after)"
-[ "$(dropped_regs)" -ge $((drops + regs)) ]; check $? "the server rejected all $regs old REGISTERs"
+[ "$(dropped_regs)" -ge $((drops + regs)) ]; check $? "the server rejected all $regs old handshakes"
 still_up
 
 if [ "$FAILS" != 0 ]; then
@@ -186,4 +189,4 @@ if [ "$FAILS" != 0 ]; then
     echo "FAIL: $FAILS check(s) failed"
     exit 2
 fi
-echo "PASS: replayed REGISTER and DATA packets are rejected"
+echo "PASS: replayed handshake and DATA packets are rejected"

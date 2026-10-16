@@ -45,7 +45,7 @@ else
   LDFLAGS  += -Wl,-dead_strip
 endif
 
-SRCS = main.c camex.c monocypher.c util.c log.c crypto.c noise.c keys.c tun.c packet.c net.c proto.c config.c client.c server.c
+SRCS = main.c camex.c monocypher.c util.c log.c crypto.c noise.c keys.c session.c tun.c packet.c net.c proto.c config.c client.c server.c
 SRCS += wintun.c
 OBJS = $(addprefix $(objdir)/, $(SRCS:.c=.o))
 
@@ -73,7 +73,10 @@ $(BUILD_DIR)/$(TARGET): $(OBJS)
 
 $(objdir)/%.o: %.c
 	mkdir -p $(objdir)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
+
+# Header dependencies: an edited header rebuilds every object using it
+-include $(OBJS:.o=.d)
 
 # Kernel module (Linux only)
 kmod:

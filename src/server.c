@@ -2,13 +2,17 @@
  *
  * Copyright (c) OpenIPC  https://openipc.org  MIT License
  *
- * server.c — server-side client tracking, packet forwarding, keystore lookup
+ * server.c — server side of protocol v2: client table, handshakes,
+ *            sessions, packet forwarding
  *
  */
 
 #include "server.h"
 #include "client.h"
 #include "crypto.h"
+#include "monocypher.h"
+#include "noise.h"
+#include "session.h"
 #include "log.h"
 #include "util.h"
 #include "proto.h"
@@ -120,155 +124,6 @@ server_client_t *server_find_by_addr(const struct sockaddr_in *addr)
     return NULL;
 }
 
-/* Sessions that ended (#7): the client's nonce prefix and key, and the
- * highest sequence number seen with them. A REGISTER of such a session is
- * accepted only with a newer sequence number, so a captured REGISTER cannot
- * restart an old session after its entry was replaced or expired. Bounded:
- * older sessions are forgotten (per-session keys in #17 close this fully). */
-#define SERVER_ENDED_SESSIONS 256U
-
-typedef struct {
-    uint8_t nonce_prefix[4];
-    uint8_t key[32];
-    uint8_t used;
-    uint64_t seq_max;
-} server_ended_session_t;
-
-static server_ended_session_t server_ended[SERVER_ENDED_SESSIONS];
-static size_t server_ended_next = 0U;
-
-/* A session is identified by the client's nonce prefix together with the
- * key it authenticates with: another client cannot claim it by reusing
- * the prefix under its own key. */
-static int server_session_is(const uint8_t prefix_a[4], const uint8_t *key_a,
-                             const uint8_t prefix_b[4], const uint8_t *key_b)
-{
-    return memcmp(prefix_a, prefix_b, 4) == 0 &&
-           memcmp(key_a, key_b, 32) == 0;
-}
-
-static server_ended_session_t *server_find_ended(const uint8_t prefix[4],
-                                                 const uint8_t *key)
-{
-    size_t i;
-
-    for (i = 0U; i < SERVER_ENDED_SESSIONS; ++i) {
-        if (server_ended[i].used &&
-            server_session_is(server_ended[i].nonce_prefix,
-                              server_ended[i].key, prefix, key)) {
-            return &server_ended[i];
-        }
-    }
-    return NULL;
-}
-
-void server_forget_session(server_client_t *entry)
-{
-    server_ended_session_t *slot;
-    size_t i;
-
-    if (entry == NULL || !entry->has_recv_prefix) {
-        return;
-    }
-    slot = server_find_ended(entry->recv_nonce_prefix, entry->psk_key);
-    for (i = 0U; slot == NULL && i < SERVER_ENDED_SESSIONS; ++i) {
-        if (!server_ended[i].used) {
-            slot = &server_ended[i];
-        }
-    }
-    if (slot == NULL) {
-        /* Full: replace in round-robin order, i.e. the oldest record */
-        slot = &server_ended[server_ended_next];
-        server_ended_next = (server_ended_next + 1U) % SERVER_ENDED_SESSIONS;
-    }
-    if (!slot->used) {
-        memcpy(slot->nonce_prefix, entry->recv_nonce_prefix, 4);
-        memcpy(slot->key, entry->psk_key, 32);
-        slot->used = 1U;
-        slot->seq_max = 0U;
-    }
-    if (entry->recv_seq_max > slot->seq_max) {
-        slot->seq_max = entry->recv_seq_max;
-    }
-    entry->has_recv_prefix = 0U;
-}
-
-/* Result of the replay check of an encrypted REGISTER */
-typedef struct {
-    server_client_t *live;    /* live session it continues, or NULL */
-    int resume;               /* continue above resume_seq_max */
-    uint64_t resume_seq_max;
-} server_register_state_t;
-
-/* Replay check for an encrypted REGISTER (#7), done before anything else
- * acts on it (including the rate limit, so a dropped REGISTER is still
- * marked as seen). Returns 0 to accept, -1 for a replay. */
-static int server_register_replay_check(const server_register_seq_t *rseq,
-                                        server_register_state_t *state)
-{
-    server_ended_session_t *ended;
-    size_t i;
-
-    memset(state, 0, sizeof(*state));
-    if (rseq == NULL || rseq->key == NULL) {
-        return 0;  /* plaintext: nothing to check */
-    }
-    for (i = 0U; i < CAMEX_MAX_CLIENTS; ++i) {
-        server_client_t *c = &server_clients[i];
-
-        if (c->active && c->has_recv_prefix &&
-            server_session_is(c->recv_nonce_prefix, c->psk_key,
-                              rseq->nonce_prefix, rseq->key)) {
-            if (replay_check(&c->recv_seq_max, &c->recv_window,
-                             rseq->seq) != 0) {
-                return -1;
-            }
-            /* If it ends up in another entry (a new TCP connection), that
-             * one continues above what this session has seen. */
-            state->live = c;
-            state->resume = 1;
-            state->resume_seq_max = c->recv_seq_max;
-            return 0;
-        }
-    }
-    ended = server_find_ended(rseq->nonce_prefix, rseq->key);
-    if (ended != NULL) {
-        if (rseq->seq <= ended->seq_max) {
-            return -1;
-        }
-        state->resume = 1;
-        state->resume_seq_max = ended->seq_max;
-    }
-    return 0;
-}
-
-/* Start the replay state of a session registered with rseq in entry.
- * Uses the values captured by the check: the ended-session record may
- * have been replaced since (slot eviction writes to the same table). */
-static void server_begin_session(server_client_t *entry,
-                                 const server_register_seq_t *rseq,
-                                 const server_register_state_t *state)
-{
-    server_ended_session_t *ended;
-
-    server_forget_session(entry);
-    server_reset_replay(entry);
-    if (rseq == NULL || rseq->key == NULL) {
-        return;
-    }
-    memcpy(entry->recv_nonce_prefix, rseq->nonce_prefix, 4);
-    entry->has_recv_prefix = 1U;
-    if (state->resume) {
-        entry->recv_seq_max = state->resume_seq_max;
-        entry->recv_window = ~(uint64_t)0;
-    }
-    ended = server_find_ended(rseq->nonce_prefix, rseq->key);
-    if (ended != NULL) {
-        ended->used = 0U;  /* live again: forgotten again when it ends */
-    }
-    (void)replay_check(&entry->recv_seq_max, &entry->recv_window, rseq->seq);
-}
-
 server_client_t *server_alloc_client(void)
 {
     size_t i;
@@ -280,12 +135,6 @@ server_client_t *server_alloc_client(void)
         if (!server_clients[i].active) {
             memset(&server_clients[i], 0, sizeof(server_clients[i]));
             server_clients[i].tcp_fd = -1;
-            if (get_random_bytes(
-                    server_clients[i].send_nonce_prefix,
-                    sizeof(server_clients[i].send_nonce_prefix)) != 0) {
-                log_message(LOG_WARNING,
-                            "getrandom failed: using weak nonce prefix");
-            }
             server_clients[i].active = 1U;
             return &server_clients[i];
         }
@@ -297,48 +146,22 @@ server_client_t *server_alloc_client(void)
         }
     }
 
-    /* Close old TCP fd before evicting, then memset */
-    int old_tcp_fd = server_clients[oldest].tcp_fd;
-    server_forget_session(&server_clients[oldest]);
-    memset(&server_clients[oldest], 0, sizeof(server_clients[oldest]));
-    server_clients[oldest].tcp_fd = -1;
-    if (old_tcp_fd >= 0) {
-        net_tcp_close(old_tcp_fd);
-    }
-    if (get_random_bytes(
-            server_clients[oldest].send_nonce_prefix,
-            sizeof(server_clients[oldest].send_nonce_prefix)) != 0) {
-        log_message(LOG_WARNING,
-                    "getrandom failed: using weak nonce prefix");
-    }
+    /* Full: evict the client that was quiet longest */
+    server_drop_entry(&server_clients[oldest]);
     server_clients[oldest].active = 1U;
     return &server_clients[oldest];
 }
 
-server_client_t *server_upsert_client(uint32_t ip_be,
-                                      const struct sockaddr_in *addr)
+void server_drop_entry(server_client_t *entry)
 {
-    server_client_t *entry = NULL;
-
-    if (addr != NULL) {
-        entry = server_find_by_addr(addr);
-    }
     if (entry == NULL) {
-        entry = server_find_by_ip(ip_be);
+        return;
     }
-    if (entry == NULL) {
-        entry = server_alloc_client();
+    if (entry->tcp_fd >= 0) {
+        net_tcp_close(entry->tcp_fd);
     }
-    if (entry == NULL) {
-        return NULL;
-    }
-
-    entry->ip_be = ip_be;
-    if (addr != NULL) {
-        entry->addr = *addr;
-    }
-    entry->last_seen = g_now;
-    return entry;
+    crypto_wipe(entry, sizeof(*entry));
+    entry->tcp_fd = -1;
 }
 
 void server_expire_clients(void)
@@ -353,57 +176,43 @@ void server_expire_clients(void)
     last_expire_check = now;
 
     for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
-        int preauth = server_clients[i].tcp_fd >= 0 &&
-                      !server_clients[i].registered;
+        server_client_t *c = &server_clients[i];
+        int preauth = c->tcp_fd >= 0 && !c->registered;
 
-        /* Pre-auth: counted from the accept, so frames that are accepted
-         * without a REGISTER (plaintext keepalive or data) cannot keep an
-         * unregistered connection open. */
-        if (server_clients[i].active &&
-            (preauth ? difftime(now, server_clients[i].connected_at) >
-                           (double)CAMEX_TCP_PREAUTH_TIMEOUT
-                     : difftime(now, server_clients[i].last_seen) >
-                           (double)CAMEX_CLIENT_TIMEOUT)) {
+        if (!c->active) {
+            continue;
+        }
+        if (c->prev.valid && now > c->prev_until) {
+            session_wipe(&c->prev);
+        }
+        /* A handshake the client never confirmed */
+        if (c->next.valid &&
+            difftime(now, c->next.created) > (double)V2_PREV_SESSION_GRACE) {
+            session_wipe(&c->next);
+        }
+        /* Pre-auth: counted from the accept, so frames that arrive without
+         * a handshake cannot keep an unregistered connection open. */
+        if (preauth ? difftime(now, c->connected_at) >
+                          (double)CAMEX_TCP_PREAUTH_TIMEOUT
+                    : difftime(now, c->last_seen) >
+                          (double)CAMEX_CLIENT_TIMEOUT) {
             char ipbuf[INET_ADDRSTRLEN];
             struct in_addr addr;
 
-            addr.s_addr = server_clients[i].ip_be;
+            addr.s_addr = c->ip_be;
             inet_ntop(AF_INET, &addr, ipbuf, sizeof(ipbuf));
             if (preauth) {
                 char peer[64];
 
-                net_sockaddr_to_string(&server_clients[i].addr, peer,
-                                       sizeof(peer));
+                net_sockaddr_to_string(&c->addr, peer, sizeof(peer));
                 log_peer(LOG_INFO,
-                         "Closed TCP connection from %s: no REGISTER "
+                         "Closed TCP connection from %s: no handshake "
                          "within %ds", peer, CAMEX_TCP_PREAUTH_TIMEOUT);
             } else {
                 log_message(LOG_INFO, "Expired client %s", ipbuf);
             }
-            if (server_clients[i].tcp_fd >= 0) {
-                net_tcp_close(server_clients[i].tcp_fd);
-                server_clients[i].tcp_fd = -1;
-            }
-            server_forget_session(&server_clients[i]);
-            memset(&server_clients[i], 0, sizeof(server_clients[i]));
+            server_drop_entry(c);
         }
-    }
-}
-
-void server_reset_replay(server_client_t *entry)
-{
-    if (entry == NULL) {
-        return;
-    }
-
-    entry->recv_seq_max = 0;
-    entry->recv_window = 0;
-
-    /* Rotate nonce_prefix on reconnection to prevent cross-session replay. */
-    if (get_random_bytes(entry->send_nonce_prefix,
-                         sizeof(entry->send_nonce_prefix)) != 0) {
-        log_message(LOG_WARNING,
-                    "getrandom failed: using weak nonce prefix for reconnect");
     }
 }
 
@@ -458,27 +267,19 @@ void server_revalidate_unknown_clients(void)
         log_message(LOG_NOTICE,
                     "Ended session of client %s: unknown client ID "
                     "(allow_unknown_clients = no)", c->client_id);
-        if (c->tcp_fd >= 0) {
-            net_tcp_close(c->tcp_fd);
-        }
-        server_forget_session(c);
-        memset(c, 0, sizeof(*c));
-        c->tcp_fd = -1;
+        server_drop_entry(c);
     }
 }
 
-int server_send_config_response(const struct sockaddr_in *from,
-                                server_client_t *entry,
-                                const char *client_id)
+/* CONFIG for an auto client (the handshake response payload); takes an
+ * auto-pool address when the profile has none (#15), preferring hint_ip
+ * (the client's previous address) when it is free. */
+static int server_build_config(server_client_t *entry, const char *client_id,
+                               const char *hint_ip,
+                               char *message, size_t message_size)
 {
-    char message[CAMEX_CONTROL_MAX];
-    uint8_t packet[CAMEX_HDR_LEN + 1 + CAMEX_CONTROL_MAX + 16U];
-    size_t packet_len = 0U;
     camex_profile_t profile;
-
-    if (from == NULL) {
-        return -1;
-    }
+    uint32_t old_ip_be = entry != NULL ? entry->ip_be : 0U;
 
     if (config_db_lookup_profile(client_id, &profile) != 0) {
         log_message(LOG_ERR, "Missing config for client %s",
@@ -491,7 +292,22 @@ int server_send_config_response(const struct sockaddr_in *from,
         if (entry != NULL && client_id != NULL && client_id[0] != '\0') {
             uint8_t octet;
 
-            /* Reuse existing auto-IP if client already has one */
+            /* Reuse existing auto-IP if client already has one, else the
+             * address the client asks for (its previous one) when free */
+            if (entry->ip_be == 0U && hint_ip != NULL &&
+                hint_ip[0] != '\0') {
+                struct in_addr h;
+                server_client_t *user;
+
+                if (inet_pton(AF_INET, hint_ip, &h) == 1 &&
+                    server_find_auto_ip_octet(h.s_addr, &octet) == 0 &&
+                    octet >= AUTO_POOL_FIRST && octet <= AUTO_POOL_LAST &&
+                    profile_owner_of_ip(h.s_addr) == NULL &&
+                    ((user = server_find_by_ip(h.s_addr)) == NULL ||
+                     user == entry)) {
+                    entry->ip_be = h.s_addr;
+                }
+            }
             if (entry->ip_be != 0U &&
                 server_find_auto_ip_octet(entry->ip_be, &octet) == 0 &&
                 octet >= AUTO_POOL_FIRST && octet <= AUTO_POOL_LAST &&
@@ -507,10 +323,6 @@ int server_send_config_response(const struct sockaddr_in *from,
                      AUTO_POOL_BASE ".%u/24", (unsigned)octet);
             snprintf(profile.gateway_ip, sizeof(profile.gateway_ip),
                      "%s", AUTO_POOL_GATEWAY);
-            log_message(LOG_INFO,
-                        "Auto-assigned %s to client %s (no config file)",
-                        profile.local_cidr, client_id);
-
             /* Store assigned IP in client entry for packet forwarding */
             {
                 struct in_addr a;
@@ -521,6 +333,12 @@ int server_send_config_response(const struct sockaddr_in *from,
                     entry->ip_be = a.s_addr;
                 }
             }
+            /* Rekeys repeat the CONFIG: log new assignments only */
+            if (entry->ip_be != old_ip_be) {
+                log_message(LOG_INFO,
+                            "Auto-assigned %s to client %s (no config file)",
+                            profile.local_cidr, client_id);
+            }
         } else {
             log_message(LOG_ERR, "Incomplete config for client %s",
                         client_id != NULL ? client_id : "(null)");
@@ -528,91 +346,7 @@ int server_send_config_response(const struct sockaddr_in *from,
         }
     }
 
-    if (proto_build_config(client_id, &profile,
-                           message, sizeof(message)) != 0) {
-        return -1;
-    }
-
-    if (current_config.encrypt) {
-        if (entry == NULL) {
-            log_message(LOG_ERR, "No client entry for config response");
-            return -1;
-        }
-        {
-            uint64_t seq = entry->send_seq;
-            if (crypto_encrypt_packet(CAMEX_PACKET_CONFIG, seq,
-                    entry->send_nonce_prefix,
-                    is_zero_key(entry->psk_key) ? NULL : entry->psk_key,
-                    (const uint8_t *)message, strlen(message),
-                    packet, sizeof(packet), &packet_len) != 0) {
-                return -1;
-            }
-            entry->send_seq = seq + 1U;
-        }
-        if (entry->tcp_fd >= 0) {
-            return net_tcp_send_frame(entry->tcp_fd, packet, packet_len);
-        }
-        return net_send_payload(net_fd, &entry->addr, packet, packet_len);
-    }
-
-    if (entry != NULL && entry->tcp_fd >= 0) {
-        return net_tcp_send_frame(entry->tcp_fd,
-                                  (const uint8_t *)message, strlen(message));
-    }
-    if (current_config.transport == CAMEX_TRANSPORT_TCP) {
-        log_message(LOG_WARNING,
-                    "Cannot send config to %s: no TCP fd (check server_find_by_addr)",
-                    client_id != NULL ? client_id : "(null)");
-        return -1;
-    }
-    return net_send_text(net_fd, from, message);
-}
-
-/* Answer a client KEEPALIVE so the client can tell a live server from a
- * dead one (#10). */
-static void server_send_keepalive(server_client_t *entry)
-{
-    uint8_t packet[CAMEX_HDR_LEN + 1U + 16U];
-    size_t packet_len = 0U;
-    int rc;
-
-    if (entry == NULL) {
-        return;
-    }
-
-    if (current_config.encrypt) {
-        uint64_t seq = entry->send_seq;
-
-        if (crypto_encrypt_packet(CAMEX_PACKET_KEEPALIVE, seq,
-                entry->send_nonce_prefix,
-                is_zero_key(entry->psk_key) ? NULL : entry->psk_key,
-                NULL, 0, packet, sizeof(packet), &packet_len) != 0) {
-            return;
-        }
-        entry->send_seq = seq + 1U;
-    } else {
-        memcpy(packet, CAMEX_MAGIC, 4);
-        packet[4] = CAMEX_PACKET_KEEPALIVE;
-        packet_len = 5U;
-    }
-
-    if (entry->tcp_fd >= 0) {
-        rc = net_tcp_send_frame(entry->tcp_fd, packet, packet_len);
-    } else {
-        rc = net_send_payload(net_fd, &entry->addr, packet, packet_len);
-    }
-    /* rc > 0 on TCP: an earlier frame to this client is still queued and
-     * the reply is dropped.  That is fine for liveness: the queued frame
-     * reaches the client as soon as the socket drains, and the client
-     * counts any authenticated frame as server activity, not only
-     * keepalive replies. */
-    if (rc < 0) {
-        log_message(LOG_DEBUG, "Failed to answer keepalive from %s",
-                    entry->client_id);
-    } else if (rc > 0) {
-        log_message(LOG_DEBUG, "Keepalive reply to %s dropped: "
-                    "send queue busy", entry->client_id);
-    }
+    return proto_build_config(client_id, &profile, message, message_size);
 }
 
 /*
@@ -734,9 +468,6 @@ void server_revalidate_keys(void)
 {
     size_t i;
 
-    if (!current_config.encrypt) {
-        return;
-    }
     /* After a config reload (SIGHUP) every live session must still be
      * allowed with the key it registered with: a removed or changed key,
      * or a key that now belongs to another client, ends it (#16 L3). */
@@ -745,7 +476,7 @@ void server_revalidate_keys(void)
         const char *owner;
         int allowed;
 
-        if (!c->active || is_zero_key(c->psk_key)) {
+        if (!c->active || !c->registered) {
             continue;
         }
         owner = keystore_owner(c->psk_key);
@@ -765,17 +496,12 @@ void server_revalidate_keys(void)
                     "Ended session of client %s: its key is no longer "
                     "allowed after the config reload",
                     c->client_id[0] != '\0' ? c->client_id : "(manual)");
-        if (c->tcp_fd >= 0) {
-            net_tcp_close(c->tcp_fd);
-        }
-        server_forget_session(c);
-        memset(c, 0, sizeof(*c));
-        c->tcp_fd = -1;
+        server_drop_entry(c);
     }
 }
 
 /*
- * May a REGISTER authenticated with key claim client_id / local_ip?
+ * May a handshake authenticated with key claim client_id / local_ip?
  * For a manual REGISTER without CLIENT_ID the owner of a per-client key
  * becomes the client ID. Returns 0 if allowed, -1 if rejected.
  */
@@ -790,26 +516,22 @@ static int server_register_allowed(const uint8_t *key, char *client_id,
 
     net_sockaddr_to_string(from, peer, sizeof(peer));
 
-    if (current_config.encrypt) {
-        if (client_id[0] == '\0' && !global_key) {
-            snprintf(client_id, client_id_size, "%s", owner);
-        }
-        /* The named client's own key always counts as its key, even when
-         * the same bytes are also the global key or another client's key
-         * (keystore_owner() only reports the first match). */
-        if (client_id[0] != '\0' &&
-            !keystore_key_owned_by(key, client_id) &&
-            (!global_key || keystore_has_owner(client_id))) {
-            log_peer(LOG_WARNING,
-                     "Rejected REGISTER from %s: key does not belong "
-                     "to client %s", peer, client_id);
-            return -1;
-        }
+    if (client_id[0] == '\0' && !global_key) {
+        snprintf(client_id, client_id_size, "%s", owner);
+    }
+    /* The named client's own key always counts as its key, even when the
+     * same bytes are also the global key or another client's key
+     * (keystore_owner() only reports the first match). */
+    if (client_id[0] != '\0' &&
+        !keystore_key_owned_by(key, client_id) &&
+        (!global_key || keystore_has_owner(client_id))) {
+        log_peer(LOG_WARNING,
+                 "Rejected handshake from %s: key does not belong "
+                 "to client %s", peer, client_id);
+        return -1;
     }
 
-    /* Plaintext mode has no keys and no identities to protect: manual
-     * registration there stays as it was. */
-    if (current_config.encrypt && !auto_request) {
+    if (!auto_request) {
         struct in_addr claimed;
         uint32_t want;
         const char *ip_owner;
@@ -820,7 +542,7 @@ static int server_register_allowed(const uint8_t *key, char *client_id,
         if (client_id[0] != '\0' && profile_ip(client_id, &want) == 0 &&
             want != claimed.s_addr) {
             log_peer(LOG_WARNING,
-                     "Rejected REGISTER from %s: client %s claims %s, "
+                     "Rejected handshake from %s: client %s claims %s, "
                      "configured address differs", peer, client_id,
                      local_ip);
             return -1;
@@ -830,7 +552,7 @@ static int server_register_allowed(const uint8_t *key, char *client_id,
             strcasecmp(ip_owner, client_id) != 0 &&
             keystore_has_owner(ip_owner)) {
             log_peer(LOG_WARNING,
-                     "Rejected REGISTER from %s: address %s belongs "
+                     "Rejected handshake from %s: address %s belongs "
                      "to client %s", peer, local_ip, ip_owner);
             return -1;
         }
@@ -839,284 +561,530 @@ static int server_register_allowed(const uint8_t *key, char *client_id,
     return 0;
 }
 
-static void server_log_register_replay(const struct sockaddr_in *from,
-                                       const char *who)
+/* At most SERVER_HANDSHAKES_PER_SEC INIT messages per second */
+static int server_handshake_budget(void)
 {
-    char peer[64];
+    static time_t window = 0;
+    static unsigned int count = 0U;
 
-    net_sockaddr_to_string(from, peer, sizeof(peer));
-    log_peer(LOG_WARNING,
-             "Dropped REGISTER from %s (%s): replayed or out-of-date "
-             "sequence number", peer, who);
+    if (window != g_now) {
+        window = g_now;
+        count = 0U;
+    }
+    if (count >= SERVER_HANDSHAKES_PER_SEC) {
+        return -1;
+    }
+    count++;
+    return 0;
 }
 
-int server_handle_plain_register(const uint8_t *buffer, size_t len,
-                                 const struct sockaddr_in *from,
-                                 const uint8_t *used_key, int fd,
-                                 const server_register_seq_t *rseq)
+static int server_send(server_client_t *entry, const uint8_t *pkt, size_t len)
 {
-    server_register_state_t rstate;
-    int fresh_entry = 0;
-    char message[CAMEX_CONTROL_MAX];
-    char local_ip[16];
-    char client_id[CAMEX_CLIENT_ID_LEN];
-    uint8_t auto_request = 0U;
-    server_client_t *entry;
-    struct in_addr addr;
-
-    if (buffer == NULL || from == NULL || len == 0U) {
+    if (entry->tcp_fd >= 0) {
+        return net_tcp_send_frame(entry->tcp_fd, pkt, len);
+    }
+    if (current_config.transport == CAMEX_TRANSPORT_TCP) {
         return -1;
     }
+    return net_send_payload(net_fd, &entry->addr, pkt, len);
+}
 
-    if (len >= sizeof(message)) {
-        len = sizeof(message) - 1U;
-    }
+/* A random session index no session uses, or 0 */
+static uint32_t server_new_index(void)
+{
+    int tries;
 
-    memcpy(message, buffer, len);
-    message[len] = '\0';
-    local_ip[0] = '\0';
-    client_id[0] = '\0';
+    for (tries = 0; tries < 16; ++tries) {
+        uint32_t idx = v2_new_index();
+        size_t i;
+        int used = 0;
 
-    if (proto_parse_register(message, client_id, sizeof(client_id),
-                             local_ip, sizeof(local_ip),
-                             &auto_request) != 0) {
-        return -1;
-    }
+        if (idx == 0U) {
+            return 0U;
+        }
+        for (i = 0U; i < CAMEX_MAX_CLIENTS && !used; ++i) {
+            const server_client_t *c = &server_clients[i];
 
-    if (server_register_allowed(used_key, client_id, sizeof(client_id),
-                                local_ip, auto_request, from) != 0) {
-        return -1;
-    }
-
-    if (server_register_replay_check(rseq, &rstate) != 0) {
-        server_log_register_replay(from,
-                                   auto_request ? client_id : local_ip);
-        return -1;
-    }
-
-    /* Rate-limit: reject repeated REGISTER from same addr within 5 seconds */
-    {
-        server_client_t *existing = server_find_by_addr(from);
-        if (existing != NULL && existing->last_register_time != 0 &&
-            difftime(g_now, existing->last_register_time) < 5.0) {
-            return 0;  /* rate-limited: silently ignore */
+            used = c->active &&
+                   ((c->cur.valid && c->cur.local_index == idx) ||
+                    (c->next.valid && c->next.local_index == idx) ||
+                    (c->prev.valid && c->prev.local_index == idx));
+        }
+        if (!used) {
+            return idx;
         }
     }
+    return 0U;
+}
+
+/* A client that came back on a new TCP connection: the entry takes the new
+ * fd, the slot that connection got at accept() is freed, the old
+ * connection is closed */
+static void server_adopt_tcp(server_client_t *entry, int fd)
+{
+    size_t j;
+
+    if (fd < 0 || entry->tcp_fd == fd) {
+        return;
+    }
+    for (j = 0; j < CAMEX_MAX_CLIENTS; ++j) {
+        if (server_clients[j].active && server_clients[j].tcp_fd == fd &&
+            &server_clients[j] != entry) {
+            crypto_wipe(&server_clients[j], sizeof(server_clients[j]));
+            server_clients[j].tcp_fd = -1;
+        }
+    }
+    if (entry->tcp_fd >= 0) {
+        net_tcp_close(entry->tcp_fd);
+    }
+    entry->tcp_fd = fd;
+    memset(&entry->recv_state, 0, sizeof(entry->recv_state));
+}
+
+/* The client entry a handshake belongs to (created or reused), or NULL if
+ * it must be rejected. *fresh is set when a new slot was taken. */
+static server_client_t *server_entry_for(const char *client_id,
+                                         const char *local_ip,
+                                         uint8_t auto_request,
+                                         const struct sockaddr_in *from,
+                                         int fd, int *fresh)
+{
+    server_client_t *entry;
+    char peer[64];
+
+    *fresh = 0;
+    net_sockaddr_to_string(from, peer, sizeof(peer));
 
     if (auto_request) {
         /* allow_unknown_clients = no: only IDs with a [client ID] section
          * get a configuration (#15). */
         if (server_db.globals.deny_unknown_clients &&
             config_db_find_client(client_id) == NULL) {
-            char peer[64];
-
-            net_sockaddr_to_string(from, peer, sizeof(peer));
             log_peer(LOG_WARNING,
-                     "Rejected REGISTER from %s: unknown client ID %s "
+                     "Rejected handshake from %s: unknown client ID %s "
                      "(allow_unknown_clients = no)", peer, client_id);
-            return -1;
+            return NULL;
         }
         entry = server_find_by_client_id(client_id);
         if (entry != NULL) {
             if (!net_sockaddr_equal(&entry->addr, from)) {
-                char old_peer[64], new_peer[64];
-                net_sockaddr_to_string(&entry->addr, old_peer, sizeof(old_peer));
-                net_sockaddr_to_string(from, new_peer, sizeof(new_peer));
-                log_message(LOG_INFO, "Client %s reconnected: %s -> %s",
-                            client_id, old_peer, new_peer);
-            }
-            entry->addr = *from;
-            entry->last_seen = g_now;
-            /* BUGFIX: on reconnect, this branch previously left entry->tcp_fd
-             * pointing at the OLD (now-closed) connection's fd — every reply
-             * (config response, forwarded data) kept going to a stale/wrong
-             * descriptor, causing silent corruption and periodic forced
-             * disconnects. The fresh TCP connection's own slot (allocated by
-             * drain_tcp_server_accept, matched below by tcp_fd) never got this
-             * client_id, so it leaked until CAMEX_CLIENT_TIMEOUT expired it.
-             * Fix: adopt the current fd here, and reclaim the orphaned slot. */
-            if (fd >= 0 && entry->tcp_fd != fd) {
-                size_t j;
-                for (j = 0; j < CAMEX_MAX_CLIENTS; ++j) {
-                    if (server_clients[j].active &&
-                        server_clients[j].tcp_fd == fd &&
-                        &server_clients[j] != entry) {
-                        server_forget_session(&server_clients[j]);
-                        memset(&server_clients[j], 0, sizeof(server_clients[j]));
-                    }
-                }
-                /* The old connection is gone: close it (it is no longer
-                 * referenced by any slot and would leak), and drop its
-                 * partial-read state, which belongs to the old byte stream. */
-                if (entry->tcp_fd >= 0) {
-                    net_tcp_close(entry->tcp_fd);
-                }
-                entry->tcp_fd = fd;
-                memset(&entry->recv_state, 0, sizeof(entry->recv_state));
-            }
-        } else {
-            /* TCP clients already have a slot allocated by drain_tcp_server_accept.
-             * Reuse it instead of creating a second entry — otherwise tcp_fd
-             * is lost and the config response goes via UDP. */
-            server_client_t *by_addr = server_find_by_addr(from);
-            if (by_addr != NULL && by_addr->tcp_fd >= 0) {
-                entry = by_addr;
-            } else {
-                entry = server_alloc_client();
-                if (entry == NULL) {
-                    log_message(LOG_WARNING, "No free slots for client %s",
-                                client_id);
-                    return -1;
-                }
-                fresh_entry = 1;
-            }
-            entry->addr = *from;
-            entry->last_seen = g_now;
-        }
-        entry->auto_client = 1U;
-        snprintf(entry->client_id, sizeof(entry->client_id), "%s", client_id);
-        if (rstate.live != entry) {
-            server_begin_session(entry, rseq, &rstate);
-        }
-        entry->registered = 1U;
-        entry->last_register_time = g_now;
-        if (used_key != NULL) {
-            memcpy(entry->psk_key, used_key, 32);
-        }
-        /* Set ip_be from profile's local_cidr so server_find_by_ip()
-         * works even when NAT changes the client's UDP source port. */
-        {
-            camex_profile_t profile;
-            if (config_db_lookup_profile(client_id, &profile) == 0 &&
-                profile.local_cidr[0] != '\0') {
-                char ip[16], mask[16];
-                if (parse_local_cidr(profile.local_cidr, ip, sizeof(ip),
-                                     mask, sizeof(mask)) == 0) {
-                    struct in_addr a;
-                    if (inet_pton(AF_INET, ip, &a) == 1) {
-                        entry->ip_be = a.s_addr;
-                    }
-                }
-            }
-        }
-        if (server_send_config_response(from, entry, client_id) != 0) {
-            /* No configuration (e.g. the auto pool is full): a slot taken
-             * for this REGISTER must not stay behind, or failed attempts
-             * fill the table and evict live clients (#15). */
-            if (fresh_entry) {
-                server_forget_session(entry);
-                memset(entry, 0, sizeof(*entry));
-                entry->tcp_fd = -1;
-            }
-            return -1;
-        }
-        log_message(LOG_INFO, "Registered auto client %s", client_id);
-        return 0;
-    }
+                char old_peer[64];
 
-    if (inet_pton(AF_INET, local_ip, &addr) != 1) {
-        log_peer(LOG_WARNING,
-                 "Rejected invalid client IP: %s", local_ip);
-        return -1;
+                net_sockaddr_to_string(&entry->addr, old_peer,
+                                       sizeof(old_peer));
+                log_message(LOG_INFO, "Client %s reconnected: %s -> %s",
+                            client_id, old_peer, peer);
+            }
+            server_adopt_tcp(entry, fd);
+            return entry;
+        }
+        /* TCP clients already have a slot allocated at accept() */
+        entry = server_find_by_addr(from);
+        if (entry != NULL && entry->tcp_fd >= 0) {
+            return entry;
+        }
+        entry = server_alloc_client();
+        if (entry != NULL) {
+            *fresh = 1;
+        }
+        return entry;
     }
 
     {
+        struct in_addr addr;
         server_client_t *by_addr = server_find_by_addr(from);
-        server_client_t *by_ip   = server_find_by_ip(addr.s_addr);
+        server_client_t *by_ip;
 
+        if (inet_pton(AF_INET, local_ip, &addr) != 1) {
+            log_peer(LOG_WARNING, "Rejected invalid client IP: %s", local_ip);
+            return NULL;
+        }
+        by_ip = server_find_by_ip(addr.s_addr);
         /* The address may be in use by a live session whose address came
          * from [defaults] or the auto pool, which profile_owner_of_ip()
          * cannot see. Do not hand it to a different keyed client. */
-        if (current_config.encrypt && by_ip != NULL && by_ip != by_addr &&
+        if (by_ip != NULL && by_ip != by_addr &&
             strcasecmp(by_ip->client_id, client_id) != 0 &&
             keystore_has_owner(by_ip->client_id)) {
-            char peer[64];
-            net_sockaddr_to_string(from, peer, sizeof(peer));
             log_peer(LOG_WARNING,
-                     "Rejected REGISTER from %s: address %s is in use "
+                     "Rejected handshake from %s: address %s is in use "
                      "by client %s", peer, local_ip, by_ip->client_id);
-            return -1;
+            return NULL;
         }
+        if (by_ip != NULL && (by_addr == NULL || by_addr == by_ip ||
+                              (by_addr->tcp_fd >= 0 && !by_addr->registered))) {
+            /* The client's own entry, also when it came back on a new TCP
+             * connection (whose pre-auth slot by_addr is then freed) */
+            if (!net_sockaddr_equal(&by_ip->addr, from)) {
+                char old_peer[64];
 
-        if (by_addr != NULL) {
-            by_addr->ip_be = addr.s_addr;
-            by_addr->last_seen = g_now;
-            by_addr->last_register_time = g_now;
-            snprintf(by_addr->client_id, sizeof(by_addr->client_id), "%s", client_id);
-            if (rstate.live != by_addr) {
-                server_begin_session(by_addr, rseq, &rstate);
+                net_sockaddr_to_string(&by_ip->addr, old_peer,
+                                       sizeof(old_peer));
+                log_message(LOG_INFO, "Client %s reconnected: %s -> %s",
+                            local_ip, old_peer, peer);
             }
-            by_addr->registered = 1U;
-            if (used_key != NULL) {
-                memcpy(by_addr->psk_key, used_key, 32);
+            server_adopt_tcp(by_ip, fd);
+            entry = by_ip;
+        } else if (by_addr != NULL && (fd >= 0 || !by_addr->cur.valid)) {
+            /* The same connection or address, without a working session:
+             * a client that changed its address. A UDP entry that has one
+             * is not taken over by a handshake for another address (a
+             * forged source plus a replayed message 1 could otherwise cut
+             * that client off): such a handshake gets a new entry. */
+            entry = by_addr;
+        } else {
+            entry = server_alloc_client();
+            if (entry == NULL) {
+                return NULL;
             }
-            return 0;
-        }
-
-        if (by_ip != NULL) {
-            char old_peer[64], new_peer[64];
-            net_sockaddr_to_string(&by_ip->addr, old_peer, sizeof(old_peer));
-            net_sockaddr_to_string(from, new_peer, sizeof(new_peer));
-            log_message(LOG_INFO, "Client %s reconnected: %s -> %s",
-                        local_ip, old_peer, new_peer);
-            by_ip->addr = *from;
-            by_ip->last_seen = g_now;
-            by_ip->last_register_time = g_now;
-            snprintf(by_ip->client_id, sizeof(by_ip->client_id), "%s", client_id);
-            if (rstate.live != by_ip) {
-                server_begin_session(by_ip, rseq, &rstate);
-            }
-            by_ip->registered = 1U;
-            if (used_key != NULL) {
-                memcpy(by_ip->psk_key, used_key, 32);
-            }
-            return 0;
-        }
-
-        entry = server_alloc_client();
-        if (entry == NULL) {
-            log_message(LOG_WARNING, "No free slots for client %s", local_ip);
-            return -1;
+            *fresh = 1;
         }
         entry->ip_be = addr.s_addr;
-        entry->addr = *from;
-        entry->last_seen = g_now;
-        entry->last_register_time = g_now;
-        snprintf(entry->client_id, sizeof(entry->client_id), "%s", client_id);
-        server_begin_session(entry, rseq, &rstate);
-        entry->registered = 1U;
-        if (used_key != NULL) {
-            memcpy(entry->psk_key, used_key, 32);
-        }
-        log_message(LOG_INFO, "Registered client %s", local_ip);
-        return 0;
+        return entry;
     }
 }
 
-const uint8_t *server_try_all_keys(const uint8_t *buffer, size_t len,
-                                   uint8_t *type,
-                                   uint8_t *plain, size_t plain_size,
-                                   size_t *plain_len, uint64_t *seq)
+/* INIT: Noise message 1 with the client's REGISTER as payload */
+static int server_handle_init(const uint8_t *buffer, size_t len,
+                              const struct sockaddr_in *from, int fd)
 {
+    const camex_crypto_t *ctx = crypto_get_ctx();
+    noise_hs_t base;
+    noise_hs_t hs;
+    uint8_t es[NOISE_DHLEN];
+    uint8_t payload[V2_TIMESTAMP_LEN + CAMEX_CONTROL_MAX];
+    size_t payload_len = 0U;
+    const uint8_t *used_key = NULL;
+    char message[CAMEX_CONTROL_MAX];
+    char reply[CAMEX_CONTROL_MAX];
+    char client_id[CAMEX_CLIENT_ID_LEN];
+    char local_ip[16];
+    uint8_t auto_request = 0U;
+    uint8_t e_seed[NOISE_DHLEN];
+    uint8_t resp[V2_RESP_HDR + NOISE_MSG2_OVERHEAD + CAMEX_CONTROL_MAX];
+    uint8_t c1[NOISE_KEYLEN];
+    uint8_t c2[NOISE_KEYLEN];
+    uint32_t client_index = v2_read_u32(buffer + 5);
+    uint32_t server_index;
+    server_client_t *entry;
+    char peer[64];
+    size_t resp_len;
     size_t i;
+    int fresh = 0;
+    int first;
 
-    for (i = 0U; i < server_keystore_count; ++i) {
-        if (!server_keystore[i].locked &&
-            crypto_decrypt_packet(buffer, len, type, plain, plain_size,
-                                  plain_len, seq,
-                                  server_keystore[i].psk_key) == 0) {
-            return server_keystore[i].psk_key;
+    net_sockaddr_to_string(from, peer, sizeof(peer));
+    if (!ctx->has_server_key) {
+        return -1;
+    }
+    /* mac1 first: packets from anyone who does not know the server's
+     * public key cost one hash, and do not count against the budget */
+    {
+        uint8_t mac[V2_MAC_LEN];
+
+        len -= V2_MAC_LEN;
+        v2_mac1(ctx->server_pub, buffer, len, mac);
+        if (crypto_verify16(mac, buffer + len) != 0) {
+            log_peer(LOG_WARNING, "Dropped handshake from %s: bad mac1 "
+                     "(wrong server public key?)", peer);
+            return -1;
         }
     }
-    return NULL;
+    if (server_handshake_budget() != 0) {
+        log_peer(LOG_WARNING, "Dropped handshake from %s: more than %u "
+                 "handshakes per second", peer, SERVER_HANDSHAKES_PER_SEC);
+        return -1;
+    }
+
+    noise_init_responder(&base, (const uint8_t *)CAMEX_NOISE_PROLOGUE,
+                         sizeof(CAMEX_NOISE_PROLOGUE) - 1U,
+                         ctx->server_priv, ctx->server_pub);
+    if (noise_msg1_es(&base, buffer + V2_INIT_HDR, len - V2_INIT_HDR,
+                      es) != 0) {
+        noise_wipe(&base);
+        return -1;
+    }
+    /* Any keystore key may authenticate message 1; the payload then has
+     * to name a client that key belongs to (#5) */
+    memset(&hs, 0, sizeof(hs));
+    for (i = 0U; i < server_keystore_count; ++i) {
+        if (server_keystore[i].locked) {
+            continue;
+        }
+        hs = base;
+        if (noise_read_msg1(&hs, server_keystore[i].psk_key, es,
+                            buffer + V2_INIT_HDR, len - V2_INIT_HDR,
+                            payload, sizeof(payload) - 1U,
+                            &payload_len) == 0) {
+            used_key = server_keystore[i].psk_key;
+            break;
+        }
+        noise_wipe(&hs);
+    }
+    noise_wipe(&base);
+    crypto_wipe(es, sizeof(es));
+    if (used_key == NULL) {
+        log_peer(LOG_WARNING, "Dropped handshake from %s: no key "
+                 "authenticates it", peer);
+        return -1;
+    }
+    if (payload_len < V2_TIMESTAMP_LEN) {
+        noise_wipe(&hs);
+        return -1;
+    }
+
+    memcpy(message, payload + V2_TIMESTAMP_LEN,
+           payload_len - V2_TIMESTAMP_LEN);
+    message[payload_len - V2_TIMESTAMP_LEN] = '\0';
+    client_id[0] = '\0';
+    local_ip[0] = '\0';
+    if (proto_parse_register(message, client_id, sizeof(client_id),
+                             local_ip, sizeof(local_ip),
+                             &auto_request) != 0 ||
+        server_register_allowed(used_key, client_id, sizeof(client_id),
+                                local_ip, auto_request, from) != 0) {
+        noise_wipe(&hs);
+        return -1;
+    }
+
+    /* A captured message 1 replayed later carries an old timestamp. While
+     * the client has a live session (authenticated data recently; a
+     * replayed message 1 alone never makes it live), its timestamps must
+     * grow. Otherwise any timestamp is taken: a client whose clock went
+     * back (reboot without NTP) can still connect, and a replayed message
+     * 1 only leaves a session nobody can use. It never replaces a working
+     * one either: a new session waits in next until the client's first
+     * packet on it. */
+    {
+        server_client_t *owner = auto_request
+                                     ? server_find_by_client_id(client_id)
+                                     : NULL;
+        struct in_addr a;
+
+        if (!auto_request && inet_pton(AF_INET, local_ip, &a) == 1) {
+            owner = server_find_by_ip(a.s_addr);
+        }
+        if (owner != NULL && owner->cur.valid && owner->last_data != 0 &&
+            memcmp(owner->psk_key, used_key, 32) == 0 &&
+            difftime(g_now, owner->last_data) <=
+                (double)CAMEX_CLIENT_TIMEOUT &&
+            v2_timestamp_cmp(payload, owner->hs_ts) <= 0) {
+            log_peer(LOG_WARNING, "Dropped handshake from %s (%s): replayed "
+                     "or out-of-date timestamp", peer,
+                     client_id[0] != '\0' ? client_id : local_ip);
+            noise_wipe(&hs);
+            return -1;
+        }
+    }
+
+    entry = server_entry_for(client_id, local_ip, auto_request, from, fd,
+                             &fresh);
+    if (entry == NULL) {
+        noise_wipe(&hs);
+        return -1;
+    }
+    first = !entry->registered;
+    /* A UDP entry with a working session keeps its address until the first
+     * packet on the new one (server_handle_data), so a replayed message 1
+     * cannot redirect its traffic; over TCP the connection carries it */
+    if (!entry->cur.valid || fd >= 0) {
+        entry->addr = *from;
+    }
+    entry->last_seen = g_now;
+    entry->auto_client = auto_request;
+    snprintf(entry->client_id, sizeof(entry->client_id), "%s", client_id);
+
+    if (auto_request) {
+        /* ip_be from the profile, so forwarding finds the client */
+        camex_profile_t profile;
+
+        if (config_db_lookup_profile(client_id, &profile) == 0 &&
+            profile.local_cidr[0] != '\0') {
+            char ip[16], mask[16];
+            struct in_addr a;
+
+            if (parse_local_cidr(profile.local_cidr, ip, sizeof(ip),
+                                 mask, sizeof(mask)) == 0 &&
+                inet_pton(AF_INET, ip, &a) == 1) {
+                entry->ip_be = a.s_addr;
+            }
+        }
+        if (server_build_config(entry, client_id, local_ip, reply,
+                                sizeof(reply)) != 0) {
+            /* No configuration (e.g. the auto pool is full) */
+            noise_wipe(&hs);
+            goto fail;
+        }
+    } else {
+        snprintf(reply, sizeof(reply), "%s OK VER=%u\n", CAMEX_CTRL_WORD,
+                 (unsigned)CAMEX_PROTO_VER);
+    }
+
+    /* Message 2 */
+    if (get_random_bytes(e_seed, sizeof(e_seed)) != 0) {
+        noise_wipe(&hs);
+        goto fail;
+    }
+    server_index = server_new_index();
+    if (server_index == 0U) {
+        noise_wipe(&hs);
+        goto fail;
+    }
+    memcpy(resp, CAMEX_MAGIC, 4);
+    resp[4] = V2_TYPE_RESP;
+    v2_write_u32(resp + 5, server_index);
+    v2_write_u32(resp + 9, client_index);
+    resp_len = noise_write_msg2(&hs, e_seed, (const uint8_t *)reply,
+                                strlen(reply), resp + V2_RESP_HDR,
+                                sizeof(resp) - V2_RESP_HDR);
+    crypto_wipe(e_seed, sizeof(e_seed));
+    if (resp_len == 0U) {
+        noise_wipe(&hs);
+        goto fail;
+    }
+    noise_split(&hs, c1, c2);
+    noise_wipe(&hs);
+
+    /* With a current session (rekey, reconnect) the new one waits in next
+     * until the client's first packet on it: until then the server keeps
+     * sending on cur, so nothing in flight is lost and a lost RESP does
+     * not break the working session. A first session is used at once. */
+    if (entry->cur.valid) {
+        session_wipe(&entry->next);
+        session_init(&entry->next, server_index, client_index, c2, c1, g_now);
+    } else {
+        session_init(&entry->cur, server_index, client_index, c2, c1, g_now);
+    }
+    crypto_wipe(c1, sizeof(c1));
+    crypto_wipe(c2, sizeof(c2));
+    memcpy(entry->psk_key, used_key, 32);
+    memcpy(entry->hs_ts, payload, V2_TIMESTAMP_LEN);
+    entry->registered = 1U;
+
+    /* The reply goes where message 1 came from */
+    if (entry->tcp_fd >= 0) {
+        if (net_tcp_send_frame(entry->tcp_fd, resp,
+                               V2_RESP_HDR + resp_len) < 0) {
+            goto fail;
+        }
+    } else if (net_send_payload(net_fd, from, resp,
+                                V2_RESP_HDR + resp_len) < 0) {
+        goto fail;
+    }
+    if (first) {
+        if (auto_request) {
+            log_message(LOG_INFO, "Registered auto client %s", client_id);
+        } else {
+            log_message(LOG_INFO, "Registered client %s", local_ip);
+        }
+    }
+    return 0;
+
+fail:
+    /* A slot taken for this handshake must not stay behind (#15); entries
+     * that existed before keep their working sessions */
+    if (fresh) {
+        crypto_wipe(entry, sizeof(*entry));
+        entry->tcp_fd = -1;
+    }
+    return -1;
+}
+
+/* DATA: find the session by the receiver index, open it, forward */
+static int server_handle_data(const uint8_t *buffer, size_t len,
+                              const struct sockaddr_in *from, int fd)
+{
+    uint8_t plain[TUN_PACKET_MAX];
+    size_t plain_len = 0U;
+    uint32_t idx = v2_data_receiver(buffer);
+    uint32_t src_ip_be = 0;
+    uint32_t dst_ip_be = 0;
+    server_client_t *entry = NULL;
+    session_t *s = NULL;
+    char peer[64];
+    size_t i;
+
+    for (i = 0U; i < CAMEX_MAX_CLIENTS && s == NULL; ++i) {
+        server_client_t *c = &server_clients[i];
+
+        if (!c->active) {
+            continue;
+        }
+        if (c->cur.valid && c->cur.local_index == idx) {
+            entry = c;
+            s = &c->cur;
+        } else if (c->next.valid && c->next.local_index == idx) {
+            entry = c;
+            s = &c->next;
+        } else if (c->prev.valid && c->prev.local_index == idx &&
+                   g_now <= c->prev_until) {
+            entry = c;
+            s = &c->prev;
+        }
+    }
+    net_sockaddr_to_string(from, peer, sizeof(peer));
+    /* A TCP session belongs to its connection */
+    if (s == NULL || (fd >= 0 && entry->tcp_fd != fd) ||
+        session_open(s, buffer, len, plain, sizeof(plain), &plain_len) != 0) {
+        log_peer(LOG_WARNING, "Dropped packet from %s: unknown session or "
+                 "failed to authenticate (len=%u)", peer, (unsigned)len);
+        return -1;
+    }
+
+    /* The client's first packet on the new session: it becomes current,
+     * the old one keeps receiving for a while */
+    if (s == &entry->next) {
+        session_wipe(&entry->prev);
+        entry->prev = entry->cur;
+        entry->prev_until = g_now + V2_PREV_SESSION_GRACE;
+        entry->cur = entry->next;
+        session_wipe(&entry->next);
+        s = &entry->cur;
+    }
+
+    /* Authenticated: the client may have moved (NAT rebinding, roaming) */
+    if (fd < 0 && !net_sockaddr_equal(&entry->addr, from)) {
+        entry->addr = *from;
+    }
+    entry->last_seen = g_now;
+    entry->last_data = g_now;
+
+    if (plain_len == 0U) {
+        /* Keepalive: answer, so the client can tell a live server (#10) */
+        uint8_t ka[V2_OVERHEAD];
+        size_t ka_len = session_seal(&entry->cur, NULL, 0U, ka, sizeof(ka));
+
+        if (ka_len > 0U) {
+            (void)server_send(entry, ka, ka_len);
+        }
+        return 0;
+    }
+
+    if (ipv4_parse_endpoints(plain, plain_len, &src_ip_be, &dst_ip_be) != 0) {
+        return 0;
+    }
+    /* A client may only send from its own tunnel address (#6). */
+    if (entry->ip_be == 0U || src_ip_be != entry->ip_be) {
+        char claimed[INET_ADDRSTRLEN];
+        struct in_addr a;
+
+        a.s_addr = src_ip_be;
+        inet_ntop(AF_INET, &a, claimed, sizeof(claimed));
+        log_peer(LOG_WARNING,
+                 "Dropped packet from %s (client %s): source address "
+                 "%s is not the client's tunnel address",
+                 peer, entry->client_id, claimed);
+        return -1;
+    }
+    return server_forward_packet(plain, plain_len, src_ip_be, dst_ip_be);
 }
 
 int server_forward_packet(const uint8_t *packet, size_t len,
                           uint32_t src_ip_be, uint32_t dst_ip_be)
 {
     server_client_t *dst;
-    uint8_t encrypted[TUN_PACKET_MAX + CAMEX_HDR_LEN + 1 + 16U];
-    size_t encrypted_len = 0;
+    uint8_t out[TUN_PACKET_MAX + V2_OVERHEAD];
+    size_t out_len;
 
     (void)src_ip_be;
 
@@ -1125,180 +1093,35 @@ int server_forward_packet(const uint8_t *packet, size_t len,
         /* Not a client: the packet is for the server's own network */
         return packet_write(packet, len);
     }
-
-    dst->last_seen = (g_now != 0) ? g_now : time(NULL);
-
-    if (current_config.encrypt) {
-        uint64_t seq = dst->send_seq;
-        if (crypto_encrypt_packet(CAMEX_PACKET_DATA, seq,
-                dst->send_nonce_prefix,
-                is_zero_key(dst->psk_key) ? NULL : dst->psk_key,
-                packet, len, encrypted, sizeof(encrypted),
-                &encrypted_len) != 0) {
-            return -1;
-        }
-        dst->send_seq = seq + 1U;
-        if (dst->tcp_fd >= 0) {
-            return net_tcp_send_frame(dst->tcp_fd, encrypted, encrypted_len);
-        }
-        return net_send_payload(net_fd, &dst->addr, encrypted, encrypted_len);
+    if (!dst->cur.valid) {
+        return -1;
     }
-
-    if (dst->tcp_fd >= 0) {
-        return net_tcp_send_frame(dst->tcp_fd, packet, len);
+    out_len = session_seal(&dst->cur, packet, len, out, sizeof(out));
+    if (out_len == 0U) {
+        return -1;
     }
-    return net_send_payload(net_fd, &dst->addr, packet, len);
+    return server_send(dst, out, out_len);
 }
 
 int server_handle_packet(const uint8_t *buffer, size_t len,
                          const struct sockaddr_in *from, int fd)
 {
-    uint8_t plain[TUN_PACKET_MAX];
-    uint8_t type = 0U;
-    size_t plain_len = 0U;
-    uint64_t seq = 0;
-    uint32_t src_ip_be = 0;
-    uint32_t dst_ip_be = 0;
-    server_client_t *src;
     char peer[64];
 
     if (buffer == NULL || from == NULL || len == 0U) {
         return -1;
     }
-
-    if (current_config.encrypt) {
-        const uint8_t *used_key = NULL;
-        /* Only REGISTER may be authenticated with any keystore key: it is
-         * the message that binds a key to a client ID, and it is checked
-         * by server_register_allowed(). Every other packet must use the
-         * key of the session registered for its source address (#5). The
-         * type byte is part of the authenticated header, so a packet
-         * cannot pretend to be a REGISTER. */
-        int is_register = (len > 4U && buffer[4] == CAMEX_PACKET_REGISTER);
-
-        src = server_find_by_addr(from);
-        if (src != NULL && !is_zero_key(src->psk_key) &&
-            crypto_decrypt_packet(buffer, len, &type, plain, sizeof(plain),
-                                  &plain_len, &seq, src->psk_key) == 0) {
-            used_key = src->psk_key;
-        } else if (is_register) {
-            used_key = server_try_all_keys(buffer, len, &type, plain,
-                                           sizeof(plain), &plain_len, &seq);
-        }
-
-        if (used_key == NULL) {
-            net_sockaddr_to_string(from, peer, sizeof(peer));
-            log_peer(LOG_WARNING,
-                     "Dropped packet from %s: %s (type=%u, len=%u)", peer,
-                     is_register ? "decryption failed with all keys"
-                     : "no registered session for this key",
-                     (unsigned)(len > 4U ? buffer[4] : 0U), (unsigned)len);
-            return -1;
-        }
-
-        if (type == CAMEX_PACKET_REGISTER) {
-            server_register_seq_t rseq;
-
-            memcpy(rseq.nonce_prefix, buffer + 5, 4);
-            rseq.seq = seq;
-            rseq.key = used_key;
-            return server_handle_plain_register(plain, plain_len, from,
-                                                used_key, fd, &rseq);
-        }
-
-        /* From here on: authenticated with the session key of src */
-        if (type == CAMEX_PACKET_CONFIG) {
-            return 0;
-        }
-
-        /* Only packets of the client's current session: a packet with an
-         * older nonce prefix belongs to an ended session (#7). */
-        if (src->has_recv_prefix &&
-            memcmp(src->recv_nonce_prefix, buffer + 5, 4) != 0) {
-            net_sockaddr_to_string(from, peer, sizeof(peer));
-            log_peer(LOG_WARNING,
-                     "Dropped packet from %s: not from the client's "
-                     "current session", peer);
-            return -1;
-        }
-
-        if (replay_check(&src->recv_seq_max, &src->recv_window, seq) != 0) {
-            net_sockaddr_to_string(from, peer, sizeof(peer));
-            log_peer(LOG_WARNING,
-                     "Dropped packet from %s: replay check failed "
-                     "(seq=%" PRIu64 ", max=%" PRIu64 ")",
-                     peer, seq, src->recv_seq_max);
-            return -1;
-        }
-
-        if (type == CAMEX_PACKET_KEEPALIVE) {
-            src->last_seen = g_now;
-            server_send_keepalive(src);
-            return 0;
-        }
-
-        if (type != CAMEX_PACKET_DATA) {
-            net_sockaddr_to_string(from, peer, sizeof(peer));
-            log_peer(LOG_WARNING,
-                     "Dropped packet from %s: unknown type %u",
-                     peer, (unsigned)type);
-            return -1;
-        }
-
-        if (ipv4_parse_endpoints(plain, plain_len,
-                                 &src_ip_be, &dst_ip_be) != 0) {
-            return 0;
-        }
-
-        /* A client may only send from its own tunnel address (#6). */
-        if (src->ip_be == 0U || src_ip_be != src->ip_be) {
-            char claimed[INET_ADDRSTRLEN];
-            struct in_addr a;
-
-            a.s_addr = src_ip_be;
-            inet_ntop(AF_INET, &a, claimed, sizeof(claimed));
-            net_sockaddr_to_string(from, peer, sizeof(peer));
-            log_peer(LOG_WARNING,
-                     "Dropped packet from %s (client %s): source address "
-                     "%s is not the client's tunnel address",
-                     peer, src->client_id, claimed);
-            return -1;
-        }
-
-        src->last_seen = g_now;
-        return server_forward_packet(plain, plain_len, src_ip_be, dst_ip_be);
-    }
-
-    /* Plaintext mode: nothing is authenticated */
-    if (len >= 4U && memcmp(buffer, CAMEX_MAGIC, 4) == 0) {
-        if (len >= 5U && buffer[4] == CAMEX_PACKET_KEEPALIVE) {
-            /* Plaintext keepalive: update client last_seen and answer */
-            server_client_t *ka = server_find_by_addr(from);
-            if (ka != NULL) {
-                ka->last_seen = g_now;
-                server_send_keepalive(ka);
-            }
-            return 0;
-        }
-        if (server_handle_plain_register(buffer, len, from, NULL, fd, NULL) != 0) {
-            net_sockaddr_to_string(from, peer, sizeof(peer));
-            log_message(LOG_WARNING,
-                        "Failed to handle plaintext register from %s",
-                        peer);
-        }
-        return 0;
-    }
-
-    if (ipv4_parse_endpoints(buffer, len, &src_ip_be, &dst_ip_be) != 0) {
-        return 0;
-    }
-
-    src = server_upsert_client(src_ip_be, from);
-    if (src == NULL) {
+    switch (v2_packet_type(buffer, len)) {
+    case V2_TYPE_INIT:
+        return server_handle_init(buffer, len, from, fd);
+    case V2_TYPE_DATA:
+        return server_handle_data(buffer, len, from, fd);
+    default:
+        net_sockaddr_to_string(from, peer, sizeof(peer));
+        log_peer(LOG_WARNING, "Dropped packet from %s: not a v2 client "
+                 "packet (len=%u)", peer, (unsigned)len);
         return -1;
     }
-
-    return server_forward_packet(buffer, len, src_ip_be, dst_ip_be);
 }
 
 int server_socket_create(const char *bind_ip, int port,

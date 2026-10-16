@@ -2,7 +2,7 @@
  *
  * Copyright (c) OpenIPC  https://openipc.org  MIT License
  *
- * crypto.h — encryption / decryption, key derivation, replay protection
+ * crypto.h — key context: global PSK, server key pair (protocol v2)
  *
  */
 
@@ -17,17 +17,7 @@
 /* crypto_wipe is defined in monocypher — forward-declare here */
 void crypto_wipe(void *secret, size_t size);
 
-#define CAMEX_HDR_LEN 27U
-#define CAMEX_MAGIC "CX2P"
-
-/* Packet types */
-#define CAMEX_PACKET_REGISTER  1U
-#define CAMEX_PACKET_DATA      2U
-#define CAMEX_PACKET_CONFIG    3U
-#define CAMEX_PACKET_KEEPALIVE 4U
-
-/* Protocol version */
-#define CAMEX_PROTO_VER 1U
+#include "session.h"   /* wire format: CAMEX_MAGIC, CAMEX_PROTO_VER */
 
 typedef struct {
     uint8_t psk_key[32];
@@ -50,27 +40,11 @@ int derive_psk_key(const char *psk, uint8_t key[32]);
 int crypto_set_server_key(const char *priv_b64);
 int crypto_set_server_pub(const char *pub_b64);
 
-/* Init crypto context with the global key; on failure the context is left
- * as it was. Returns 0, -1 or KEY_ERR_NOMEM (see derive_psk_key()). */
+/* Init the key context. psk may be empty on a server whose clients all
+ * have their own keys: there is no global key then. On failure the context
+ * is left as it was. Returns 0, -1 or KEY_ERR_NOMEM (see
+ * derive_psk_key()). */
 int crypto_init(const char *psk);
-
-/* AEAD encrypt (ChaCha20-Poly1305) */
-int crypto_encrypt_packet(uint8_t type, uint64_t seq,
-                          const uint8_t nonce_prefix[4],
-                          const uint8_t *key,
-                          const uint8_t *plain, size_t plain_len,
-                          uint8_t *packet, size_t packet_size,
-                          size_t *packet_len);
-
-/* AEAD decrypt */
-int crypto_decrypt_packet(const uint8_t *packet, size_t packet_len,
-                          uint8_t *type,
-                          uint8_t *plain, size_t plain_size,
-                          size_t *plain_len, uint64_t *seq_out,
-                          const uint8_t *key);
-
-/* Replay protection (64-bit sliding window) */
-int replay_check(uint64_t *seq_max, uint64_t *window, uint64_t seq);
 
 /* Log the fingerprint */
 void crypto_log_fingerprint(void);
@@ -82,8 +56,7 @@ const camex_crypto_t *crypto_get_ctx(void);
 
 void crypto_wipe_ctx(void);
 
-/* Drop the global key but keep encryption working for per-client keys:
- * the key is wiped and packets without an explicit key are refused
+/* Drop the global key (a reload removed it); per-client keys stay
  * (#16 L3). */
 void crypto_drop_global(void);
 

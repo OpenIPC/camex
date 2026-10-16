@@ -10,7 +10,7 @@
 #
 # Scenario:
 #   1. server (TCP, tunnel 10.200.0.1/24) + real client B (auto mode)
-#   2. fake client A registers as 10.200.0.50 and never reads
+#   2. client A (tests/v2tool) registers as 10.200.0.50 and never reads
 #   3. B floods 10.200.0.50 so the server's send to A blocks
 #   4. A disconnects
 #   5. B must still reach the server through the tunnel
@@ -31,6 +31,7 @@ SRV="camex-pend-srv-$$"
 CLB="camex-pend-b-$$"
 CLA="camex-pend-a-$$"
 BUILD_CTX="$(mktemp -d)"
+PSK="pending-test"
 
 cleanup() {
     docker rm -f "$SRV" "$CLB" "$CLA" >/dev/null 2>&1 || true
@@ -51,11 +52,16 @@ fail() {
 # Image with ping and python3; /dev/net/tun is created inside the container
 # so the test also works on hosts without a /dev/net/tun node.
 cp "$CAMEX_BINARY" "$BUILD_CTX/camex"
+. "$SCRIPT_DIR/lib-keys.sh"
+gen_server_key "$BUILD_CTX" "$CAMEX_BINARY" || { echo "cannot create a server key"; exit 1; }
+build_v2tool "$BUILD_CTX" || { echo "cannot build tests/v2tool"; exit 1; }
 cat > "$BUILD_CTX/Dockerfile" <<'EOF'
 FROM ubuntu:24.04
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
         iputils-ping python3-minimal >/dev/null && rm -rf /var/lib/apt/lists/*
 COPY camex /usr/local/bin/camex
+COPY server.key /etc/camex/server.key
+COPY v2tool /usr/local/bin/v2tool
 RUN printf '#!/bin/sh\nmkdir -p /dev/net\n[ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200\nexec /usr/local/bin/camex "$@"\n' \
         > /usr/local/bin/camex-run && chmod +x /usr/local/bin/camex-run
 ENTRYPOINT ["/usr/local/bin/camex-run"]
@@ -67,11 +73,11 @@ docker network create "$NET_NAME" >/dev/null
 echo "== start server and client B"
 docker run -d --name "$SRV" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" --mode server --port 5800 --transport tcp \
-    --local-cidr 10.200.0.1/24 >/dev/null
+    --local-cidr 10.200.0.1/24 $SERVER_KEY_ARGS --psk "$PSK" >/dev/null
 sleep 1
 docker run -d --name "$CLB" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" --mode client --auto --name B01 --server-host "$SRV" --port 5800 \
-    --transport tcp >/dev/null
+    --transport tcp --server-pubkey "$SERVER_PUBKEY" --psk "$PSK" >/dev/null
 
 ok=0
 for _ in $(seq 1 20); do
@@ -84,18 +90,10 @@ done
 echo "   B reaches 10.200.0.1"
 
 echo "== start slow client A (registers 10.200.0.50, never reads)"
-docker run -d --name "$CLA" --network "$NET_NAME" --entrypoint python3 "$IMAGE" -c '
-import os, socket, struct, sys, time
-s = socket.socket()
-s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
-s.connect((sys.argv[1], 5800))
-m = b"CX2P REGISTER VER=1 MODE=MANUAL LOCAL_IP=10.200.0.50\n"
-s.sendall(struct.pack(">H", len(m)) + m)
-while not os.path.exists("/tmp/go"):
-    time.sleep(0.2)
-s.shutdown(socket.SHUT_WR)
-time.sleep(600)
-' "$SRV" >/dev/null
+docker run -d --name "$CLA" --network "$NET_NAME" \
+    -e HOLD=1 -e GO_FILE=/tmp/go -e RCVBUF=4096 \
+    --entrypoint /usr/local/bin/v2tool "$IMAGE" \
+    "$SRV" 5800 "$SERVER_PUBKEY" "$PSK" tcp manual:10.200.0.50 >/dev/null
 sleep 2
 
 echo "== flood 10.200.0.50 from B until the server's send to A blocks"

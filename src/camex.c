@@ -88,9 +88,10 @@ typedef int socklen_t;
 #include <iphlpapi.h>
 #endif
 
-/* The global key came from psk= in [server], not from --psk: a reload
- * then replaces it (#16 L3). */
-static uint8_t global_psk_from_config = 0U;
+/* The global key came from --psk: psk= in [server] is then ignored, also
+ * on reloads. Otherwise a reload sets, replaces or removes the global key
+ * from psk= (#16 L3), also on a server started without one. */
+static uint8_t global_psk_from_cli = 0U;
 
 /* Global state */
 camex_config_t current_config;
@@ -415,17 +416,10 @@ int camex_init(camex_config_t *config)
     client_state_init(&client_state);
     memset(server_clients, 0, (size_t)CAMEX_MAX_CLIENTS * sizeof(server_client_t));
 
-    if (client_mode && !current_config.auto_config &&
-        current_config.keepalive == 0) {
+    if (client_mode && current_config.keepalive == 0) {
         log_message(LOG_WARNING,
                     "Keepalive is off: a lost server is not detected "
-                    "in manual mode (server timeout needs keepalives)");
-    }
-
-    if (get_random_bytes(client_state.send_nonce_prefix,
-                         sizeof(client_state.send_nonce_prefix)) != 0) {
-        log_message(LOG_WARNING,
-                    "Failed to generate nonce prefix; using zeros");
+                    "(the server timeout needs keepalives)");
     }
 
     if (server_mode) {
@@ -463,13 +457,10 @@ int camex_init(camex_config_t *config)
                 snprintf(current_config.pid_file,
                          sizeof(current_config.pid_file), "%s", g->pid_file);
             }
-            if (current_config.psk[0] == '\0' && g->psk[0] != '\0') {
+            global_psk_from_cli = current_config.psk[0] != '\0';
+            if (!global_psk_from_cli && g->psk[0] != '\0') {
                 snprintf(current_config.psk, sizeof(current_config.psk),
                          "%s", g->psk);
-                global_psk_from_config = 1U;
-            }
-            if (!current_config.encrypt && g->encrypt_set) {
-                current_config.encrypt = g->encrypt;
             }
             if (current_config.mtu == CAMEX_DEFAULT_MTU && g->mtu > 0) {
                 current_config.mtu = g->mtu;
@@ -483,27 +474,36 @@ int camex_init(camex_config_t *config)
         }
     }
 
-    if (current_config.encrypt) {
-        if (crypto_init(current_config.psk) != 0) {
-            return -1;
+    /* Protocol v2 is always encrypted (#17) */
+    {
+        int keys_ok = crypto_init(current_config.psk) == 0 &&
+                      camex_load_v2_keys() == 0;
+
+        if (keys_ok && server_mode && !crypto_get_ctx()->has_server_key) {
+            log_message(LOG_ERR, "The server needs its private key: "
+                        "--server-key-file or server_key= in [server] "
+                        "(create one with --genkey)");
+            keys_ok = 0;
         }
-        if (camex_load_v2_keys() != 0) {
-            return -1;
+        if (keys_ok && client_mode && (!crypto_get_ctx()->has_server_pub ||
+                                       !crypto_get_ctx()->has_global)) {
+            log_message(LOG_ERR, "The client needs --psk and the server's "
+                        "public key (--server-pubkey)");
+            keys_ok = 0;
         }
+        /* The key texts are not needed any more; on failure the derived
+         * keys go too (on Android the process outlives this start) */
         crypto_wipe(current_config.psk, sizeof(current_config.psk));
         crypto_wipe(server_db.globals.psk, sizeof(server_db.globals.psk));
+        crypto_wipe(server_db.globals.server_key,
+                    sizeof(server_db.globals.server_key));
+        if (!keys_ok) {
+            crypto_wipe_ctx();
+            key_cache_clear();
+            crypto_wipe(&server_db, sizeof(server_db));  /* client psk= */
+            return -1;
+        }
     }
-    /* The private key text is not needed any more (and is unused without
-     * encryption) */
-    if (!current_config.encrypt &&
-        (server_db.globals.server_key[0] != '\0' ||
-         current_config.server_key_file[0] != '\0' ||
-         current_config.server_pubkey[0] != '\0')) {
-        log_message(LOG_NOTICE, "server_key=, --server-key-file and "
-                    "--server-pubkey are ignored without encryption");
-    }
-    crypto_wipe(server_db.globals.server_key,
-                sizeof(server_db.globals.server_key));
 
     if (client_mode) {
         if (!current_config.auto_config &&
@@ -541,8 +541,9 @@ int camex_init(camex_config_t *config)
         client_state.last_keepalive = time(NULL);
 
         if (current_config.auto_config) {
-            if (client_send_register() != 0) {
-                log_message(LOG_WARNING, "Initial auto registration failed");
+            g_now = time(NULL);
+            if (client_start_handshake() != 0) {
+                log_message(LOG_WARNING, "Initial handshake failed");
             }
             if (client_wait_for_config() != 0) {
                 net_close();
@@ -575,8 +576,9 @@ int camex_init(camex_config_t *config)
             }
         }
 
-        if (!current_config.auto_config && client_send_register() != 0) {
-            log_message(LOG_WARNING, "Initial client registration failed");
+        g_now = time(NULL);
+        if (!current_config.auto_config && client_start_handshake() != 0) {
+            log_message(LOG_WARNING, "Initial handshake failed");
         }
 
         client_link_up = 1U;
@@ -590,8 +592,8 @@ int camex_init(camex_config_t *config)
         log_message(LOG_INFO, "  Local CIDR: %s", current_config.local_cidr);
         log_message(LOG_INFO, "  Tunnel device: %s", tun_name);
         log_message(LOG_INFO, "  MTU: %d", current_config.mtu);
-        log_message(LOG_INFO, "  Encryption: %s",
-                    current_config.encrypt ? "enabled" : "disabled");
+        log_message(LOG_INFO, "  Protocol: v%u (%s)", (unsigned)CAMEX_PROTO_VER,
+                    "Noise_NKpsk0_25519_ChaChaPoly_BLAKE2b");
         log_message(LOG_INFO, "  Transport: %s",
                     current_config.transport == CAMEX_TRANSPORT_TCP
                         ? "TCP" : "UDP");
@@ -643,8 +645,8 @@ int camex_init(camex_config_t *config)
         log_message(LOG_INFO, "  Tunnel device: %s", tun_name);
     }
     log_message(LOG_INFO, "  MTU: %d", current_config.mtu);
-    log_message(LOG_INFO, "  Encryption: %s",
-                current_config.encrypt ? "enabled" : "disabled");
+    log_message(LOG_INFO, "  Protocol: v%u (%s)", (unsigned)CAMEX_PROTO_VER,
+                "Noise_NKpsk0_25519_ChaChaPoly_BLAKE2b");
     log_message(LOG_INFO, "  Transport: %s",
                 current_config.transport == CAMEX_TRANSPORT_TCP
                     ? "TCP" : "UDP");
@@ -654,7 +656,7 @@ int camex_init(camex_config_t *config)
 
 static void drain_udp_packets(void)
 {
-    uint8_t buffer[TUN_PACKET_MAX + CAMEX_HDR_LEN + 1 + 16U];
+    uint8_t buffer[TUN_PACKET_MAX + V2_OVERHEAD];
     struct sockaddr_in from;
     ssize_t len;
 
@@ -837,12 +839,6 @@ static void drain_tcp_server_accept(void)
                 server_clients[i].last_seen = g_now;
                 server_clients[i].connected_at = g_now;
                 server_clients[i].active = 1U;
-                if (get_random_bytes(
-                        server_clients[i].send_nonce_prefix,
-                        sizeof(server_clients[i].send_nonce_prefix)) != 0) {
-                    log_message(LOG_WARNING,
-                                "TCP: getrandom failed, weak nonce prefix");
-                }
                 net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
                 log_message(LOG_INFO, "TCP client connected: %s (fd=%d)",
                             peer_str, client_fd);
@@ -860,7 +856,7 @@ static void drain_tcp_server_accept(void)
 
 static void drain_tcp_client_read(int fd)
 {
-    uint8_t buffer[TUN_PACKET_MAX + CAMEX_HDR_LEN + 1 + 16U];
+    uint8_t buffer[TUN_PACKET_MAX + V2_OVERHEAD];
     size_t frame_len;
     size_t i;
     char peer_str[64];
@@ -894,9 +890,7 @@ static void drain_tcp_client_read(int fd)
                 log_message(LOG_INFO,
                             "TCP client disconnected: %s (fd=%d)",
                             peer_str, fd);
-                net_tcp_close(fd);
-                server_forget_session(&server_clients[i]);
-                memset(&server_clients[i], 0, sizeof(server_clients[i]));
+                server_drop_entry(&server_clients[i]);
                 return;
             }
         }
@@ -910,11 +904,14 @@ static void drain_tcp_client_read(int fd)
             server_clients[i].tcp_fd == fd) {
             /* last_seen is refreshed by server_handle_packet() only for
              * packets that were accepted: a frame that fails to decrypt
-             * must not keep the connection alive (#9). */
-            if (server_handle_packet(buffer, frame_len,
-                                     &server_clients[i].addr, fd) != 0) {
-                net_sockaddr_to_string(&server_clients[i].addr,
-                                       peer_str, sizeof(peer_str));
+             * must not keep the connection alive (#9). A positive result
+             * is a forwarded frame still queued for a slow TCP peer.
+             * from is a copy: a handshake may move this connection to the
+             * client's existing entry and wipe this slot. */
+            struct sockaddr_in from = server_clients[i].addr;
+
+            if (server_handle_packet(buffer, frame_len, &from, fd) < 0) {
+                net_sockaddr_to_string(&from, peer_str, sizeof(peer_str));
                 log_peer(LOG_WARNING,
                          "Dropped TCP packet from %s",
                          peer_str);
@@ -1087,9 +1084,12 @@ void camex_run(void)
                 restore = config_db_load_file(current_config.config_path) != 0;
 
                 if (!restore) {
-                    /* The global key follows psk= in [server] when it came
-                     * from there (--psk on the command line wins) */
-                    if (global_psk_from_config && current_config.encrypt) {
+                    /* The global key follows psk= in [server] unless it
+                     * came from --psk (the command line wins) */
+                    if (global_psk_from_cli) {
+                        crypto_wipe(server_db.globals.psk,
+                                    sizeof(server_db.globals.psk));
+                    } else {
                         if (server_db.globals.psk[0] != '\0') {
                             /* A bad new key must not leave the old one
                              * working */
@@ -1106,7 +1106,7 @@ void camex_run(void)
                             }
                             crypto_wipe(server_db.globals.psk,
                                         sizeof(server_db.globals.psk));
-                        } else {
+                        } else if (crypto_get_ctx()->has_global) {
                             log_message(LOG_NOTICE,
                                         "Global key removed by the reload");
                             crypto_drop_global();
@@ -1223,6 +1223,13 @@ void camex_stop(void)
         }
     }
 
+    camex_cleanup();
+}
+
+void camex_cleanup(void)
+{
+    size_t i;
+
     /* Wipe all key material from memory */
     crypto_wipe_ctx();
     {
@@ -1239,10 +1246,11 @@ void camex_stop(void)
     {
         extern server_client_t server_clients[];
         for (i = 0; i < (size_t)CAMEX_MAX_CLIENTS; ++i) {
-            crypto_wipe(server_clients[i].psk_key,
-                        sizeof(server_clients[i].psk_key));
+            crypto_wipe(&server_clients[i], sizeof(server_clients[i]));
         }
     }
+    client_wipe();
+    crypto_wipe_ctx();
     crypto_wipe(current_config.psk, sizeof(current_config.psk));
 
     packet_close();

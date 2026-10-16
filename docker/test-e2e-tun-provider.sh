@@ -50,12 +50,12 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
 COPY src /b/src
 COPY test /b/test
 RUN cd /b/src && CF="-std=c99 -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L -O1 -I." && \
-    for f in camex monocypher util log crypto noise keys tun packet net proto config client server wintun; do \
+    for f in camex monocypher util log crypto noise keys session tun packet net proto config client server wintun; do \
         gcc $CF -c $f.c -o /b/$f.o; done && \
     gcc $CF -Dmain=camex_program_main -c main.c -o /b/main.o && \
     gcc $CF -c ../test/test_tun_provider.c -o /b/t.o && \
     gcc -o /usr/local/bin/camex-provider /b/*.o && \
-    gcc $CF -o /usr/local/bin/camex camex.c monocypher.c util.c log.c crypto.c noise.c keys.c tun.c packet.c \
+    gcc $CF -o /usr/local/bin/camex camex.c monocypher.c util.c log.c crypto.c noise.c keys.c session.c tun.c packet.c \
         net.c proto.c config.c client.c server.c wintun.c main.c
 RUN printf '#!/bin/sh\nmkdir -p /dev/net\n[ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200\nexec "$@"\n' \
         > /usr/local/bin/with-tun && chmod +x /usr/local/bin/with-tun
@@ -71,17 +71,23 @@ mtu=1400
 route_cidr=192.168.77.0/24
 CONF
 docker build -q -t "$IMAGE" "$BUILD_CTX" >/dev/null
+# Protocol v2 server key, made by the camex just built in the image
+KEYS=$(docker run --rm "$IMAGE" camex --genkey)
+printf '%s\n' "$KEYS" | grep '^server_key=' > "$BUILD_CTX/etc-camex/server.key"
+SERVER_PUBKEY=$(printf '%s\n' "$KEYS" | sed -n 's/^public_key=//p')
 docker network create "$P-net" >/dev/null
 
 docker create --name "$SRV" --network "$P-net" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" camex --mode server --port 5800 --local-cidr 10.200.0.1/24 \
-    --encrypt --psk k --config /etc/camex/camex.conf >/dev/null
+    --server-key-file /etc/camex/server.key --psk k \
+    --config /etc/camex/camex.conf >/dev/null
 docker cp "$BUILD_CTX/etc-camex" "$SRV:/etc/camex" >/dev/null
 docker start "$SRV" >/dev/null
 sleep 1
 docker run -d --name "$CLI" --network "$P-net" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" camex-provider --mode client --auto --name PHONE \
-    --server-host "$SRV" --port 5800 --encrypt --psk k >/dev/null
+    --server-host "$SRV" --port 5800 --server-pubkey "$SERVER_PUBKEY" \
+    --psk k >/dev/null
 
 ok=0
 for _ in $(seq 1 20); do

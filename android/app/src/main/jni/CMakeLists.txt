@@ -17,6 +17,7 @@ set(CAMEX_SRCS
     ../../../../../src/crypto.c
     ../../../../../src/noise.c
     ../../../../../src/keys.c
+    ../../../../../src/session.c
     ../../../../../src/tun.c
     ../../../../../src/packet.c
     ../../../../../src/net.c

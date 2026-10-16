@@ -24,7 +24,11 @@
     <string name="transport_tcp">TCP</string>
 
     <!-- Security -->
-    <string name="encrypt">Encrypt traffic (ChaCha20-Poly1305)</string>
+    <string name="server_pubkey">Server public key</string>
+    <string name="err_server_pubkey">Paste the server public key (44 characters)</string>
+    <string name="err_psk">Enter the pre-shared key</string>
+    <string name="err_keys_missing">Set the server public key and the pre-shared key first</string>
+    <string name="err_exited">camex stopped (code %1$d): check the settings and the server</string>
     <string name="full_tunnel">Route all traffic through the tunnel</string>
     <string name="psk">Pre-shared key</string>
 

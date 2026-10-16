@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g., v2.3.8)'
+        description: 'Release version (e.g., v3.0.0)'
         required: true
-        default: 'v2.3.8'
+        default: 'v3.0.0'
 
 env:
   BUILD_DIR: build
@@ -104,6 +104,10 @@ jobs:
 
       - name: E2E test (hardening, issue #16)
         run: ./docker/test-e2e-hardening.sh
+        if: matrix.platform.name == 'x86_64'
+
+      - name: E2E test (rekeying under traffic, issue #17)
+        run: ./docker/test-e2e-rekey.sh
         if: matrix.platform.name == 'x86_64'
 
       - name: Build cross

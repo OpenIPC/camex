@@ -18,7 +18,10 @@ camex in various environments.
 sudo mkdir -p /etc/camex
 sudo cp examples/camex.conf /etc/camex/camex.conf
 # Edit /etc/camex/camex.conf with your client profiles
-sudo camex --mode server --port 5800 --config /etc/camex/camex.conf
+# The server key pair (once); give public_key= to the clients:
+sudo sh -c 'umask 077; camex --genkey > /etc/camex/server.key'
+sudo camex --mode server --port 5800 --config /etc/camex/camex.conf \
+    --server-key-file /etc/camex/server.key --psk secret
 ```
 
 ### systemd service

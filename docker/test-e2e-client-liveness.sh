@@ -59,11 +59,14 @@ fail() {
 [ -x "$CAMEX_BINARY" ] || { echo "camex binary not found: $CAMEX_BINARY"; exit 1; }
 
 cp "$CAMEX_BINARY" "$BUILD_CTX/camex"
+. "$SCRIPT_DIR/lib-keys.sh"
+gen_server_key "$BUILD_CTX" "$CAMEX_BINARY" || { echo "cannot create a server key"; exit 1; }
 cat > "$BUILD_CTX/Dockerfile" <<'EOF'
 FROM ubuntu:24.04
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
         iputils-ping >/dev/null && rm -rf /var/lib/apt/lists/*
 COPY camex /usr/local/bin/camex
+COPY server.key /etc/camex/server.key
 RUN printf '#!/bin/sh\nmkdir -p /dev/net\n[ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200\nexec /usr/local/bin/camex "$@"\n' \
         > /usr/local/bin/camex-run && chmod +x /usr/local/bin/camex-run
 ENTRYPOINT ["/usr/local/bin/camex-run"]
@@ -87,7 +90,7 @@ wait_ping() {
 start_server() {
     docker run -d --name "$SRV" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
         "$IMAGE" --mode server --port 5800 --local-cidr 10.200.0.1/24 \
-        --encrypt --psk "$PSK" >/dev/null
+        $SERVER_KEY_ARGS --psk "$PSK" >/dev/null
 }
 
 echo "== start server and manual encrypted client"
@@ -95,7 +98,7 @@ start_server
 sleep 1
 docker run -d --name "$CLI" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" --mode client --local-cidr 10.200.0.2/24 --gateway-ip 10.200.0.1 \
-    --server-host "$SRV" --port 5800 --encrypt --psk "$PSK" \
+    --server-host "$SRV" --port 5800 --server-pubkey "$SERVER_PUBKEY" --psk "$PSK" \
     --keepalive 2 --server-timeout 6 >/dev/null
 wait_ping 20 || fail "client never reached the server"
 
@@ -130,7 +133,7 @@ echo "== scenario 3: idle client, keepalive (10s) longer than the timeout (5s)"
 docker rm -f "$CLI" >/dev/null
 docker run -d --name "$IDLE" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" --mode client --local-cidr 10.200.0.3/24 --gateway-ip 10.200.0.1 \
-    --server-host "$SRV" --port 5800 --encrypt --psk "$PSK" \
+    --server-host "$SRV" --port 5800 --server-pubkey "$SERVER_PUBKEY" --psk "$PSK" \
     --keepalive 10 --server-timeout 5 >/dev/null
 CLI="$IDLE"
 wait_ping 20 || fail "idle client never reached the server"

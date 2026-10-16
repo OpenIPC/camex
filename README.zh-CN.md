@@ -19,7 +19,8 @@
 
 - **客户端/服务器架构**，基于 UDP 或 TCP
 - **自动配置模式** —— 客户端从服务器获取隧道参数
-- **ChaCha20-Poly1305 加密** —— 可选，关闭时零开销
+- **协议 v2** —— Noise 握手（`NKpsk0`、X25519、ChaCha20-Poly1305、BLAKE2b），
+  每个会话、每个方向使用新的密钥，始终加密
 - **无外部依赖** —— 仅需 libc
 - **跨平台构建** —— x86_64、ARM、AArch64、MIPS（通过 CI）
 - **自研内核模块** —— `camex.ko` 可替代 `tun.ko`，无外部依赖
@@ -27,17 +28,28 @@
 
 ## 快速上手
 
+### 密钥
+
+服务器拥有一对密钥；每个客户端都需要服务器的**公钥**以及预共享密钥（全局密钥，
+或服务器配置中该客户端自己的 `psk=`）。
+
+```sh
+(umask 077; camex --genkey > server.key)   # server_key=…（保密）和 public_key=…
+```
+
 ### 服务器
 
 ```sh
-sudo ./camex --mode server --port 5800 --config /etc/camex/camex.conf
+sudo ./camex --mode server --port 5800 --config /etc/camex/camex.conf \
+  --server-key-file server.key --psk secret
 ```
 
 ### 客户端（自动模式）
 
 ```sh
 sudo ./camex --mode client --auto --name 0203A104B5AE \
-  --server-host vpn.example.org --port 5800
+  --server-host vpn.example.org --port 5800 \
+  --server-pubkey <public_key> --psk secret
 ```
 
 ### 客户端（手动模式）
@@ -45,7 +57,8 @@ sudo ./camex --mode client --auto --name 0203A104B5AE \
 ```sh
 sudo ./camex --mode client \
   --local-cidr 10.0.0.2/24 --gateway-ip 10.0.0.1 \
-  --server-host vpn.example.org --port 5800
+  --server-host vpn.example.org --port 5800 \
+  --server-pubkey <public_key> --psk secret
 ```
 
 ### Android
@@ -59,8 +72,8 @@ sudo ./camex --mode client \
 - **Server host / port** — camex 服务器。
 - **Client name** — 客户端 ID，即服务器上的 `[client ID]` 块。
 - **Transport** — UDP 或 TCP，与服务器一致。
-- **Encrypt traffic** 和 **Pre-shared key** — 对应 `--encrypt --psk`；密钥必须
-  与该客户端的 `psk=`（或全局密钥）一致。
+- **Server public key** 和 **Pre-shared key** — 对应 `--server-pubkey --psk`；
+  密钥必须与该客户端的 `psk=`（或全局密钥）一致。
 - **Route all traffic through the tunnel** — 关闭时，只有隧道网络和服务器下发的
   路由经过隧道。
 - **Advanced** — MTU、keepalive 和服务器超时
@@ -171,7 +184,7 @@ sudo ./camex \
   --name 0203A104B5AE \
   --server-host vpn.example.org \
   --port 5800 \
-  --encrypt --psk secret
+  --server-pubkey <public_key> --psk secret
 ```
 
 手动客户端模式：
@@ -184,7 +197,7 @@ sudo ./camex \
   --server-host vpn.example.org \
   --port 5800 \
   --route-cidr 192.168.100.0/24 \
-  --encrypt --psk secret
+  --server-pubkey <public_key> --psk secret
 ```
 
 显式指定 TUN 后端：
@@ -196,6 +209,7 @@ sudo ./camex \
   --gateway-ip 10.0.0.1 \
   --server-host vpn.example.org \
   --port 5800 \
+  --server-pubkey <public_key> --psk secret \
   --tun-dev /dev/camex
 ```
 
@@ -207,7 +221,8 @@ sudo ./camex \
   --port 5800 \
   --bind-ip 0.0.0.0 \
   --config /etc/camex/camex.conf \
-  --encrypt --psk secret
+  --server-key-file /etc/camex/server.key \
+  --psk secret
 ```
 
 ### 选项
@@ -225,8 +240,11 @@ sudo ./camex \
 | `--config <path>`      | `-f`   | 服务器配置文件路径                                                   |
 | `--route-cidr <cidr>`  | `-c`   | 在客户端上额外添加的路由；可重复指定                                 |
 | `--mtu <size>`         | `-t`   | 隧道 MTU，576–9000（默认：1500）                                     |
-| `--psk <pass>`         | `-k`   | 口令，经哈希（无拉伸）得到 32 字节密钥，请使用长的随机口令（UDP 和 TCP 均适用） |
-| `--encrypt`            | `-e`   | 启用 ChaCha20-Poly1305 加密（总开关；所有加密流量都必须开启）        |
+| `--psk <key>`          | `-k`   | 预共享密钥：`hex:<64 位十六进制>`、`base64:<44 个字符>` 或口令（Argon2id 拉伸）。客户端必填 |
+| `--server-pubkey <key>`|        | 客户端：服务器的公钥（来自 `--genkey`）                              |
+| `--server-key-file <path>` |    | 服务器：私钥文件（或 `[server]` 中的 `server_key=`）                 |
+| `--genkey`             |        | 输出一对新的服务器密钥（`server_key=`、`public_key=`）后退出         |
+| `--encrypt`            | `-e`   | 为兼容而保留：协议 v2 始终加密                                       |
 | `--tun-dev <path>`     | `-T`   | TUN 设备路径（默认：先自动检测 `/dev/net/tun`，再检测 `/dev/camex`） |
 | `--pid-file <path>`    | `-P`   | 启动时将 PID 写入文件                                                |
 | `--bind-dev <iface>`   | `-d`   | 将套接字绑定到指定网络接口（`SO_BINDTODEVICE`）                      |
@@ -264,50 +282,55 @@ sudo ./camex --mode server --port 5800 --config /etc/camex/camex.conf
 camex 是面向摄像机的小型隧道，而不是通用 VPN。在把它暴露到不受信任的网络之前，
 请先了解它能保护什么。
 
-### 启用 `--encrypt` 时
+### 协议 v2（camex 3.x）
 
-- 每个数据包都使用 ChaCha20-Poly1305 进行认证：负载被加密，头部（数据包类型、
-  nonce、长度、序列号）经过认证但仍可读。认证失败的数据包会被丢弃。
-- **密钥。** 密钥由口令（`--psk` 或 `psk=`）经过一次 BLAKE2b-256 哈希得到，
-  没有加盐也没有拉伸（#14）。截获流量的人可以离线猜测口令，因此请使用长的随机
-  口令（由密码生成器生成的 32 个以上字符），而不是单词。
+- **握手。** `Noise_NKpsk0_25519_ChaChaPoly_BLAKE2b`：客户端知道服务器的公钥，
+  双方都知道客户端的预共享密钥。每个会话都使用新的密钥，且每个方向的密钥不同
+  （前向保密：密钥泄露后也无法解密已记录的会话）。
+- **数据包。** ChaCha20-Poly1305：负载被加密，17 字节的头部（类型、会话索引、
+  计数器）经过认证但仍可读。认证失败的数据包会被丢弃。密钥每 10 分钟更新一次。
+- **密钥。** 预共享密钥可以是原始密钥（`hex:`、`base64:`），也可以是经 Argon2id
+  拉伸的口令。截获的握手无法用于离线猜测口令：这需要服务器的私钥。
 - **按客户端的密钥。** `[client ID]` 块中的 `psk=` 为该客户端设置专属密钥：它
   只能用该密钥注册，全局密钥对该 ID 不再有效（除非两个口令相同，此时它们是同一
   个密钥）。具体规则见[说明](#说明)。
 - **源地址。** 客户端只能以自己的隧道地址作为源地址发送数据包；其他源地址的
   数据包会被丢弃。
-- **防重放。** 每个会话有一个 64 个数据包的滑动窗口。会话与客户端的随机 nonce
-  前缀及其密钥绑定：截获的 `REGISTER` 或数据包被重放时，无论来自哪个地址都会
-  被拒绝。服务器会记住最近 256 个已结束的会话；更早的会话以及服务器重启前的
-  会话不会被记住（将由按会话的密钥彻底解决，#17）。
+- **防重放。** 每个会话的数据包有 2048 个数据包的窗口。客户端有活动会话时，
+  带有旧时间戳的握手会被拒绝；被重放的握手无法接管正在工作的会话：新会话只有
+  在收到客户端在其上的第一个数据包后才替换旧会话（重启后时钟回退的客户端仍能
+  重新连接）。已结束会话的数据包无法被注入新会话：新会话的密钥不同。
+- **漫游。** 会话按索引而不是按客户端地址查找：NAT 地址变化后客户端仍保持会话。
 - **重新加载配置。** 收到 `SIGHUP` 后，如果某个活动会话的密钥已被删除、更改，
   或现在属于另一个客户端，该会话会被结束。
 
 ### 不受保护的内容
 
-- **明文模式**（未使用 `--encrypt`）完全没有认证：任何能访问服务器端口的人都
-  可以注册并注入数据包。只应在受信任的网络中使用。
-- **没有前向保密。** 口令泄露后，已记录的流量可以被解密。
-- **双向同一密钥。** 两个方向以及一个客户端的所有会话都使用同一个密钥
-  （#16、#17）。
-- **元数据。** 数据包大小、时间、端点以及明文头部（数据包类型、序列号）是可见
-  的。
+- **服务器私钥**的持有者可以对知道预共享密钥的客户端冒充服务器：请妥善保管
+  `server_key`。
+- **元数据。** 数据包大小、时间、端点以及明文头部（数据包类型、会话索引、
+  计数器）是可见的。
+- **没有不加密的模式**；如需不加密的开放隧道，请使用 OpenIPC VTesse。
 - **隧道内部**的流量不做过滤：任何客户端都可以访问服务器和隧道网络中的其他
   客户端。请在服务器的隧道接口上用防火墙加以限制（使用 `/dev/net/tun` 时为
   `tun0` 等，使用内核模块时为 `camex`；服务器启动时会在日志中输出接口名）。
 
 ### 拒绝服务方面的限制
 
-- 尚未注册的 TCP 连接受到限制（每个源地址 4 个，总共 32 个），并在 10 秒后关闭。
+- 尚未完成握手的 TCP 连接受到限制（每个源地址 4 个，总共 32 个），并在 10 秒后
+  关闭。握手带有以服务器公钥为密钥的 MAC：不知道该公钥的人发送的数据包只需一次
+  哈希即被丢弃。服务器每秒最多处理 200 次握手。
 - 对端可以触发的日志消息（被丢弃的数据包、被拒绝的注册）有速率限制；被抑制
   的数量会记录到日志中。
 - 自动地址池只分配 `10.200.0.2`–`.254`，不会把同一地址同时分配给两个在线客户端
-  （已过期客户端的地址会被重新分配）；`allow_unknown_clients=no` 只为配置文件中
+  （已过期客户端的地址会被重新分配；重新连接的客户端，包括服务器重启之后，只要
+  原地址仍空闲就会拿回原地址）；`allow_unknown_clients=no` 只为配置文件中
   列出的自动模式 ID 提供服务（手动模式客户端受其密钥和地址约束，见[说明](#说明)）。
 
 ### 推荐的部署方式
 
-- 在不受你控制的网络上，始终使用 `--encrypt` 和长的随机口令。
+- 服务器密钥文件只允许服务器读取（`umask 077`）；只把 `public_key` 交给客户端。
+- 优先使用原始密钥（`hex:`/`base64:`）或长的随机口令。
 - 在 `[client ID]` 块中为每台摄像机设置自己的 `psk=`，并在所有自动模式摄像机都
   已列出时设置 `allow_unknown_clients=no`。
 - 只以所需的权限运行服务器（`CAP_NET_ADMIN`；使用内核模块时还需要对
@@ -699,17 +722,18 @@ CI 流水线会自动强制检查：如果 git 标签与 `CAMEX_VERSION`
 - 客户端套接字仅用于出站连接；客户端一侧不会打开任何监听端口。
 - 在自动模式下，`-l`、`-g` 和 `-c` 由服务器下发。
 - `examples/camex.conf` 展示了服务器端参数数据库的格式。
-- 加密（`--encrypt`）可透明地工作在 UDP 和 TCP 两种传输方式上。
-  在服务器和客户端命令中都加上 `--encrypt --psk <key>` 即可。
+- 协议 v2 可工作在 UDP 和 TCP 两种传输方式上；每个会话都以握手开始（服务器使用
+  `--server-key-file`，客户端使用 `--server-pubkey` 和 `--psk`）。camex 3.x 不能与
+  camex 2.x 互通。
 - 服务器支持按客户端设置 PSK：在配置文件的 `[client ID]` 块中添加 `psk=<key>`。
-  启用 `--encrypt` 时，密钥与客户端 ID 绑定：
+  密钥与客户端 ID 绑定：
   - 拥有专属密钥的客户端只能使用该密钥注册；
   - 全局 `--psk` 密钥仅适用于没有专属密钥的客户端；
   - 拥有专属密钥的手动模式客户端可以省略 `--name`：由密钥识别其身份；
   - 手动模式客户端只能使用其所属 `[client ID]` 块中的 `local_cidr` 地址，
     绝不能占用其他拥有专属密钥的客户端的地址。
-- 启用 `--encrypt` 时，服务器只接受来自已注册会话、且源地址为该客户端自身
-  隧道地址的数据包；其他源地址的数据包将被丢弃。
+- 服务器只接受来自已建立会话、且源地址为该客户端自身隧道地址的数据包；其他
+  源地址的数据包将被丢弃。
 
 ## 许可证
 
