@@ -110,6 +110,10 @@ jobs:
         run: ./docker/test-e2e-rekey.sh
         if: matrix.platform.name == 'x86_64'
 
+      - name: E2E test (changed profile applied live, issue #49)
+        run: ./docker/test-e2e-reconfig.sh
+        if: matrix.platform.name == 'x86_64'
+
       - name: Build cross
         run: |
           make clean

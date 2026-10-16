@@ -76,6 +76,11 @@ void camex_stop(void);
  * too (after removing routes), a failed camex_init() needs it alone */
 void camex_cleanup(void);
 int camex_add_route(const char *cidr, const char *gateway);
+
+/* Client: apply a changed CONFIG (address, gateway, MTU, routes) to the
+ * live tunnel: old routes off, tunnel reopened, new routes on (#49). On
+ * failure the old settings are restored; returns 0 or -1. */
+int camex_client_reconfigure(const camex_config_t *next);
 int camex_del_route(const char *cidr, const char *gateway);
 
 /* Derive client ID from default gateway MAC */

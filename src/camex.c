@@ -1400,6 +1400,88 @@ static int run_ip_route(const char *verb, const char *cidr, const char *gateway)
 }
 #endif
 
+/* Opens the packet backend for cfg (address, MTU, routes); 0 or -1 */
+static int client_open_tunnel(const camex_config_t *cfg)
+{
+    camex_packet_open_t open_params;
+    char local_ip[16];
+    char local_netmask[16];
+
+    if (parse_local_cidr(cfg->local_cidr, local_ip, sizeof(local_ip),
+                         local_netmask, sizeof(local_netmask)) != 0) {
+        return -1;
+    }
+    memset(&open_params, 0, sizeof(open_params));
+    open_params.local_ip = local_ip;
+    open_params.netmask = local_netmask;
+    open_params.mtu = cfg->mtu;
+    open_params.routes = (const char (*)[32])cfg->route_cidrs;
+    open_params.route_count = cfg->route_count;
+    open_params.device = cfg->tun_dev;
+    open_params.use_provider = 1U;
+    return packet_open(&open_params);
+}
+
+static void client_set_routes(const camex_config_t *cfg, int add)
+{
+    size_t i;
+
+    if (!packet_host_routes() || cfg->gateway_ip[0] == '\0') {
+        return;
+    }
+    for (i = 0; i < cfg->route_count; ++i) {
+        if ((add ? camex_add_route(cfg->route_cidrs[i], cfg->gateway_ip)
+                 : camex_del_route(cfg->route_cidrs[i], cfg->gateway_ip))
+            != 0) {
+            log_message(LOG_WARNING, "Route %s failed for %s",
+                        add ? "setup" : "removal", cfg->route_cidrs[i]);
+        }
+    }
+}
+
+int camex_client_reconfigure(const camex_config_t *next)
+{
+    camex_config_t old = current_config;
+    char ip[16];
+    char mask[16];
+
+    if (parse_local_cidr(next->local_cidr, ip, sizeof(ip), mask,
+                         sizeof(mask)) != 0) {
+        return -1;
+    }
+    log_message(LOG_NOTICE, "Applying the new tunnel configuration from the "
+                "server: CIDR=%s GW=%s MTU=%d routes=%u", next->local_cidr,
+                next->gateway_ip, next->mtu, (unsigned)next->route_count);
+
+    /* Routes go with the old device: remove them while it exists */
+    client_set_routes(&old, 0);
+    packet_close();
+    if (client_open_tunnel(next) != 0) {
+        log_message(LOG_ERR, "Cannot reopen the tunnel with the new "
+                    "configuration: keeping the old one");
+        if (client_open_tunnel(&old) != 0) {
+            log_message(LOG_ERR, "Cannot reopen the tunnel with the old "
+                        "configuration either");
+            return -1;
+        }
+        client_set_routes(&old, 1);
+        return -1;
+    }
+
+    snprintf(current_config.local_cidr, sizeof(current_config.local_cidr),
+             "%s", next->local_cidr);
+    snprintf(current_config.local_ip, sizeof(current_config.local_ip),
+             "%s", ip);
+    snprintf(current_config.gateway_ip, sizeof(current_config.gateway_ip),
+             "%s", next->gateway_ip);
+    current_config.mtu = next->mtu;
+    current_config.route_count = next->route_count;
+    memcpy(current_config.route_cidrs, next->route_cidrs,
+           sizeof(current_config.route_cidrs));
+    client_set_routes(&current_config, 1);
+    return 0;
+}
+
 int camex_add_route(const char *cidr, const char *gateway)
 {
     return run_ip_route("replace", cidr, gateway);

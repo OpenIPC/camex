@@ -278,6 +278,11 @@ of `[client ID]` blocks are skipped; addresses of expired clients are reused).
 To serve only the IDs listed in the file, set `allow_unknown_clients=no` in the
 `[server]` block.
 
+After a change to the file, `kill -HUP` the server. A running auto-mode client
+picks up a changed address, gateway, MTU or routes with its next handshake (a
+key renewal, at most 10 minutes later, or a reconnect): it reopens its tunnel
+with the new settings and replaces its routes, without a restart.
+
 ## Security Model
 
 camex is a small tunnel for cameras, not a general-purpose VPN. Know what it
