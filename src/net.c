@@ -701,7 +701,7 @@ int net_tcp_connect(const char *host, int port)
         fd_set wset;
         fd_set eset;
         struct timeval tv;
-        time_t deadline;
+        int steps;
         int soerr = 0;
         socklen_t soerr_len = sizeof(soerr);
         int ready;
@@ -712,33 +712,35 @@ int net_tcp_connect(const char *host, int port)
             return -1;
         }
         /* Winsock reports a failed connect in the except set, POSIX as
-         * writable with SO_ERROR set. A signal does not end the wait,
-         * unless it is a request to stop. */
-        deadline = time(NULL) + CAMEX_TCP_CONNECT_TIMEOUT;
+         * writable with SO_ERROR set. The wait goes in 1 s steps, at most
+         * CAMEX_TCP_CONNECT_TIMEOUT of them: a stop request that comes
+         * just before select() is seen within a second, and counting
+         * steps instead of reading the clock keeps a clock change from
+         * stretching the timeout. A signal ends a step early (it then
+         * counts as a whole one), but not the wait, unless it is a
+         * request to stop. */
+        steps = 0;
         do {
-            time_t left = deadline - time(NULL);
-
-            /* A clock set back must not stretch the wait */
-            if (left > CAMEX_TCP_CONNECT_TIMEOUT) {
-                left = CAMEX_TCP_CONNECT_TIMEOUT;
-            }
-
             FD_ZERO(&wset);
             FD_SET(fd, &wset);
             FD_ZERO(&eset);
             FD_SET(fd, &eset);
-            tv.tv_sec = left > 0 ? (long)left : 0;
+            tv.tv_sec = 1;
             tv.tv_usec = 0;
             ready = select(fd + 1, NULL, &wset, &eset, &tv);
-        } while (ready < 0 && net_sock_err_is_intr() && running &&
-                 time(NULL) < deadline);
-        if (ready == 0) {
-            log_message(LOG_ERR, "connect(TCP): timed out");
+            ++steps;
+        } while ((ready == 0 || (ready < 0 && net_sock_err_is_intr())) &&
+                 running && steps < CAMEX_TCP_CONNECT_TIMEOUT);
+        if (ready <= 0 && !running) {
+            log_message(LOG_INFO, "connect(TCP): stopped");
             close(fd);
             return -1;
         }
-        if (ready < 0 && !running) {
-            log_message(LOG_INFO, "connect(TCP): stopped");
+        if (ready < 0 && net_sock_err_is_intr()) {
+            ready = 0;   /* the last step ended by a signal: time is up */
+        }
+        if (ready == 0) {
+            log_message(LOG_ERR, "connect(TCP): timed out");
             close(fd);
             return -1;
         }

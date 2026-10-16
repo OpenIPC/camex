@@ -525,11 +525,16 @@ int camex_init(camex_config_t *config)
                         "Cannot reach server %s:%d, retrying every 5s...",
                         current_config.server_host, current_config.port);
                 }
+                /* 5 s in 1 s steps: a stop request that comes just
+                 * before a step is seen within a second */
                 {
-                    struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
-                    fd_set dummy;
-                    FD_ZERO(&dummy);
-                    select(0, NULL, NULL, NULL, &tv);
+                    int step;
+
+                    for (step = 0; step < 5 && running; ++step) {
+                        struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
+
+                        select(0, NULL, NULL, NULL, &tv);
+                    }
                 }
             }
             if (!running) {
