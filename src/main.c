@@ -629,16 +629,8 @@ int main(int argc, char *argv[])
     /* An externally provided TUN (Android) gets its routes from the host
      * application, which camex has no permission to change; other packet
      * backends may have no host interface at all. */
-    if (client_mode && packet_host_routes()) {
-        size_t i;
-
-        for (i = 0; i < current_config.route_count; ++i) {
-            if (camex_add_route(current_config.route_cidrs[i],
-                                current_config.gateway_ip) != 0) {
-                log_message(LOG_WARNING, "Route setup failed for %s",
-                            current_config.route_cidrs[i]);
-            }
-        }
+    if (client_mode) {
+        camex_client_install_routes();
     }
 
     camex_run();

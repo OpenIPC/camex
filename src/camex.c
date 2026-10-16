@@ -1453,6 +1453,15 @@ int camex_client_reconfig_pending(void)
     return client_reconfig_pending;
 }
 
+void camex_client_install_routes(void)
+{
+    if (client_set_routes(&current_config, 1) != 0) {
+        log_message(LOG_WARNING, "Not all routes are installed: the next "
+                    "handshake tries again");
+        client_reconfig_pending = 1;
+    }
+}
+
 static int client_config_same(const camex_config_t *a,
                               const camex_config_t *b)
 {

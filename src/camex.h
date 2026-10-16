@@ -85,6 +85,9 @@ int camex_client_reconfigure(const camex_config_t *next);
 /* 1 while the tunnel does not match the last CONFIG (a failed route or
  * reopen): the next CONFIG is applied even if it has not changed */
 int camex_client_reconfig_pending(void);
+/* Client start: install the CONFIG routes on the host (if camex manages
+ * them); a route that fails is retried with the next handshake */
+void camex_client_install_routes(void);
 int camex_del_route(const char *cidr, const char *gateway);
 
 /* Derive client ID from default gateway MAC */
