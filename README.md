@@ -65,8 +65,8 @@ sudo ./camex --mode client \
 
 The app connects in auto mode: the server sends the address, routes and MTU.
 
-| Main screen | Settings |
-|---|---|
+| Main screen                                  | Settings                                      |
+|----------------------------------------------|-----------------------------------------------|
 | ![Main screen](docs/images/android-main.png) | ![Settings](docs/images/android-settings.png) |
 
 - **Server host / port** — the camex server.
@@ -83,10 +83,10 @@ The app connects in auto mode: the server sends the address, routes and MTU.
 
 | Platform | Size (stripped) | UPX compressed |
 |----------|:---------------:|:--------------:|
-| x86_64   | _see CI_ | _see CI_ |
-| armhf    | _see CI_ | _see CI_ |
-| aarch64  | _see CI_ | _see CI_ |
-| mipsel   | _see CI_ | _see CI_ |
+| x86_64   | _see CI_        | _see CI_       |
+| armhf    | _see CI_        | _see CI_       |
+| aarch64  | _see CI_        | _see CI_       |
+| mipsel   | _see CI_        | _see CI_       |
 
 > Sizes are updated by CI on each release. See the latest
 > [build artifacts](https://github.com/OpenIPC/camex/actions)
@@ -94,12 +94,12 @@ The app connects in auto mode: the server sends the address, routes and MTU.
 
 ## Requirements
 
-| Requirement | Details |
-|---|---|
-| Linux kernel | 3.10 or later |
-| TUN support | `CONFIG_TUN=y` (`/dev/net/tun`) **or** `camex.ko` loaded (`/dev/camex`) |
-| Privileges | `root` or `CAP_NET_ADMIN` + `CAP_NET_RAW` (non-root with `camex.ko`: also access to `/dev/camex`, see [Kernel Module](#kernel-module)) |
-| C compiler | C99-compatible (GCC or Clang) |
+| Requirement  | Details                                                                                                                                |
+|--------------|----------------------------------------------------------------------------------------------------------------------------------------|
+| Linux kernel | 3.10 or later                                                                                                                          |
+| TUN support  | `CONFIG_TUN=y` (`/dev/net/tun`) **or** `camex.ko` loaded (`/dev/camex`)                                                                |
+| Privileges   | `root` or `CAP_NET_ADMIN` + `CAP_NET_RAW` (non-root with `camex.ko`: also access to `/dev/camex`, see [Kernel Module](#kernel-module)) |
+| C compiler   | C99-compatible (GCC or Clang)                                                                                                          |
 
 ## Build
 
@@ -154,23 +154,23 @@ Override auto-detection with `--tun-dev <path>`:
 sudo ./camex --mode client ... --tun-dev /dev/camex
 ```
 
-| Feature | tun.ko (`/dev/net/tun`) | camex.ko (`/dev/camex`) |
-|---|---|---|
-| Interface name | dynamic (`tun0`, `tun1`, …) | always `camex` |
-| Requires TUNSETIFF ioctl | Yes | No |
-| External dependency | `CONFIG_TUN=y` or `tun.ko` loaded | `camex.ko` loaded |
-| IPv4 | Yes | Yes |
-| IPv6 | Yes | No (IPv4 only) |
-| Multiple instances | Yes | No (one) |
-| Bare IPv4 packets | Yes (with `IFF_NO_PI`) | Yes |
+| Feature                  | tun.ko (`/dev/net/tun`)           | camex.ko (`/dev/camex`) |
+|--------------------------|-----------------------------------|-------------------------|
+| Interface name           | dynamic (`tun0`, `tun1`, …)       | always `camex`          |
+| Requires TUNSETIFF ioctl | Yes                               | No                      |
+| External dependency      | `CONFIG_TUN=y` or `tun.ko` loaded | `camex.ko` loaded       |
+| IPv4                     | Yes                               | Yes                     |
+| IPv6                     | Yes                               | No (IPv4 only)          |
+| Multiple instances       | Yes                               | No (one)                |
+| Bare IPv4 packets        | Yes (with `IFF_NO_PI`)            | Yes                     |
 
 ## Userspace App
 
 ### Modes
 
-| Mode | Description |
-|---|---|
-| `client` | Creates a TUN interface and connects to the server |
+| Mode     | Description                                          |
+|----------|------------------------------------------------------|
+| `client` | Creates a TUN interface and connects to the server   |
 | `server` | Listens for many clients and forwards tunnel packets |
 
 ### Usage
@@ -227,40 +227,40 @@ sudo ./camex \
 
 ### Options
 
-| Option | Short | Description |
-|---|---|---|
-| `--mode <mode>` | `-M` | Operation mode: `client` or `server` (required) |
-| `--auto` | `-a` | Fetch tunnel parameters from the server |
-| `--name <id>` | `-n` | Client ID (auto mode; optional in manual mode) |
-| `--local-cidr <cidr>` | `-l` | Tunnel address in `address/prefix` form |
-| `--gateway-ip <addr>` | `-g` | Client gateway inside the tunnel |
-| `--server-host <addr>` | `-s` | Server hostname or IP for client mode |
-| `--port <port>` | `-p` | Server port for client or listen port for server |
-| `--bind-ip <addr>` | `-b` | Server bind address (default: 0.0.0.0) |
-| `--config <path>` | `-f` | Server config file path |
-| `--route-cidr <cidr>` | `-c` | Extra route to install on the client; repeatable |
-| `--mtu <size>` | `-t` | Tunnel MTU, 576–9000 (default: 1500) |
-| `--psk <key>` | `-k` | Pre-shared key: `hex:<64 hex digits>`, `base64:<44 chars>`, or a passphrase (stretched with Argon2id). Required on clients |
-| `--server-pubkey <key>` | | Client: the server's public key (from `--genkey`) |
-| `--server-key-file <path>` | | Server: file with its private key (or `server_key=` in `[server]`) |
-| `--genkey` | | Print a new server key pair (`server_key=`, `public_key=`) and exit |
-| `--encrypt` | `-e` | Accepted for compatibility; protocol v2 is always encrypted |
-| `--tun-dev <path>` | `-T` | TUN device path (default: auto-detect `/dev/net/tun` then `/dev/camex`) |
-| `--pid-file <path>` | `-P` | Write PID to file on startup |
-| `--bind-dev <iface>` | `-d` | Bind socket to a specific network interface (`SO_BINDTODEVICE`) |
-| `--transport <proto>` | `-R` | Transport protocol: `udp` (default) or `tcp` |
-| `--version` | `-v` | Print version and exit |
-| `--help` | `-h` | Print usage and exit |
+| Option                     | Short | Description                                                                                                                |
+|----------------------------|-------|----------------------------------------------------------------------------------------------------------------------------|
+| `--mode <mode>`            | `-M`  | Operation mode: `client` or `server` (required)                                                                            |
+| `--auto`                   | `-a`  | Fetch tunnel parameters from the server                                                                                    |
+| `--name <id>`              | `-n`  | Client ID (auto mode; optional in manual mode)                                                                             |
+| `--local-cidr <cidr>`      | `-l`  | Tunnel address in `address/prefix` form                                                                                    |
+| `--gateway-ip <addr>`      | `-g`  | Client gateway inside the tunnel                                                                                           |
+| `--server-host <addr>`     | `-s`  | Server hostname or IP for client mode                                                                                      |
+| `--port <port>`            | `-p`  | Server port for client or listen port for server                                                                           |
+| `--bind-ip <addr>`         | `-b`  | Server bind address (default: 0.0.0.0)                                                                                     |
+| `--config <path>`          | `-f`  | Server config file path                                                                                                    |
+| `--route-cidr <cidr>`      | `-c`  | Extra route to install on the client; repeatable                                                                           |
+| `--mtu <size>`             | `-t`  | Tunnel MTU, 576–9000 (default: 1500)                                                                                       |
+| `--psk <key>`              | `-k`  | Pre-shared key: `hex:<64 hex digits>`, `base64:<44 chars>`, or a passphrase (stretched with Argon2id). Required on clients |
+| `--server-pubkey <key>`    |       | Client: the server's public key (from `--genkey`)                                                                          |
+| `--server-key-file <path>` |       | Server: file with its private key (or `server_key=` in `[server]`)                                                         |
+| `--genkey`                 |       | Print a new server key pair (`server_key=`, `public_key=`) and exit                                                        |
+| `--encrypt`                | `-e`  | Accepted for compatibility; protocol v2 is always encrypted                                                                |
+| `--tun-dev <path>`         | `-T`  | TUN device path (default: auto-detect `/dev/net/tun` then `/dev/camex`)                                                    |
+| `--pid-file <path>`        | `-P`  | Write PID to file on startup                                                                                               |
+| `--bind-dev <iface>`       | `-d`  | Bind socket to a specific network interface (`SO_BINDTODEVICE`)                                                            |
+| `--transport <proto>`      | `-R`  | Transport protocol: `udp` (default) or `tcp`                                                                               |
+| `--version`                | `-v`  | Print version and exit                                                                                                     |
+| `--help`                   | `-h`  | Print usage and exit                                                                                                       |
 
 ## Examples
 
 Ready-to-use configuration files are available in the `examples/` directory:
 
-| File | Description |
-|------|-------------|
-| `examples/camex.conf` | Server-side configuration file format reference |
-| `examples/camex.service` | systemd service unit for camex daemon |
-| `examples/README.md` | Usage instructions for all examples |
+| File                     | Description                                     |
+|--------------------------|-------------------------------------------------|
+| `examples/camex.conf`    | Server-side configuration file format reference |
+| `examples/camex.service` | systemd service unit for camex daemon           |
+| `examples/README.md`     | Usage instructions for all examples             |
 
 ## Server Configuration
 
@@ -479,16 +479,16 @@ maintenance.
 
 ### Kernel Compatibility
 
-| Range          | Status | Adapted API                                              |
-|----------------|--------|----------------------------------------------------------|
-| 3.10 – 3.16    | ✅     | `alloc_netdev(sz, name, setup)` — 3 arguments            |
-| 3.17 – 3.19    | ✅     | `alloc_netdev` + `NET_NAME_PREDICTABLE` — 4 arguments    |
-| 4.0  – 4.9     | ✅     | `min_mtu`/`max_mtu` fields absent from `net_device`      |
-| 4.10 – 4.15    | ✅     | `min_mtu`/`max_mtu` fields introduced                    |
-| 4.16 – 4.19    | ✅     | `poll` returns `__poll_t`; `EPOLL*` constants            |
-| 4.20+          | ✅     | `skb_put()` returns `void*` instead of `unsigned char*`  |
-| 5.x            | ✅     | no changes required                                      |
-| 6.0 – 6.6 LTS  | ✅     | no changes required                                      |
+| Range         | Status | Adapted API                                             |
+|---------------|--------|---------------------------------------------------------|
+| 3.10 – 3.16   | ✅     | `alloc_netdev(sz, name, setup)` — 3 arguments           |
+| 3.17 – 3.19   | ✅     | `alloc_netdev` + `NET_NAME_PREDICTABLE` — 4 arguments   |
+| 4.0  – 4.9    | ✅     | `min_mtu`/`max_mtu` fields absent from `net_device`     |
+| 4.10 – 4.15   | ✅     | `min_mtu`/`max_mtu` fields introduced                   |
+| 4.16 – 4.19   | ✅     | `poll` returns `__poll_t`; `EPOLL*` constants           |
+| 4.20+         | ✅     | `skb_put()` returns `void*` instead of `unsigned char*` |
+| 5.x           | ✅     | no changes required                                     |
+| 6.0 – 6.6 LTS | ✅     | no changes required                                     |
 
 > **Note**: Kernels 3.0 – 3.9 are theoretically covered by the same
 > shims but are extremely rare in practice (RHEL 6, early embedded).
@@ -557,27 +557,27 @@ sudo rmmod camex
 
 ### Character Device API
 
-| Operation               | Behaviour                                                         |
-|-------------------------|-------------------------------------------------------------------|
-| `open()`                | Needs `CAP_NET_ADMIN`; one fd at a time, `EBUSY` otherwise        |
-| `read()`                | Returns one IPv4 packet. Blocks when queue is empty               |
-| `read()` + `O_NONBLOCK` | Returns `EAGAIN` when queue is empty                              |
-| `write()`               | Injects one IPv4 packet into the stack. Minimum 20 bytes          |
-| `write()` non-IPv4      | Returns `EINVAL`                                                  |
-| `poll()`                | `POLLIN` when a packet is available; `POLLOUT` always             |
-| `close()`               | Flushes the queue, clears carrier, releases the slot              |
+| Operation               | Behaviour                                                  |
+|-------------------------|------------------------------------------------------------|
+| `open()`                | Needs `CAP_NET_ADMIN`; one fd at a time, `EBUSY` otherwise |
+| `read()`                | Returns one IPv4 packet. Blocks when queue is empty        |
+| `read()` + `O_NONBLOCK` | Returns `EAGAIN` when queue is empty                       |
+| `write()`               | Injects one IPv4 packet into the stack. Minimum 20 bytes   |
+| `write()` non-IPv4      | Returns `EINVAL`                                           |
+| `poll()`                | `POLLIN` when a packet is available; `POLLOUT` always      |
+| `close()`               | Flushes the queue, clears carrier, releases the slot       |
 
 #### Error codes
 
-| Code       | Cause                                                        |
-|------------|--------------------------------------------------------------|
-| `EPERM`    | `open()` without `CAP_NET_ADMIN`                             |
-| `EBUSY`    | `/dev/camex` is already open by another process              |
-| `ENODEV`   | Module is being unloaded                                     |
-| `EMSGSIZE` | `read()` buffer smaller than packet length (packet dropped)  |
-| `EINVAL`   | `write()`: size < 20 or > 65535 bytes, or not IPv4           |
-| `EAGAIN`   | `read()` with `O_NONBLOCK`, queue is empty                   |
-| `ENOMEM`   | Failed to allocate an `skb`                                  |
+| Code       | Cause                                                       |
+|------------|-------------------------------------------------------------|
+| `EPERM`    | `open()` without `CAP_NET_ADMIN`                            |
+| `EBUSY`    | `/dev/camex` is already open by another process             |
+| `ENODEV`   | Module is being unloaded                                    |
+| `EMSGSIZE` | `read()` buffer smaller than packet length (packet dropped) |
+| `EINVAL`   | `write()`: size < 20 or > 65535 bytes, or not IPv4          |
+| `EAGAIN`   | `read()` with `O_NONBLOCK`, queue is empty                  |
+| `ENOMEM`   | Failed to allocate an `skb`                                 |
 
 ### Limitations
 
@@ -645,21 +645,21 @@ sudo rmmod camex
 
 ### Comparison with `tun.ko`
 
-| Feature                           | camex              | tun.ko               |
-|-----------------------------------|--------------------|----------------------|
-| External module dependency        | No                 | Requires tun.ko      |
-| IPv4                              | Yes                | Yes                  |
-| IPv6                              | No (intentional)   | Yes                  |
-| TAP (L2)                          | No                 | Yes                  |
-| Multiple device instances         | No (one)           | Yes (dynamic)        |
-| Multiple open file descriptors    | No (one)           | Yes                  |
-| ioctl TUNSETIFF / TUNGETIFF       | No                 | Yes                  |
-| Persistent device                 | No                 | Yes                  |
-| poll / select / epoll             | Yes                | Yes                  |
-| O_NONBLOCK                        | Yes                | Yes                  |
-| Statistics (`ip -s link`)         | Yes                | Yes                  |
-| Kernel 3.x support                | Yes                | Yes                  |
-| Code size                         | ~490 lines         | ~3500 lines          |
+| Feature                        | camex            | tun.ko          |
+|--------------------------------|------------------|-----------------|
+| External module dependency     | No               | Requires tun.ko |
+| IPv4                           | Yes              | Yes             |
+| IPv6                           | No (intentional) | Yes             |
+| TAP (L2)                       | No               | Yes             |
+| Multiple device instances      | No (one)         | Yes (dynamic)   |
+| Multiple open file descriptors | No (one)         | Yes             |
+| ioctl TUNSETIFF / TUNGETIFF    | No               | Yes             |
+| Persistent device              | No               | Yes             |
+| poll / select / epoll          | Yes              | Yes             |
+| O_NONBLOCK                     | Yes              | Yes             |
+| Statistics (`ip -s link`)      | Yes              | Yes             |
+| Kernel 3.x support             | Yes              | Yes             |
+| Code size                      | ~490 lines       | ~3500 lines     |
 
 ### Internal Specifics
 
