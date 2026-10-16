@@ -131,14 +131,16 @@ static void client_check_config_change(const uint8_t *payload, size_t len)
     if (proto_parse_config(message, &probe) != 0) {
         return;
     }
-    if (strcmp(probe.local_cidr, current_config.local_cidr) != 0 ||
+    if (camex_client_reconfig_pending() ||
+        strcmp(probe.local_cidr, current_config.local_cidr) != 0 ||
         strcmp(probe.gateway_ip, current_config.gateway_ip) != 0 ||
         probe.mtu != current_config.mtu ||
         probe.route_count != current_config.route_count ||
         memcmp(probe.route_cidrs, current_config.route_cidrs,
                sizeof(probe.route_cidrs)) != 0) {
         /* Applied to the live tunnel (#49); on failure the old settings
-         * stay and the next handshake tries again */
+         * stay and the next handshake tries again (a changed CONFIG, or
+         * camex_client_reconfig_pending()) */
         (void)camex_client_reconfigure(&probe);
     }
 }

@@ -8,7 +8,9 @@
 # profile. The profile is changed and the server reloaded (SIGHUP); with the
 # next handshake (a rekey every 5 s here, CAMEX_REKEY_AFTER) the client
 # applies the new CONFIG to its live tunnel: new address, MTU and route,
-# the old route gone, traffic on the new address. Over UDP and TCP.
+# the old route gone, traffic on the new address. Over UDP and TCP. A
+# tunnel fd from CAMEX_TUN_FD cannot be reopened: the change is refused
+# and the fd stays open.
 #
 # Usage: ./test-e2e-reconfig.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
@@ -113,6 +115,58 @@ for transport in ${TRANSPORTS:-udp tcp}; do
     check $? "$transport: the client was not restarted"
 done
 
+# A TUN fd from CAMEX_TUN_FD (host application without a provider) cannot
+# be reopened: the change is refused with a log line asking for a restart,
+# and the fd stays open. perl (in the base image) opens the device, sets it up as the host
+# application would and passes the fd to camex.
+echo "== udp: CAMEX_TUN_FD keeps its tunnel when the profile changes"
+docker rm -f "$SRV" "$CLI" >/dev/null 2>&1
+docker create --name "$SRV" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    "$IMAGE" --mode server --port 5800 --transport udp \
+    --local-cidr 10.200.0.1/24 $SERVER_KEY_ARGS --psk "$PSK" \
+    --config /etc/camex.conf >/dev/null
+conf 50 192.168.150.0/24 1500
+docker start "$SRV" >/dev/null
+sleep 1
+docker run -d --name "$CLI" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    -e CAMEX_REKEY_AFTER=5 --entrypoint /usr/bin/perl \
+    "$IMAGE" -e '
+        mkdir "/dev/net"; system("mknod /dev/net/tun c 10 200") unless -e "/dev/net/tun";
+        $^F = 255;   # keep the fd across exec
+        open(my $t, "+<", "/dev/net/tun") or die "tun: $!";
+        my $ifr = pack("a16 s x22", "camex0", 0x1001);   # IFF_TUN | IFF_NO_PI
+        ioctl($t, 0x400454ca, $ifr) or die "TUNSETIFF: $!";
+        system("ip addr add 10.200.0.50/24 dev camex0 && ip link set camex0 up") == 0 or die "ip";
+        $ENV{CAMEX_TUN_FD} = fileno($t);
+        exec("/usr/local/bin/camex", @ARGV) or die "exec: $!";' -- \
+    --mode client --auto --name CAM1 --transport udp \
+    --server-host "$SRV" --port 5800 \
+    --server-pubkey "$SERVER_PUBKEY" --psk "$PSK" >/dev/null
+up=1
+for _ in $(seq 1 20); do
+    docker exec "$SRV" ping -c1 -W1 10.200.0.50 >/dev/null 2>&1 && { up=0; break; }
+    sleep 1
+done
+check $up "fd: the client is up at 10.200.0.50"
+conf 60 192.168.160.0/24 1400
+docker kill -s HUP "$SRV" >/dev/null
+seen=1
+for _ in $(seq 1 30); do
+    docker logs "$CLI" 2>&1 | grep -q "CAMEX_TUN_FD cannot be reopened" && { seen=0; break; }
+    sleep 1
+done
+check $seen "fd: the client refused to reopen the CAMEX_TUN_FD tunnel"
+# The server has moved CAM1 to the new address, so traffic waits for a
+# restart; the fd must stay open, not closed and left dangling. camex is
+# the only holder of the fd, and a non-persistent TUN device goes away
+# with its last fd.
+docker exec "$CLI" ip link show camex0 >/dev/null 2>&1
+check $? "fd: the client still holds the CAMEX_TUN_FD descriptor (camex0 exists)"
+! docker logs "$CLI" 2>&1 | grep -q "Applying the new tunnel configuration"
+check $? "fd: the tunnel was not closed"
+[ "$(docker inspect -f '{{.RestartCount}} {{.State.Running}}' "$CLI")" = "0 true" ]
+check $? "fd: the client is still running"
+
 if [ "$FAILS" != 0 ]; then
     echo "--- client log (tail) ---"
     docker logs "$CLI" 2>&1 | tail -15
@@ -121,4 +175,4 @@ if [ "$FAILS" != 0 ]; then
     echo "FAIL: $FAILS check(s) failed"
     exit 2
 fi
-echo "PASS: a changed profile reaches running clients over UDP and TCP"
+echo "PASS: a changed profile reaches running clients over UDP and TCP; a CAMEX_TUN_FD tunnel is kept"

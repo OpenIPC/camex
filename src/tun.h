@@ -60,6 +60,10 @@ int tun_open_provided(const char *local_ip, const char *netmask, int mtu,
  * are then managed by the host application, not by camex */
 int tun_is_external(void);
 
+/* 1 if the TUN fd came from CAMEX_TUN_FD: closed, it cannot be opened
+ * again, so the tunnel cannot be reopened with new settings */
+int tun_is_inherited(void);
+
 /* Close TUN device */
 void tun_close_device(void);
 

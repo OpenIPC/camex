@@ -1422,12 +1422,14 @@ static int client_open_tunnel(const camex_config_t *cfg)
     return packet_open(&open_params);
 }
 
-static void client_set_routes(const camex_config_t *cfg, int add)
+/* Returns the number of routes that failed */
+static int client_set_routes(const camex_config_t *cfg, int add)
 {
     size_t i;
+    int failed = 0;
 
     if (!packet_host_routes() || cfg->gateway_ip[0] == '\0') {
-        return;
+        return 0;
     }
     for (i = 0; i < cfg->route_count; ++i) {
         if ((add ? camex_add_route(cfg->route_cidrs[i], cfg->gateway_ip)
@@ -1435,13 +1437,36 @@ static void client_set_routes(const camex_config_t *cfg, int add)
             != 0) {
             log_message(LOG_WARNING, "Route %s failed for %s",
                         add ? "setup" : "removal", cfg->route_cidrs[i]);
+            ++failed;
         }
     }
+    return failed;
+}
+
+/* Set while the live tunnel does not match current_config (a route that
+ * failed, or no tunnel at all): the next handshake applies its CONFIG
+ * even when it equals current_config */
+static int client_reconfig_pending = 0;
+
+int camex_client_reconfig_pending(void)
+{
+    return client_reconfig_pending;
+}
+
+static int client_config_same(const camex_config_t *a,
+                              const camex_config_t *b)
+{
+    return strcmp(a->local_cidr, b->local_cidr) == 0 &&
+           strcmp(a->gateway_ip, b->gateway_ip) == 0 &&
+           a->mtu == b->mtu && a->route_count == b->route_count &&
+           memcmp(a->route_cidrs, b->route_cidrs,
+                  sizeof(a->route_cidrs)) == 0;
 }
 
 int camex_client_reconfigure(const camex_config_t *next)
 {
     camex_config_t old = current_config;
+    int was_open = packet_fd() >= 0;
     char ip[16];
     char mask[16];
 
@@ -1449,22 +1474,43 @@ int camex_client_reconfigure(const camex_config_t *next)
                          sizeof(mask)) != 0) {
         return -1;
     }
+    /* A CAMEX_TUN_FD descriptor cannot be opened again once closed: the
+     * host application has to restart camex with a new one */
+    if (was_open && packet_backend_get() == &camex_tun_backend &&
+        tun_is_inherited()) {
+        log_message(LOG_WARNING, "The server sent a new tunnel "
+                    "configuration, but the TUN fd from CAMEX_TUN_FD cannot "
+                    "be reopened: restart camex to apply it");
+        return -1;
+    }
+    /* Same settings on a live tunnel: only the routes that failed are
+     * missing (route replace is idempotent) */
+    if (was_open && client_config_same(&old, next)) {
+        client_reconfig_pending = client_set_routes(&old, 1) != 0;
+        return client_reconfig_pending ? -1 : 0;
+    }
     log_message(LOG_NOTICE, "Applying the new tunnel configuration from the "
                 "server: CIDR=%s GW=%s MTU=%d routes=%u", next->local_cidr,
                 next->gateway_ip, next->mtu, (unsigned)next->route_count);
 
-    /* Routes go with the old device: remove them while it exists */
-    client_set_routes(&old, 0);
+    /* Routes go with the old device: remove them while it exists. A
+     * route that cannot be removed stays (logged): it points at the old
+     * gateway, and the new routes are installed anyway */
+    if (was_open) {
+        (void)client_set_routes(&old, 0);
+    }
     packet_close();
     if (client_open_tunnel(next) != 0) {
         log_message(LOG_ERR, "Cannot reopen the tunnel with the new "
                     "configuration: keeping the old one");
         if (client_open_tunnel(&old) != 0) {
             log_message(LOG_ERR, "Cannot reopen the tunnel with the old "
-                        "configuration either");
+                        "configuration either: the next handshake tries "
+                        "again");
+            client_reconfig_pending = 1;
             return -1;
         }
-        client_set_routes(&old, 1);
+        client_reconfig_pending = client_set_routes(&old, 1) != 0;
         return -1;
     }
 
@@ -1478,7 +1524,13 @@ int camex_client_reconfigure(const camex_config_t *next)
     current_config.route_count = next->route_count;
     memcpy(current_config.route_cidrs, next->route_cidrs,
            sizeof(current_config.route_cidrs));
-    client_set_routes(&current_config, 1);
+    if (client_set_routes(&current_config, 1) != 0) {
+        log_message(LOG_WARNING, "Not all routes are installed: the next "
+                    "handshake tries again");
+        client_reconfig_pending = 1;
+        return -1;
+    }
+    client_reconfig_pending = 0;
     return 0;
 }
 

@@ -59,6 +59,7 @@ int tun_fd = -1;
 #endif
 char tun_name[IFNAMSIZ];
 static int tun_from_env = 0; /* 1 = fd was passed via CAMEX_TUN_FD */
+static int tun_inherited = 0; /* 1 = that fd came from CAMEX_TUN_FD itself */
 
 /* Accept a TUN fd from environment variable CAMEX_TUN_FD (Android VpnService).
  * Returns the accepted fd number or -1 if not set / invalid. */
@@ -80,6 +81,7 @@ int tun_accept_fd(void)
 
     tun_fd = (int)fd;
     tun_from_env = 1;
+    tun_inherited = 1;
     /* The main loop drains the TUN fd until EAGAIN: it must not block */
     if (set_fd_nonblocking(tun_fd) != 0) {
         print_errno_message(LOG_WARNING, "fcntl(O_NONBLOCK) on CAMEX_TUN_FD");
@@ -135,6 +137,11 @@ int tun_open_provided(const char *local_ip, const char *netmask, int mtu,
 int tun_is_external(void)
 {
     return tun_from_env;
+}
+
+int tun_is_inherited(void)
+{
+    return tun_inherited;
 }
 
 #if !defined(_WIN32)
@@ -213,20 +220,13 @@ static int tun_open_macos(void)
 }
 
 /* macOS: configure interface IP/MTU and bring it up */
-static int tun_configure_macos(int fd)
+static int tun_configure_macos(int fd, const char *local_ip,
+                               const char *netmask, int mtu)
 {
     struct ifreq cfg;
     struct sockaddr_in *sin;
-    char local_ip[16];
-    char netmask[16];
     int sock;
     int ret = -1;
-
-    if (parse_local_cidr(current_config.local_cidr, local_ip,
-                         sizeof(local_ip), netmask,
-                         sizeof(netmask)) != 0) {
-        return -1;
-    }
 
     sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
@@ -253,7 +253,7 @@ static int tun_configure_macos(int fd)
     }
 
     copy_ifreq_name(&cfg, tun_name);
-    cfg.ifr_mtu = current_config.mtu;
+    cfg.ifr_mtu = mtu;
     if (ioctl(sock, SIOCSIFMTU, &cfg) < 0) {
         print_errno_message(LOG_WARNING, "ioctl(SIOCSIFMTU)");
     }
@@ -515,7 +515,7 @@ int tun_create_device(const char *local_ip, const char *netmask,
     }
 
     /* Configure IP/MTU/UP */
-    if (tun_configure_macos(fd) != 0) {
+    if (tun_configure_macos(fd, local_ip, netmask, mtu) != 0) {
         close_tun_creation(-1, fd);
         return -1;
     }
@@ -655,6 +655,7 @@ int tun_create_device(const char *local_ip, const char *netmask,
 void tun_close_device(void)
 {
     tun_from_env = 0;   /* the next run may open a different backend */
+    tun_inherited = 0;
 #if defined(_WIN32)
     /* Stop WinTUN reader thread */
     g_wintun_running = 0;
