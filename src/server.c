@@ -164,6 +164,23 @@ void server_drop_entry(server_client_t *entry)
     entry->tcp_fd = -1;
 }
 
+/* Seconds of silence before a client expires: CAMEX_CLIENT_TIMEOUT; the
+ * environment variable CAMEX_CLIENT_TIMEOUT (5..120) shortens it, for
+ * tests */
+static double server_client_timeout(void)
+{
+    static int value = 0;
+
+    if (value == 0) {
+        const char *env = getenv("CAMEX_CLIENT_TIMEOUT");
+        int v = env != NULL ? atoi(env) : 0;
+
+        value = (v >= 5 && v <= CAMEX_CLIENT_TIMEOUT) ? v
+                                                      : CAMEX_CLIENT_TIMEOUT;
+    }
+    return (double)value;
+}
+
 void server_expire_clients(void)
 {
     static time_t last_expire_check = 0;
@@ -195,7 +212,7 @@ void server_expire_clients(void)
         if (preauth ? difftime(now, c->connected_at) >
                           (double)CAMEX_TCP_PREAUTH_TIMEOUT
                     : difftime(now, c->last_seen) >
-                          (double)CAMEX_CLIENT_TIMEOUT) {
+                          server_client_timeout()) {
             char ipbuf[INET_ADDRSTRLEN];
             struct in_addr addr;
 
@@ -867,7 +884,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         if (owner != NULL && owner->cur.valid && owner->last_data != 0 &&
             memcmp(owner->psk_key, used_key, 32) == 0 &&
             difftime(g_now, owner->last_data) <=
-                (double)CAMEX_CLIENT_TIMEOUT &&
+                server_client_timeout() &&
             v2_timestamp_cmp(payload, owner->hs_ts) <= 0) {
             log_peer(LOG_WARNING, "Dropped handshake from %s (%s): replayed "
                      "or out-of-date timestamp", peer,

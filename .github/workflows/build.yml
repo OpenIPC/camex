@@ -114,6 +114,10 @@ jobs:
         run: ./docker/test-e2e-reconfig.sh
         if: matrix.platform.name == 'x86_64'
 
+      - name: E2E test (malformed CONFIG from a fake server, issue #12)
+        run: ./docker/test-e2e-bad-config.sh
+        if: matrix.platform.name == 'x86_64'
+
       - name: Build cross
         run: |
           make clean

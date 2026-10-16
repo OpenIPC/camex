@@ -85,6 +85,22 @@ int main(void)
     expect("CAMEX CONFIG LOCAL_CIDR=10.200.0.5/24 GATEWAY_IP=10.200.0.1 MTU=99999",
            0, "MTU out of range");
 
+    /* A CONFIG for another client ID is rejected */
+    {
+        char buf[CAMEX_CONTROL_MAX];
+
+        memset(&cfg, 0, sizeof(cfg));
+        snprintf(cfg.client_id, sizeof(cfg.client_id), "cam1");
+        snprintf(buf, sizeof(buf), "%s",
+                 "CAMEX CONFIG CLIENT_ID=other LOCAL_CIDR=10.200.0.5/24 "
+                 "GATEWAY_IP=10.200.0.1");
+        if (proto_parse_config(buf, &cfg) == 0 ||
+            strcmp(cfg.client_id, "cam1") != 0 || cfg.local_cidr[0] != '\0') {
+            fprintf(stderr, "FAIL: a CONFIG for another client was applied\n");
+            ++failures;
+        }
+    }
+
     /* A rejected CONFIG leaves the client ID unchanged */
     {
         char buf[CAMEX_CONTROL_MAX];

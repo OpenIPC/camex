@@ -16,6 +16,8 @@
 #    configuration, an unlisted one gets nothing.
 # 3. A reload that switches to allow_unknown_clients=no ends the sessions
 #    of unlisted auto clients.
+# 4. A client that goes silent expires (CAMEX_CLIENT_TIMEOUT=5 here) and its
+#    address is handed out again; while it is live, nobody else gets it.
 #
 # Usage: ./test-e2e-auto-pool.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
@@ -130,6 +132,31 @@ docker kill -s HUP "$P-srv3" >/dev/null
 sleep 2
 docker logs "$P-srv3" 2>&1 | grep -q "Ended session of client GUEST"
 check $? "after the reload to \"no\" the unlisted client's session ends"
+
+echo "== 4. an expired client's address is handed out again"
+# CAMEX_CLIENT_TIMEOUT=5 (a test setting; normally 120 s) expires clients
+# that are silent for 5 s; "auto:ID@IP" asks for that address
+docker run -d --name "$P-srv4" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    -e CAMEX_CLIENT_TIMEOUT=5 \
+    "$IMAGE" --mode server --port 5800 --local-cidr 10.200.0.1/24 \
+    $SERVER_KEY_ARGS --psk "$PSK" >/dev/null
+sleep 1
+atk "$P-srv4" OLD > "$BUILD_CTX/old.txt"
+grep -q "^OLD 10.200.0.2/24$" "$BUILD_CTX/old.txt"
+check $? "the first client gets 10.200.0.2"
+atk "$P-srv4" NEW@10.200.0.2 > "$BUILD_CTX/new.txt"
+grep -q "^NEW@10.200.0.2 10.200.0.[0-9]*/24$" "$BUILD_CTX/new.txt" &&
+    ! grep -q " 10.200.0.2/24$" "$BUILD_CTX/new.txt"
+check $? "while it is live, another client asking for .2 gets another address ($(cut -d' ' -f2 "$BUILD_CTX/new.txt"))"
+expired=1
+for _ in $(seq 1 15); do
+    docker logs "$P-srv4" 2>&1 | grep -q "Expired client 10.200.0.2$" && { expired=0; break; }
+    sleep 1
+done
+check $expired "the silent client expires"
+atk "$P-srv4" LATER@10.200.0.2 > "$BUILD_CTX/later.txt"
+grep -q "^LATER@10.200.0.2 10.200.0.2/24$" "$BUILD_CTX/later.txt"
+check $? "after the expiry .2 is handed out again ($(cut -d' ' -f2 "$BUILD_CTX/later.txt"))"
 
 if [ "$FAILS" != 0 ]; then
     echo "--- server 1 log (tail) ---"
