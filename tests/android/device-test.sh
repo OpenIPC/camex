@@ -13,6 +13,8 @@
 #     host bits set is installed as its network), and the app itself is
 #     excluded from it (#18)
 #   - the server reaches the device through the tunnel (ping)
+#   - a changed profile moves the VPN to the new address, MTU and route
+#     without restarting the app (#49)
 #   - stopping the service stops camex
 #
 # Usage: tests/android/device-test.sh <adb-serial> <camex-android-debug.apk>
@@ -182,13 +184,35 @@ check $? "server reaches the device through the tunnel"
 $ADB logcat -d -s camex:* | grep -q "TUN backend: fd .* from provider"
 check $? "camex used the TUN provider (logcat)"
 
+echo "== changed profile (#49): new address, MTU and route without a restart"
+sed -e 's#10.200.0.7/24#10.200.0.8/24#' -e 's#mtu=1400#mtu=1300#' \
+    -e 's#192.168.77.0/24#192.168.79.0/24#' "$CTX/etc-camex/camex.conf" > "$CTX/changed.conf"
+docker cp "$CTX/changed.conf" "$SRV:/etc/camex/camex.conf" >/dev/null
+# A restart drops the TCP connection: the app reconnects at once and gets
+# the new CONFIG with that handshake (otherwise with the next rekey)
+docker restart -t 1 "$SRV" >/dev/null
+moved=1
+for _ in $(seq 1 40); do
+    if $ADB shell ip addr 2>/dev/null | grep -q "10.200.0.8/24"; then moved=0; break; fi
+    sleep 1
+done
+check $moved "VPN interface moved to 10.200.0.8/24"
+IFACE=$($ADB shell ip -o addr | awk '/10.200.0.8\// { print $2; exit }')
+MTU=$($ADB shell cat /sys/class/net/"$IFACE"/mtu 2>/dev/null | tr -d '\r')
+[ "$MTU" = 1300 ]; check $? "VPN interface MTU is now 1300 (got ${MTU:-none})"
+RULES=$($ADB shell ip route show table all 2>/dev/null | grep " dev $IFACE" || true)
+echo "$RULES" | grep -q "192.168.79.0/24" && ! echo "$RULES" | grep -q "192.168.77.0/24"
+check $? "route 192.168.79.0/24 replaced 192.168.77.0/24"
+docker exec "$SRV" ping -c 5 -W 2 10.200.0.8 >/dev/null 2>&1
+check $? "server reaches the device at its new address"
+
 echo "== stop VPN"
 $ADB shell am start -W -n "$PKG/.MainActivity" >/dev/null
 sleep 1
 tap_text "Stop VPN" || true
 down=1
 for _ in $(seq 1 15); do
-    if ! $ADB shell ip addr 2>/dev/null | grep -q "10.200.0.7/24"; then down=0; break; fi
+    if ! $ADB shell ip addr 2>/dev/null | grep -q "10.200.0.[78]/24"; then down=0; break; fi
     sleep 1
 done
 check $down "VPN interface is gone after Stop"
