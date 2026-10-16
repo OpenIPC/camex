@@ -20,6 +20,11 @@
 # Without the keepalive interval capped at half the timeout it timed out
 # between probes and reconnected every few seconds.
 #
+# Scenario 4 (one-way loss): packets from the server are dropped at the
+# client (iptables) while the client's own packets still reach the server.
+# Sending works, nothing comes back: the client must still log "Connection
+# lost" and recover once the path is back.
+#
 # Scenario 2 runs right after scenario 1's reconnect: whether the server
 # answers keepalives must survive the reconnect, or silence detection
 # stays off until the next answered keepalive.
@@ -64,7 +69,7 @@ gen_server_key "$BUILD_CTX" "$CAMEX_BINARY" || { echo "cannot create a server ke
 cat > "$BUILD_CTX/Dockerfile" <<'EOF'
 FROM ubuntu:24.04
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
-        iputils-ping >/dev/null && rm -rf /var/lib/apt/lists/*
+        iputils-ping iptables >/dev/null && rm -rf /var/lib/apt/lists/*
 COPY camex /usr/local/bin/camex
 COPY server.key /etc/camex/server.key
 RUN printf '#!/bin/sh\nmkdir -p /dev/net\n[ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200\nexec /usr/local/bin/camex "$@"\n' \
@@ -128,6 +133,23 @@ docker unpause "$SRV" >/dev/null
 [ "$lost" = 1 ] || fail "client did not detect that the server stopped answering"
 echo "   client detected the lost server"
 wait_ping 60 || fail "client did not recover after the server came back"
+
+echo "== scenario 4: one-way loss (server -> client dropped, client -> server works)"
+seen=$(docker logs "$CLI" 2>&1 | grep -c "Connection lost" || true)
+docker exec "$CLI" iptables -I INPUT -p udp --sport 5800 -j DROP ||
+    fail "cannot add the iptables rule in the client container"
+lost=0
+for _ in $(seq 1 30); do
+    now=$(docker logs "$CLI" 2>&1 | grep -c "Connection lost" || true)
+    if [ "$now" -gt "$seen" ]; then
+        lost=1; break
+    fi
+    sleep 1
+done
+docker exec "$CLI" iptables -D INPUT -p udp --sport 5800 -j DROP
+[ "$lost" = 1 ] || fail "client did not notice that nothing came back from the server"
+echo "   client detected the one-way loss"
+wait_ping 60 || fail "client did not recover after the one-way loss ended"
 
 echo "== scenario 3: idle client, keepalive (10s) longer than the timeout (5s)"
 docker rm -f "$CLI" >/dev/null

@@ -13,6 +13,8 @@
 #     host bits set is installed as its network), and the app itself is
 #     excluded from it (#18)
 #   - the server reaches the device through the tunnel (ping)
+#   - a changed profile moves the VPN to the new address, MTU and route
+#     without restarting the app (#49)
 #   - stopping the service stops camex
 #
 # Usage: tests/android/device-test.sh <adb-serial> <camex-android-debug.apk>
@@ -20,6 +22,14 @@
 #   SERVER_HOST=<addr>          address of this host as seen from the device;
 #                               the app connects there directly (port 5800
 #                               is published on this host for the test)
+#   DEVTEST_SUBNET=<cidr>       subnet of the server's Docker network
+#                               (default 10.250.0.0/24)
+#
+# The server runs in its own Docker network, not in the default bridge:
+# that is 172.17.0.0/16, and a device whose address falls inside it (for
+# example 172.17.32.x behind another interface) gets no TCP answers, as
+# the container sends them to its own bridge instead of back through the
+# host.
 #
 # Without SERVER_HOST the app uses 127.0.0.1:5800 through `adb reverse`.
 # That only works until the VPN is up: Android then closes the sockets of
@@ -41,6 +51,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CAMEX_BINARY="${CAMEX_BINARY:-$REPO_DIR/camex}"
 PKG=org.openipc.camex
 SRV="camex-devtest-srv-$$"
+NET="camex-devtest-net-$$"
 CTX="$(mktemp -d)"
 FAILS=0
 ADB="adb -s $SERIAL"
@@ -57,6 +68,7 @@ cleanup() {
     fi
     $ADB reverse --remove tcp:5800 >/dev/null 2>&1 || true
     docker rm -f "$SRV" >/dev/null 2>&1 || true
+    docker network rm "$NET" >/dev/null 2>&1 || true
     rm -rf "$CTX"
 }
 trap cleanup EXIT INT TERM
@@ -88,7 +100,8 @@ EOF
 . "$REPO_DIR/docker/lib-keys.sh"
 gen_server_key "$CTX/etc-camex" "$CAMEX_BINARY" || { echo "cannot create a server key"; exit 1; }
 docker build -q -t camex:devtest "$CTX" >/dev/null
-docker create --name "$SRV" -p 5800:5800 --cap-add NET_ADMIN --cap-add MKNOD \
+docker network create --subnet "${DEVTEST_SUBNET:-10.250.0.0/24}" "$NET" >/dev/null
+docker create --name "$SRV" --network "$NET" -p 5800:5800 --cap-add NET_ADMIN --cap-add MKNOD \
     camex:devtest --mode server --port 5800 --transport tcp \
     --local-cidr 10.200.0.1/24 --psk devtest-key \
     --server-key-file /etc/camex/server.key \
@@ -182,13 +195,35 @@ check $? "server reaches the device through the tunnel"
 $ADB logcat -d -s camex:* | grep -q "TUN backend: fd .* from provider"
 check $? "camex used the TUN provider (logcat)"
 
+echo "== changed profile (#49): new address, MTU and route without a restart"
+sed -e 's#10.200.0.7/24#10.200.0.8/24#' -e 's#mtu=1400#mtu=1300#' \
+    -e 's#192.168.77.0/24#192.168.79.0/24#' "$CTX/etc-camex/camex.conf" > "$CTX/changed.conf"
+docker cp "$CTX/changed.conf" "$SRV:/etc/camex/camex.conf" >/dev/null
+# A restart drops the TCP connection: the app reconnects at once and gets
+# the new CONFIG with that handshake (otherwise with the next rekey)
+docker restart -t 1 "$SRV" >/dev/null
+moved=1
+for _ in $(seq 1 40); do
+    if $ADB shell ip addr 2>/dev/null | grep -q "10.200.0.8/24"; then moved=0; break; fi
+    sleep 1
+done
+check $moved "VPN interface moved to 10.200.0.8/24"
+IFACE=$($ADB shell ip -o addr | awk '/10.200.0.8\// { print $2; exit }')
+MTU=$($ADB shell cat /sys/class/net/"$IFACE"/mtu 2>/dev/null | tr -d '\r')
+[ "$MTU" = 1300 ]; check $? "VPN interface MTU is now 1300 (got ${MTU:-none})"
+RULES=$($ADB shell ip route show table all 2>/dev/null | grep " dev $IFACE" || true)
+echo "$RULES" | grep -q "192.168.79.0/24" && ! echo "$RULES" | grep -q "192.168.77.0/24"
+check $? "route 192.168.79.0/24 replaced 192.168.77.0/24"
+docker exec "$SRV" ping -c 5 -W 2 10.200.0.8 >/dev/null 2>&1
+check $? "server reaches the device at its new address"
+
 echo "== stop VPN"
 $ADB shell am start -W -n "$PKG/.MainActivity" >/dev/null
 sleep 1
 tap_text "Stop VPN" || true
 down=1
 for _ in $(seq 1 15); do
-    if ! $ADB shell ip addr 2>/dev/null | grep -q "10.200.0.7/24"; then down=0; break; fi
+    if ! $ADB shell ip addr 2>/dev/null | grep -q "10.200.0.[78]/24"; then down=0; break; fi
     sleep 1
 done
 check $down "VPN interface is gone after Stop"

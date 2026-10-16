@@ -277,6 +277,10 @@ sudo ./camex --mode server --port 5800 --config /etc/camex/camex.conf
 重新分配）。若只想为配置文件中列出的 ID 提供服务，请在 `[server]` 块中设置
 `allow_unknown_clients=no`。
 
+修改配置文件后，向服务器发送 `kill -HUP`。正在运行的自动模式客户端会在下一次
+握手时（密钥更新，最多 10 分钟后，或重新连接）获取变更后的地址、网关、MTU 或
+路由：它会用新设置重新打开隧道并替换路由，无需重启。
+
 ## 安全模型
 
 camex 是面向摄像机的小型隧道，而不是通用 VPN。在把它暴露到不受信任的网络之前，

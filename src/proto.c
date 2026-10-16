@@ -347,11 +347,22 @@ int proto_parse_config(char *message, camex_config_t *config)
         return -1;
     }
 
+    /* A CONFIG for another client is not ours to apply (and would change
+     * the ID this client registers with) */
+    if (config->client_id[0] != '\0' && client_id[0] != '\0' &&
+        strcasecmp(config->client_id, client_id) != 0) {
+        log_message(LOG_ERR, "Config response is for client %s, not %s",
+                    client_id, config->client_id);
+        return -1;
+    }
+
     if (config_apply_profile(config, &profile) != 0) {
         log_message(LOG_ERR, "Invalid config response");
         return -1;
     }
-    memcpy(config->client_id, client_id, sizeof(config->client_id));
+    if (client_id[0] != '\0') {
+        memcpy(config->client_id, client_id, sizeof(config->client_id));
+    }
 
     return 0;
 }

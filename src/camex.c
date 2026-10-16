@@ -1400,6 +1400,149 @@ static int run_ip_route(const char *verb, const char *cidr, const char *gateway)
 }
 #endif
 
+/* Opens the packet backend for cfg (address, MTU, routes); 0 or -1 */
+static int client_open_tunnel(const camex_config_t *cfg)
+{
+    camex_packet_open_t open_params;
+    char local_ip[16];
+    char local_netmask[16];
+
+    if (parse_local_cidr(cfg->local_cidr, local_ip, sizeof(local_ip),
+                         local_netmask, sizeof(local_netmask)) != 0) {
+        return -1;
+    }
+    memset(&open_params, 0, sizeof(open_params));
+    open_params.local_ip = local_ip;
+    open_params.netmask = local_netmask;
+    open_params.mtu = cfg->mtu;
+    open_params.routes = (const char (*)[32])cfg->route_cidrs;
+    open_params.route_count = cfg->route_count;
+    open_params.device = cfg->tun_dev;
+    open_params.use_provider = 1U;
+    return packet_open(&open_params);
+}
+
+/* Returns the number of routes that failed */
+static int client_set_routes(const camex_config_t *cfg, int add)
+{
+    size_t i;
+    int failed = 0;
+
+    if (!packet_host_routes() || cfg->gateway_ip[0] == '\0') {
+        return 0;
+    }
+    for (i = 0; i < cfg->route_count; ++i) {
+        if ((add ? camex_add_route(cfg->route_cidrs[i], cfg->gateway_ip)
+                 : camex_del_route(cfg->route_cidrs[i], cfg->gateway_ip))
+            != 0) {
+            log_message(LOG_WARNING, "Route %s failed for %s",
+                        add ? "setup" : "removal", cfg->route_cidrs[i]);
+            ++failed;
+        }
+    }
+    return failed;
+}
+
+/* Set while the live tunnel does not match current_config (a route that
+ * failed, or no tunnel at all): the next handshake applies its CONFIG
+ * even when it equals current_config */
+static int client_reconfig_pending = 0;
+
+int camex_client_reconfig_pending(void)
+{
+    return client_reconfig_pending;
+}
+
+void camex_client_install_routes(void)
+{
+    if (client_set_routes(&current_config, 1) != 0) {
+        log_message(LOG_WARNING, "Not all routes are installed: the next "
+                    "handshake tries again");
+        client_reconfig_pending = 1;
+    }
+}
+
+static int client_config_same(const camex_config_t *a,
+                              const camex_config_t *b)
+{
+    return strcmp(a->local_cidr, b->local_cidr) == 0 &&
+           strcmp(a->gateway_ip, b->gateway_ip) == 0 &&
+           a->mtu == b->mtu && a->route_count == b->route_count &&
+           memcmp(a->route_cidrs, b->route_cidrs,
+                  sizeof(a->route_cidrs)) == 0;
+}
+
+int camex_client_reconfigure(const camex_config_t *next)
+{
+    camex_config_t old = current_config;
+    int was_open = packet_fd() >= 0;
+    char ip[16];
+    char mask[16];
+
+    if (parse_local_cidr(next->local_cidr, ip, sizeof(ip), mask,
+                         sizeof(mask)) != 0) {
+        return -1;
+    }
+    /* A CAMEX_TUN_FD descriptor cannot be opened again once closed: the
+     * host application has to restart camex with a new one */
+    if (was_open && packet_backend_get() == &camex_tun_backend &&
+        tun_is_inherited()) {
+        log_message(LOG_WARNING, "The server sent a new tunnel "
+                    "configuration, but the TUN fd from CAMEX_TUN_FD cannot "
+                    "be reopened: restart camex to apply it");
+        return -1;
+    }
+    /* Same settings on a live tunnel: only the routes that failed are
+     * missing (route replace is idempotent) */
+    if (was_open && client_config_same(&old, next)) {
+        client_reconfig_pending = client_set_routes(&old, 1) != 0;
+        return client_reconfig_pending ? -1 : 0;
+    }
+    log_message(LOG_NOTICE, "Applying the new tunnel configuration from the "
+                "server: CIDR=%s GW=%s MTU=%d routes=%u", next->local_cidr,
+                next->gateway_ip, next->mtu, (unsigned)next->route_count);
+
+    /* Routes go with the old device: remove them while it exists. A
+     * route that cannot be removed stays (logged): it points at the old
+     * gateway, and the new routes are installed anyway */
+    if (was_open) {
+        (void)client_set_routes(&old, 0);
+    }
+    packet_close();
+    if (client_open_tunnel(next) != 0) {
+        log_message(LOG_ERR, "Cannot reopen the tunnel with the new "
+                    "configuration: keeping the old one");
+        if (client_open_tunnel(&old) != 0) {
+            log_message(LOG_ERR, "Cannot reopen the tunnel with the old "
+                        "configuration either: the next handshake tries "
+                        "again");
+            client_reconfig_pending = 1;
+            return -1;
+        }
+        client_reconfig_pending = client_set_routes(&old, 1) != 0;
+        return -1;
+    }
+
+    snprintf(current_config.local_cidr, sizeof(current_config.local_cidr),
+             "%s", next->local_cidr);
+    snprintf(current_config.local_ip, sizeof(current_config.local_ip),
+             "%s", ip);
+    snprintf(current_config.gateway_ip, sizeof(current_config.gateway_ip),
+             "%s", next->gateway_ip);
+    current_config.mtu = next->mtu;
+    current_config.route_count = next->route_count;
+    memcpy(current_config.route_cidrs, next->route_cidrs,
+           sizeof(current_config.route_cidrs));
+    if (client_set_routes(&current_config, 1) != 0) {
+        log_message(LOG_WARNING, "Not all routes are installed: the next "
+                    "handshake tries again");
+        client_reconfig_pending = 1;
+        return -1;
+    }
+    client_reconfig_pending = 0;
+    return 0;
+}
+
 int camex_add_route(const char *cidr, const char *gateway)
 {
     return run_ip_route("replace", cidr, gateway);

@@ -6,7 +6,10 @@
  *
  *   v2tool <host> <port> <server-pubkey> <psk> udp|tcp <who>...
  *
- * <who> is "auto:<client ID>" or "manual:<tunnel IP>". Each handshake
+ *   v2tool serve <port> <server-private-key> <psk> <first> <later>
+ *
+ * <who> is "auto:<client ID>[@<address hint>]" or "manual:<tunnel IP>".
+ * Each handshake
  * uses its own socket; for each one a line "<who> <result>" is printed:
  * the LOCAL_CIDR of the server's CONFIG (auto), "OK" (manual), or "-".
  * PACE_MS=<n> waits n ms between handshakes (the server limits them per
@@ -23,6 +26,7 @@
 #include "session.h"
 #include "util.h"
 
+#include <arpa/inet.h>
 #include <errno.h>
 #include <netdb.h>
 #include <stdio.h>
@@ -145,8 +149,17 @@ static void handshake(const char *host, const char *port, int tcp,
         return;
     }
     if (strncmp(who, "auto:", 5) == 0) {
-        snprintf(text, sizeof(text), "CAMEX REGISTER VER=2 MODE=AUTO "
-                 "CLIENT_ID=%s\n", who + 5);
+        /* auto:<id>@<ip> also asks for that address (LOCAL_IP= hint) */
+        const char *at = strchr(who + 5, '@');
+
+        if (at != NULL) {
+            snprintf(text, sizeof(text), "CAMEX REGISTER VER=2 MODE=AUTO "
+                     "CLIENT_ID=%.*s LOCAL_IP=%s\n", (int)(at - (who + 5)),
+                     who + 5, at + 1);
+        } else {
+            snprintf(text, sizeof(text), "CAMEX REGISTER VER=2 MODE=AUTO "
+                     "CLIENT_ID=%s\n", who + 5);
+        }
     } else {
         snprintf(text, sizeof(text), "CAMEX REGISTER VER=2 MODE=MANUAL "
                  "LOCAL_IP=%s\n", who + 7);
@@ -191,6 +204,86 @@ static void handshake(const char *host, const char *port, int tcp,
     *hold_fd = fd;
 }
 
+/*
+ * A fake server for client tests (UDP): answers every handshake with the
+ * CONFIG text given (\n for newlines) — the first handshake with first,
+ * the later ones with later — and nothing else (no DATA, no keepalive
+ * answers). For CONFIGs a real server would never send (#12).
+ */
+static int serve(const char *port, const char *priv_b64, const char *psk_text,
+                 const char *first, const char *later)
+{
+    uint8_t priv[32], pub[32], psk[32];
+    struct sockaddr_in addr;
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    unsigned int count = 0U;
+
+    if (fd < 0 || key_server_from_b64(priv_b64, priv, pub) != 0 ||
+        key_from_psk(psk_text, psk) != 0) {
+        fprintf(stderr, "serve: bad socket, key or PSK\n");
+        return 2;
+    }
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)atoi(port));
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        perror("serve: bind");
+        return 2;
+    }
+    for (;;) {
+        uint8_t pkt[2048], resp[2048], plain[1024], es[32], seed[32];
+        char text[1024];
+        struct sockaddr_in from;
+        socklen_t flen = sizeof(from);
+        noise_hs_t hs;
+        size_t plen = 0U, rlen, i, t = 0U;
+        const char *conf;
+        ssize_t n = recvfrom(fd, pkt, sizeof(pkt), 0,
+                             (struct sockaddr *)&from, &flen);
+
+        if (n <= 0 || v2_packet_type(pkt, (size_t)n) != V2_TYPE_INIT ||
+            (size_t)n < V2_INIT_HDR + V2_MAC_LEN) {
+            continue;   /* DATA and anything else: no answer */
+        }
+        n -= V2_MAC_LEN;
+        noise_init_responder(&hs, (const uint8_t *)CAMEX_NOISE_PROLOGUE,
+                             sizeof(CAMEX_NOISE_PROLOGUE) - 1U, priv, pub);
+        if (noise_msg1_es(&hs, pkt + V2_INIT_HDR, (size_t)n - V2_INIT_HDR,
+                          es) != 0 ||
+            noise_read_msg1(&hs, psk, es, pkt + V2_INIT_HDR,
+                            (size_t)n - V2_INIT_HDR, plain, sizeof(plain),
+                            &plen) != 0) {
+            noise_wipe(&hs);
+            continue;
+        }
+        conf = (count++ == 0U) ? first : later;
+        for (i = 0U; conf[i] != '\0' && t + 1U < sizeof(text); ++i) {
+            if (conf[i] == '\\' && conf[i + 1U] == 'n') {
+                text[t++] = '\n';
+                ++i;
+            } else {
+                text[t++] = conf[i];
+            }
+        }
+        text[t] = '\0';
+        get_random_bytes(seed, sizeof(seed));
+        memcpy(resp, CAMEX_MAGIC, 4);
+        resp[4] = V2_TYPE_RESP;
+        v2_write_u32(resp + 5, 0x5e5e5e5eU);
+        memcpy(resp + 9, pkt + 5, 4);   /* the client's index */
+        rlen = noise_write_msg2(&hs, seed, (const uint8_t *)text, t,
+                                resp + V2_RESP_HDR,
+                                sizeof(resp) - V2_RESP_HDR);
+        noise_wipe(&hs);
+        if (rlen > 0U) {
+            sendto(fd, resp, V2_RESP_HDR + rlen, 0,
+                   (struct sockaddr *)&from, flen);
+            printf("answered handshake %u\n", count);
+            fflush(stdout);
+        }
+    }
+}
+
 int main(int argc, char **argv)
 {
     uint8_t pub[32], psk[32];
@@ -198,10 +291,15 @@ int main(int argc, char **argv)
     int *fds;
     int hold = getenv("HOLD") != NULL;
 
+    if (argc == 7 && strcmp(argv[1], "serve") == 0) {
+        return serve(argv[2], argv[3], argv[4], argv[5], argv[6]);
+    }
     if (argc < 7 || key_parse_b64(argv[3], pub) != 0 ||
         key_from_psk(argv[4], psk) != 0) {
         fprintf(stderr, "usage: v2tool <host> <port> <server-pubkey> <psk> "
-                "udp|tcp auto:<id>|manual:<ip>...\n");
+                "udp|tcp auto:<id>[@<ip>]|manual:<ip>...\n"
+                "       v2tool serve <port> <server-private-key> <psk> "
+                "<first CONFIG> <later CONFIG>\n");
         return 2;
     }
     tcp = strcmp(argv[5], "tcp") == 0;
