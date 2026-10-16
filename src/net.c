@@ -713,14 +713,16 @@ int net_tcp_connect(const char *host, int port)
         }
         /* Winsock reports a failed connect in the except set, POSIX as
          * writable with SO_ERROR set. A signal does not end the wait,
-         * unless it is a request to stop. */
+         * unless it is a request to stop. The wait goes in steps of at
+         * most 1 s: a stop request that comes just before select() is
+         * seen within a second, not after the whole timeout. */
         deadline = time(NULL) + CAMEX_TCP_CONNECT_TIMEOUT;
         do {
             time_t left = deadline - time(NULL);
 
             /* A clock set back must not stretch the wait */
-            if (left > CAMEX_TCP_CONNECT_TIMEOUT) {
-                left = CAMEX_TCP_CONNECT_TIMEOUT;
+            if (left > 1) {
+                left = 1;
             }
 
             FD_ZERO(&wset);
@@ -730,15 +732,15 @@ int net_tcp_connect(const char *host, int port)
             tv.tv_sec = left > 0 ? (long)left : 0;
             tv.tv_usec = 0;
             ready = select(fd + 1, NULL, &wset, &eset, &tv);
-        } while (ready < 0 && net_sock_err_is_intr() && running &&
-                 time(NULL) < deadline);
-        if (ready == 0) {
-            log_message(LOG_ERR, "connect(TCP): timed out");
+        } while ((ready == 0 || (ready < 0 && net_sock_err_is_intr())) &&
+                 running && time(NULL) < deadline);
+        if (ready <= 0 && !running) {
+            log_message(LOG_INFO, "connect(TCP): stopped");
             close(fd);
             return -1;
         }
-        if (ready < 0 && !running) {
-            log_message(LOG_INFO, "connect(TCP): stopped");
+        if (ready == 0) {
+            log_message(LOG_ERR, "connect(TCP): timed out");
             close(fd);
             return -1;
         }
