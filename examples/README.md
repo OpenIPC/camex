@@ -5,9 +5,9 @@ camex in various environments.
 
 ## Contents
 
-| File | Description |
-|------|-------------|
-| `camex.conf` | Server-side configuration file format reference |
+| File            | Description                                        |
+|-----------------|----------------------------------------------------|
+| `camex.conf`    | Server-side configuration file format reference    |
 | `camex.service` | systemd service unit for running camex as a daemon |
 
 ## Usage
