@@ -70,11 +70,16 @@ set +e   # checks below report failures themselves
 HEAD="CAMEX CONFIG VER=2 CLIENT_ID=CAM1"
 GOOD="$HEAD MTU=1500 LOCAL_CIDR=10.200.0.5/24 GATEWAY_IP=10.200.0.1 ROUTE_CIDR=192.168.150.0/24"
 BAD_NAMES=(gateway cidr mtu route client-id)
+# The shell-character values fit their fields (16 and 32 bytes), so they
+# reach the validation rather than the length limit; the client log must
+# show the validation that rejected each CONFIG
+BAD_LOGS=("Invalid GATEWAY_IP" "Invalid LOCAL_CIDR" "Invalid MTU" "Invalid route prefix"
+    "Config response is for client")
 BAD=(
-    "$HEAD MTU=1500 LOCAL_CIDR=10.200.0.9/24 GATEWAY_IP=10.200.0.1;touch\${IFS}/tmp/pwned ROUTE_CIDR=192.168.160.0/24"
+    "$HEAD MTU=1500 LOCAL_CIDR=10.200.0.9/24 GATEWAY_IP=1.2.3.4;id ROUTE_CIDR=192.168.160.0/24"
     "$HEAD MTU=1500 LOCAL_CIDR=10.200.0.9/33 GATEWAY_IP=10.200.0.1 ROUTE_CIDR=192.168.160.0/24"
     "$HEAD MTU=70000 LOCAL_CIDR=10.200.0.9/24 GATEWAY_IP=10.200.0.1 ROUTE_CIDR=192.168.160.0/24"
-    "$HEAD MTU=1500 LOCAL_CIDR=10.200.0.9/24 GATEWAY_IP=10.200.0.1 ROUTE_CIDR=192.168.160.0/24;touch\${IFS}/tmp/pwned"
+    "$HEAD MTU=1500 LOCAL_CIDR=10.200.0.9/24 GATEWAY_IP=10.200.0.1 ROUTE_CIDR=192.168.160.0/24;id"
     "CAMEX CONFIG VER=2 CLIENT_ID=OTHER MTU=1500 LOCAL_CIDR=10.200.0.9/24 GATEWAY_IP=10.200.0.1 ROUTE_CIDR=192.168.160.0/24"
 )
 
@@ -92,7 +97,7 @@ run() {
 
 # state: the client's tunnel addresses and routes ("" if it has exited)
 state() {
-    docker exec "$CLI" sh -c 'ip -4 -o addr show; ip route; ls /tmp/pwned 2>/dev/null' 2>/dev/null
+    docker exec "$CLI" sh -c 'ip -4 -o addr show; ip route' 2>/dev/null
 }
 
 echo "== 1. a malformed first CONFIG is not applied"
@@ -101,8 +106,9 @@ for i in "${!BAD[@]}"; do
     sleep 6
     s=$(state)
     answered=$(docker logs "$SRV" 2>&1 | grep -c "answered handshake")
-    [ "$answered" -ge 1 ] && ! echo "$s" | grep -q "10.200.0.9\|192.168.160\|pwned"
-    check $? "${BAD_NAMES[$i]}: no address, route or command from it (handshakes answered: $answered)"
+    [ "$answered" -ge 1 ] && ! echo "$s" | grep -q "10.200.0.9\|192.168.160" &&
+        docker logs "$CLI" 2>&1 | grep -q "${BAD_LOGS[$i]}"
+    check $? "${BAD_NAMES[$i]}: rejected (${BAD_LOGS[$i]}), no address or route from it (handshakes answered: $answered)"
 done
 
 echo "== 2. a malformed CONFIG on a later handshake keeps the working settings"
@@ -123,7 +129,8 @@ for i in "${!BAD[@]}"; do
     s=$(state)
     [ "$up" = 0 ] && [ "$later" = 0 ] &&
         echo "$s" | grep -q "10.200.0.5/24" && echo "$s" | grep -q "^192.168.150.0/24" &&
-        ! echo "$s" | grep -q "10.200.0.9\|192.168.160\|pwned" &&
+        ! echo "$s" | grep -q "10.200.0.9\|192.168.160" &&
+        docker logs "$CLI" 2>&1 | grep -q "${BAD_LOGS[$i]}" &&
         ! docker logs "$CLI" 2>&1 | grep -q "Applying the new tunnel configuration"
     check $? "${BAD_NAMES[$i]}: still 10.200.0.5 with its route after later handshakes"
 done
