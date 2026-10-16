@@ -22,6 +22,14 @@
 #   SERVER_HOST=<addr>          address of this host as seen from the device;
 #                               the app connects there directly (port 5800
 #                               is published on this host for the test)
+#   DEVTEST_SUBNET=<cidr>       subnet of the server's Docker network
+#                               (default 10.250.0.0/24)
+#
+# The server runs in its own Docker network, not in the default bridge:
+# that is 172.17.0.0/16, and a device whose address falls inside it (for
+# example 172.17.32.x behind another interface) gets no TCP answers, as
+# the container sends them to its own bridge instead of back through the
+# host.
 #
 # Without SERVER_HOST the app uses 127.0.0.1:5800 through `adb reverse`.
 # That only works until the VPN is up: Android then closes the sockets of
@@ -43,6 +51,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CAMEX_BINARY="${CAMEX_BINARY:-$REPO_DIR/camex}"
 PKG=org.openipc.camex
 SRV="camex-devtest-srv-$$"
+NET="camex-devtest-net-$$"
 CTX="$(mktemp -d)"
 FAILS=0
 ADB="adb -s $SERIAL"
@@ -59,6 +68,7 @@ cleanup() {
     fi
     $ADB reverse --remove tcp:5800 >/dev/null 2>&1 || true
     docker rm -f "$SRV" >/dev/null 2>&1 || true
+    docker network rm "$NET" >/dev/null 2>&1 || true
     rm -rf "$CTX"
 }
 trap cleanup EXIT INT TERM
@@ -90,7 +100,8 @@ EOF
 . "$REPO_DIR/docker/lib-keys.sh"
 gen_server_key "$CTX/etc-camex" "$CAMEX_BINARY" || { echo "cannot create a server key"; exit 1; }
 docker build -q -t camex:devtest "$CTX" >/dev/null
-docker create --name "$SRV" -p 5800:5800 --cap-add NET_ADMIN --cap-add MKNOD \
+docker network create --subnet "${DEVTEST_SUBNET:-10.250.0.0/24}" "$NET" >/dev/null
+docker create --name "$SRV" --network "$NET" -p 5800:5800 --cap-add NET_ADMIN --cap-add MKNOD \
     camex:devtest --mode server --port 5800 --transport tcp \
     --local-cidr 10.200.0.1/24 --psk devtest-key \
     --server-key-file /etc/camex/server.key \
