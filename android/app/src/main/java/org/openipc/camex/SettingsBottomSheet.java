@@ -172,7 +172,8 @@ public class SettingsBottomSheet extends BottomSheetDialogFragment {
 
     /** A server public key: base64 of exactly 32 bytes (camex --genkey). */
     static boolean isServerPubkey(String key) {
-        if (key == null || key.length() != 44) return false;
+        // Exactly what camex accepts: 43 base64 characters and '='
+        if (key == null || !key.matches("[A-Za-z0-9+/]{43}=")) return false;
         try {
             return Base64.decode(key, Base64.NO_WRAP).length == 32;
         } catch (IllegalArgumentException e) {

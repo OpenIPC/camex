@@ -482,6 +482,9 @@ int read_key_file(const char *path, char *out, size_t out_size)
     }
     if (strncmp(p, "server_key=", 11) == 0) {
         p += 11;
+        while (*p == ' ' || *p == '\t') {
+            ++p;
+        }
     }
     len = strlen(p);
     while (len > 0U && (p[len - 1U] == '\n' || p[len - 1U] == '\r' ||
