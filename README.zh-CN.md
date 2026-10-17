@@ -5,7 +5,7 @@
 [English](README.md) | [Русский](README.ru.md) | **简体中文**
 
 [![camex CI](https://github.com/OpenIPC/camex/actions/workflows/build.yml/badge.svg)](https://github.com/OpenIPC/camex/actions/workflows/build.yml)
-[![Release](https://img.shields.io/github/v/release/OpenIPC/camex)](https://github.com/OpenIPC/camex/releases)
+[![Release](https://img.shields.io/badge/download-latest-blue)](https://github.com/OpenIPC/camex/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Code size](https://img.shields.io/github/languages/code-size/OpenIPC/camex)](https://github.com/OpenIPC/camex)
 
@@ -78,6 +78,35 @@ sudo ./camex --mode client \
   路由经过隧道。
 - **Advanced** — MTU、keepalive 和服务器超时
   （[截图](docs/images/android-settings-advanced.png)）。
+
+## 永久链接
+
+二进制文件只发布在一个版本中：[`latest`](https://github.com/OpenIPC/camex/releases/latest)，
+CI 会在每次推送到 `master` 时重新构建。其标题显示 camex 版本（`Camex X.Y.Z`）；
+文件名不含版本号，因此以下链接始终不变：
+
+- 发布页面：`https://github.com/OpenIPC/camex/releases/latest`
+- 单个文件：`https://github.com/OpenIPC/camex/releases/latest/download/<文件>`
+
+| 文件                       | 平台                                                          |
+|----------------------------|---------------------------------------------------------------|
+| `camex-aarch64`            | Linux AArch64，静态链接（musl）                               |
+| `camex-arm`                | Linux 32 位 ARM，静态链接（musl）：OpenIPC 摄像头             |
+| `camex-mipsel`             | Linux MIPS 小端，静态链接（musl，软浮点）：君正摄像头、路由器 |
+| `camex-x86_64`             | Linux x86_64，静态链接（musl）                                |
+| `camex-android.apk`        | Android 8.0 及更高版本                                        |
+| `camex-macos.zip`          | macOS（utun）：`camex`、LICENSE、README                       |
+| `camex-windows-x86_64.zip` | Windows 64 位：`camex.exe` 和 `wintun.dll`                    |
+| `camex-windows-i686.zip`   | Windows 32 位：`camex.exe` 和 `wintun.dll`                    |
+| `SHA256SUMS`               | 以上所有文件的 SHA256                                         |
+
+```sh
+URL=https://github.com/OpenIPC/camex/releases/latest/download
+curl -fL -O $URL/camex-arm -O $URL/SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+```
+
+变更历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 二进制大小
 
@@ -693,35 +722,32 @@ sudo rmmod camex
 #define CAMEX_VERSION "X.Y.Z"
 ```
 
-其他所有版本引用（Android、CI、git 标签）都**必须**与该值一致。
-CI 流水线会自动强制检查：如果 git 标签与 `CAMEX_VERSION`
-不一致，发布构建将会失败。
+Android 的 `versionName` 和 `versionCode` 随之变化：`scripts/sync-android-version.sh`
+（或调用它的 `make apk`）会更新 `android/app/build.gradle.kts` 和
+`android/app/src/main/AndroidManifest.xml`。
 
-### 发布检查清单
+### 发布流程
 
-1. **更新 `src/version.h`** —— 将 `CAMEX_VERSION` 改为新版本号。
-2. **同步 Android 版本** —— 运行 `scripts/sync-android-version.sh`（或 `make apk`，
-   它会自动调用该脚本）。该脚本会更新：
-   - `android/app/build.gradle.kts` —— `versionName` + `versionCode`
-   - `android/app/src/main/AndroidManifest.xml` —— `android:versionName` + `android:versionCode`
-3. **提交**：`git commit -m "chore: bump version to X.Y.Z"`
-4. **打标签**：`git tag -a vX.Y.Z -m "Release vX.Y.Z"`
-5. **推送**：`git push origin master && git push origin vX.Y.Z`
-6. **CI 自动创建 GitHub Release**，产物命名为
-   `camex-X.Y.Z-<platform>`。
+没有版本标签，也没有按版本的发布：只有一个发布 `latest`，每次推送到 `master`
+且所有构建和测试通过后由 CI 替换。
+
+1. **在 PR 中**：更新 `CAMEX_VERSION`，运行 `scripts/sync-android-version.sh`，并在
+   `CHANGELOG.md` 中添加该版本的章节。
+2. **合并到 `master`**。CI 删除旧的 `latest` 发布及其标签，并在构建所用的提交上重新创建：
+   标题 `Camex X.Y.Z`，[永久链接](#永久链接)中列出的文件，以及 `SHA256SUMS`。
+3. **Telegram**：当版本与之前 `latest` 的标题不同时，CI 会将 APK 发送到 OpenIPC
+   Telegram 频道。未更改版本的推送只替换文件。
 
 ### 版本号规则
 
-- `versionName`（Android）= `CAMEX_VERSION`（例如 `"2.3.6"`）
-- `versionCode`（Android）= `MAJOR * 10000 + MINOR * 100 + PATCH`（例如 `20306`）
-- Git 标签 = `v` + `CAMEX_VERSION`（例如 `v2.3.6`）
-- GitHub Release 标题 = `camex vX.Y.Z`
+- `versionName`（Android）= `CAMEX_VERSION`（例如 `"3.0.2"`）
+- `versionCode`（Android）= `MAJOR * 10000 + MINOR * 100 + PATCH`（例如 `30002`）
+- GitHub Release 标题 = `Camex X.Y.Z`，标签 `latest`
 
 ### 手动触发 CI
 
-如果需要手动触发发布（例如重新上传产物），
-请在 Actions 页面使用 `workflow_dispatch` 事件，并将 `version` 输入
-设置为标签名（例如 `v2.3.6`）。
+如需在没有新提交的情况下重新构建并发布 `latest`，请在 Actions 页面对 `master`
+分支以 `workflow_dispatch` 运行该工作流。
 
 ## 说明
 

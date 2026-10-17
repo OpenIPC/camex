@@ -5,7 +5,7 @@
 [English](README.md) | **Русский** | [简体中文](README.zh-CN.md)
 
 [![camex CI](https://github.com/OpenIPC/camex/actions/workflows/build.yml/badge.svg)](https://github.com/OpenIPC/camex/actions/workflows/build.yml)
-[![Release](https://img.shields.io/github/v/release/OpenIPC/camex)](https://github.com/OpenIPC/camex/releases)
+[![Release](https://img.shields.io/badge/download-latest-blue)](https://github.com/OpenIPC/camex/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Code size](https://img.shields.io/github/languages/code-size/OpenIPC/camex)](https://github.com/OpenIPC/camex)
 
@@ -79,6 +79,35 @@ sudo ./camex --mode client \
   только туннельная сеть и маршруты сервера.
 - **Advanced** — MTU, keepalive и таймаут сервера
   ([скриншот](docs/images/android-settings-advanced.png)).
+
+## Постоянные ссылки
+
+Бинарные файлы публикуются одним релизом, [`latest`](https://github.com/OpenIPC/camex/releases/latest),
+который CI пересобирает при каждом push в `master`. В его заголовке — версия camex
+(`Camex X.Y.Z`); в именах файлов версии нет, поэтому ссылки не меняются:
+
+- страница релиза: `https://github.com/OpenIPC/camex/releases/latest`
+- файл: `https://github.com/OpenIPC/camex/releases/latest/download/<файл>`
+
+| Файл                       | Платформа                                                                        |
+|----------------------------|----------------------------------------------------------------------------------|
+| `camex-aarch64`            | Linux AArch64, статически (musl)                                                 |
+| `camex-arm`                | Linux 32-bit ARM, статически (musl): камеры OpenIPC                              |
+| `camex-mipsel`             | Linux MIPS little-endian, статически (musl, soft-float): камеры Ingenic, роутеры |
+| `camex-x86_64`             | Linux x86_64, статически (musl)                                                  |
+| `camex-android.apk`        | Android 8.0 и новее                                                              |
+| `camex-macos.zip`          | macOS (utun): `camex`, LICENSE, README                                           |
+| `camex-windows-x86_64.zip` | Windows 64-bit: `camex.exe` и `wintun.dll`                                       |
+| `camex-windows-i686.zip`   | Windows 32-bit: `camex.exe` и `wintun.dll`                                       |
+| `SHA256SUMS`               | SHA256 всех файлов выше                                                          |
+
+```sh
+URL=https://github.com/OpenIPC/camex/releases/latest/download
+curl -fL -O $URL/camex-arm -O $URL/SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+```
+
+История изменений — в [CHANGELOG.md](CHANGELOG.md).
 
 ## Размер бинарных файлов
 
@@ -722,35 +751,33 @@ sudo rmmod camex
 #define CAMEX_VERSION "X.Y.Z"
 ```
 
-Все остальные упоминания версии (Android, CI, git-теги) **должны** совпадать с этим значением.
-CI-конвейер проверяет это автоматически: релизная сборка завершится ошибкой, если
-git-тег не совпадает с `CAMEX_VERSION`.
+`versionName` и `versionCode` Android следуют за ней: `scripts/sync-android-version.sh`
+(или `make apk`, который его вызывает) обновляет `android/app/build.gradle.kts` и
+`android/app/src/main/AndroidManifest.xml`.
 
-### Чек-лист релиза
+### Процесс релиза
 
-1. **Поднимите версию в `src/version.h`** — обновите `CAMEX_VERSION`.
-2. **Синхронизируйте версии Android** — запустите `scripts/sync-android-version.sh` (или `make apk`,
-   который вызывает его автоматически). Обновляются:
-   - `android/app/build.gradle.kts` — `versionName` + `versionCode`
-   - `android/app/src/main/AndroidManifest.xml` — `android:versionName` + `android:versionCode`
-3. **Коммит**: `git commit -m "chore: bump version to X.Y.Z"`
-4. **Тег**: `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
-5. **Push**: `git push origin master && git push origin vX.Y.Z`
-6. **CI автоматически создаёт GitHub Release** с артефактами вида
-   `camex-X.Y.Z-<platform>`.
+Тегов версий и релизов по версиям нет: один релиз, `latest`, CI заменяет после
+каждого push в `master`, когда все сборки и тесты прошли.
+
+1. **В PR**: поднять `CAMEX_VERSION`, запустить `scripts/sync-android-version.sh`, добавить
+   раздел версии в `CHANGELOG.md`.
+2. **Смержить в `master`**. CI удаляет старый релиз `latest` вместе с тегом и создаёт его
+   заново на собранном коммите: заголовок `Camex X.Y.Z`, файлы из раздела
+   [«Постоянные ссылки»](#постоянные-ссылки), `SHA256SUMS`.
+3. **Telegram**: если версия отличается от заголовка прежнего `latest`, CI отправляет APK
+   в Telegram-канал OpenIPC. Push без смены версии только заменяет файлы.
 
 ### Правила нумерации версий
 
-- `versionName` (Android) = `CAMEX_VERSION` (например, `"2.3.6"`)
-- `versionCode` (Android) = `MAJOR * 10000 + MINOR * 100 + PATCH` (например, `20306`)
-- Git-тег = `v` + `CAMEX_VERSION` (например, `v2.3.6`)
-- Заголовок GitHub Release = `camex vX.Y.Z`
+- `versionName` (Android) = `CAMEX_VERSION` (например, `"3.0.2"`)
+- `versionCode` (Android) = `MAJOR * 10000 + MINOR * 100 + PATCH` (например, `30002`)
+- Заголовок GitHub Release = `Camex X.Y.Z`, тег `latest`
 
 ### Ручной запуск CI
 
-Если релиз нужно запустить вручную (например, чтобы заново загрузить артефакты),
-используйте событие `workflow_dispatch` на вкладке Actions, указав во входном параметре
-`version` имя тега (например, `v2.3.6`).
+Чтобы пересобрать и заново опубликовать `latest` без нового коммита, запустите workflow
+через `workflow_dispatch` на ветке `master` на вкладке Actions.
 
 ## Примечания
 
