@@ -17,7 +17,6 @@ import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
 import android.util.Log;
 import androidx.annotation.Keep;
-import androidx.core.app.ServiceCompat;
 import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -27,6 +26,8 @@ public class TunnelService extends VpnService {
     public static final String ACTION_STOP = "org.openipc.camex.STOP";
     /** Sent (to this app only) when camex has exited: the UI shows it. */
     public static final String ACTION_EXITED = "org.openipc.camex.EXITED";
+    // Signature permission (AndroidManifest.xml) of the ACTION_EXITED receiver
+    public static final String PERMISSION_INTERNAL = "org.openipc.camex.permission.INTERNAL";
     private static final String CHANNEL_ID = "camex_vpn";
     private static final int NOTIFY_ID = 1;
     private static final String TAG = "camex";
@@ -77,9 +78,15 @@ public class TunnelService extends VpnService {
         }
 
         // Android 14 (targetSdk 34) requires a foreground service type; VPN apps
-        // use systemExempted. ServiceCompat picks the right overload per API.
-        ServiceCompat.startForeground(this, NOTIFY_ID, buildNotification("Starting..."),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED);
+        // use systemExempted, a type that exists only from Android 14; before it
+        // the two-argument form takes the type from the manifest.
+        Notification starting = buildNotification("Starting...");
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIFY_ID, starting,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED);
+        } else {
+            startForeground(NOTIFY_ID, starting);
+        }
 
         final long generation;
         synchronized (lock) {

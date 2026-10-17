@@ -1,31 +1,28 @@
 /*
  * Copyright (c) OpenIPC  https://openipc.org  MIT License
  *
- * SettingsBottomSheet.java — camex connection settings (Material bottom sheet)
+ * SettingsActivity.java — camex connection settings (platform widgets only)
  */
 package org.openipc.camex;
 
+import android.app.Activity;
 import android.content.SharedPreferences;
 import android.os.Bundle;
+import android.text.InputType;
 import android.text.TextUtils;
 import android.util.Base64;
-import android.view.LayoutInflater;
-import android.view.View;
-import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.EditText;
+import android.widget.RadioGroup;
+import android.widget.Switch;
 import android.widget.Toast;
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
-import com.google.android.material.bottomsheet.BottomSheetDialogFragment;
-import com.google.android.material.button.MaterialButton;
-import com.google.android.material.button.MaterialButtonToggleGroup;
-import com.google.android.material.switchmaterial.SwitchMaterial;
-import com.google.android.material.textfield.TextInputEditText;
 
 /**
  * Editable connection settings persisted to the "camex" SharedPreferences, read
  * back by {@link TunnelService} when building the camex argv.
  */
-public class SettingsBottomSheet extends BottomSheetDialogFragment {
+public class SettingsActivity extends Activity {
 
     private static final String PREFS = "camex";
     private static final int DEFAULT_PORT = 5800;
@@ -35,36 +32,47 @@ public class SettingsBottomSheet extends BottomSheetDialogFragment {
     private static final int DEFAULT_KEEPALIVE = 10;
     private static final int DEFAULT_TIMEOUT = 20;
 
-    private TextInputEditText hostInput, portInput, nameInput, pskInput;
-    private TextInputEditText pubkeyInput;
-    private TextInputEditText mtuInput, keepaliveInput, timeoutInput;
-    private SwitchMaterial fullTunnelSwitch;
-    private MaterialButtonToggleGroup transportGroup;
+    private EditText hostInput, portInput, nameInput, pskInput;
+    private EditText pubkeyInput;
+    private EditText mtuInput, keepaliveInput, timeoutInput;
+    private Switch fullTunnelSwitch;
+    private RadioGroup transportGroup;
 
-    @Nullable
     @Override
-    public View onCreateView(@NonNull LayoutInflater inflater,
-                             @Nullable ViewGroup container,
-                             @Nullable Bundle savedInstanceState) {
-        return inflater.inflate(R.layout.bottom_sheet_settings, container, false);
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setTitle(R.string.settings_title);
+        setContentView(R.layout.activity_settings);
+
+        hostInput = findViewById(R.id.input_server_host);
+        portInput = findViewById(R.id.input_server_port);
+        nameInput = findViewById(R.id.input_name);
+        pskInput = findViewById(R.id.input_psk);
+        pubkeyInput = findViewById(R.id.input_server_pubkey);
+        fullTunnelSwitch = findViewById(R.id.switch_full_tunnel);
+        transportGroup = findViewById(R.id.group_transport);
+        mtuInput = findViewById(R.id.input_mtu);
+        keepaliveInput = findViewById(R.id.input_keepalive);
+        timeoutInput = findViewById(R.id.input_server_timeout);
+
+        CheckBox showPsk = findViewById(R.id.check_show_psk);
+        showPsk.setOnCheckedChangeListener((b, show) -> {
+            int sel = pskInput.getSelectionEnd();
+            pskInput.setInputType(InputType.TYPE_CLASS_TEXT | (show
+                ? InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                : InputType.TYPE_TEXT_VARIATION_PASSWORD));
+            pskInput.setSelection(Math.max(sel, 0));
+        });
+
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        // After a rotation the views restore what was typed: keep it
+        if (savedInstanceState == null) load(prefs);
+
+        Button save = findViewById(R.id.btn_save);
+        save.setOnClickListener(view -> save(prefs));
     }
 
-    @Override
-    public void onViewCreated(@NonNull View v, @Nullable Bundle savedInstanceState) {
-        super.onViewCreated(v, savedInstanceState);
-
-        hostInput = v.findViewById(R.id.input_server_host);
-        portInput = v.findViewById(R.id.input_server_port);
-        nameInput = v.findViewById(R.id.input_name);
-        pskInput = v.findViewById(R.id.input_psk);
-        pubkeyInput = v.findViewById(R.id.input_server_pubkey);
-        fullTunnelSwitch = v.findViewById(R.id.switch_full_tunnel);
-        transportGroup = v.findViewById(R.id.group_transport);
-        mtuInput = v.findViewById(R.id.input_mtu);
-        keepaliveInput = v.findViewById(R.id.input_keepalive);
-        timeoutInput = v.findViewById(R.id.input_server_timeout);
-
-        SharedPreferences prefs = requireContext().getSharedPreferences(PREFS, 0);
+    private void load(SharedPreferences prefs) {
         hostInput.setText(prefs.getString("server_host", ""));
         portInput.setText(String.valueOf(prefs.getInt("server_port", DEFAULT_PORT)));
         nameInput.setText(prefs.getString("name", DEFAULT_NAME));
@@ -79,9 +87,6 @@ public class SettingsBottomSheet extends BottomSheetDialogFragment {
         mtuInput.setText(String.valueOf(prefs.getInt("mtu", DEFAULT_MTU)));
         keepaliveInput.setText(String.valueOf(prefs.getInt("keepalive", DEFAULT_KEEPALIVE)));
         timeoutInput.setText(String.valueOf(prefs.getInt("server_timeout", DEFAULT_TIMEOUT)));
-
-        MaterialButton save = v.findViewById(R.id.btn_save);
-        save.setOnClickListener(view -> save(prefs));
     }
 
     private void save(SharedPreferences prefs) {
@@ -137,7 +142,7 @@ public class SettingsBottomSheet extends BottomSheetDialogFragment {
         }
 
         String transport =
-            transportGroup.getCheckedButtonId() == R.id.btn_tcp ? "tcp" : "udp";
+            transportGroup.getCheckedRadioButtonId() == R.id.btn_tcp ? "tcp" : "udp";
 
         prefs.edit()
             .putString("server_host", host)
@@ -152,15 +157,15 @@ public class SettingsBottomSheet extends BottomSheetDialogFragment {
             .putInt("server_timeout", timeout)
             .apply();
 
-        Toast.makeText(requireContext(), R.string.save, Toast.LENGTH_SHORT).show();
-        dismiss();
+        Toast.makeText(this, R.string.save, Toast.LENGTH_SHORT).show();
+        finish();
     }
 
-    private static String text(TextInputEditText input) {
+    private static String text(EditText input) {
         return input.getText() == null ? "" : input.getText().toString().trim();
     }
 
-    private static int parseInt(TextInputEditText input, int fallback) {
+    private static int parseInt(EditText input, int fallback) {
         String s = text(input);
         if (TextUtils.isEmpty(s)) return fallback;
         try {

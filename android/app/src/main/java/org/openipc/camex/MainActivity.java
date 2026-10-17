@@ -6,6 +6,7 @@
 package org.openipc.camex;
 
 import android.Manifest;
+import android.app.Activity;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -18,10 +19,8 @@ import android.os.Bundle;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.content.ContextCompat;
 
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends Activity {
     private TextView statusView;
     private Button startButton, stopButton, settingsButton;
     private boolean running = false;
@@ -51,14 +50,19 @@ public class MainActivity extends AppCompatActivity {
 
         startButton.setOnClickListener(v -> startVpn());
         stopButton.setOnClickListener(v -> stopVpn());
-        settingsButton.setOnClickListener(v ->
-            new SettingsBottomSheet().show(getSupportFragmentManager(), "settings"));
+        settingsButton.setOnClickListener(v -> openSettings());
 
         requestNotificationPermission();
         updateStatus(false);
-        ContextCompat.registerReceiver(this, exitReceiver,
-            new IntentFilter(TunnelService.ACTION_EXITED),
-            ContextCompat.RECEIVER_NOT_EXPORTED);
+        // Only our own service may send ACTION_EXITED: Android 13+ honours the
+        // not-exported flag, older versions the signature permission of this app
+        // (what ContextCompat.registerReceiver does)
+        registerReceiver(exitReceiver, new IntentFilter(TunnelService.ACTION_EXITED),
+            TunnelService.PERMISSION_INTERNAL, null, RECEIVER_NOT_EXPORTED);
+    }
+
+    private void openSettings() {
+        startActivity(new Intent(this, SettingsActivity.class));
     }
 
     @Override
@@ -70,7 +74,7 @@ public class MainActivity extends AppCompatActivity {
     // Android 13+ needs runtime POST_NOTIFICATIONS for the foreground notification.
     private void requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-                && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                     != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{ Manifest.permission.POST_NOTIFICATIONS }, 1);
         }
@@ -79,10 +83,10 @@ public class MainActivity extends AppCompatActivity {
     private void startVpn() {
         // Protocol v2 needs both keys: without them camex cannot start
         SharedPreferences prefs = getSharedPreferences("camex", MODE_PRIVATE);
-        if (!SettingsBottomSheet.isServerPubkey(prefs.getString("server_pubkey", ""))
+        if (!SettingsActivity.isServerPubkey(prefs.getString("server_pubkey", ""))
                 || prefs.getString("psk", "").isEmpty()) {
             Toast.makeText(this, R.string.err_keys_missing, Toast.LENGTH_LONG).show();
-            new SettingsBottomSheet().show(getSupportFragmentManager(), "settings");
+            openSettings();
             return;
         }
         Intent intent = VpnService.prepare(this);

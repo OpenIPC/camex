@@ -2,10 +2,9 @@
 <!--
     Copyright (c) OpenIPC  https://openipc.org  MIT License
 
-    themes.xml — camex app theme (dark Material3)
+    themes.xml — camex app theme (platform Material, light; dark in values-night)
 -->
 <resources>
-    <!-- MaterialComponents theme is required by the settings bottom sheet
-         (BottomSheetDialogFragment, TextInputLayout, SwitchMaterial). -->
-    <style name="Theme.Camex" parent="Theme.MaterialComponents.DayNight.DarkActionBar" />
+    <!-- Platform theme: no AppCompat or Material Components (#55) -->
+    <style name="Theme.Camex" parent="android:Theme.Material.Light.DarkActionBar" />
 </resources>
