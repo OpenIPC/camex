@@ -682,6 +682,9 @@ sudo rmmod camex
 
 ## 版本管理与发布流程
 
+各版本的变更历史见 [CHANGELOG.md](CHANGELOG.md)（英文）；每次修改版本号时，
+在同一个 PR 中向其中添加对应章节。
+
 ### 唯一的版本来源
 
 修改软件版本的**唯一**位置是 `src/version.h`：
