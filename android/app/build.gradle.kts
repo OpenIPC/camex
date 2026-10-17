@@ -58,8 +58,7 @@ android {
 }
 
 dependencies {
-    implementation("androidx.appcompat:appcompat:1.6.1")
-    // core 1.12.0+ provides ServiceCompat.startForeground(..., foregroundServiceType)
-    implementation("androidx.core:core:1.12.0")
-    implementation("com.google.android.material:material:1.11.0")
+    // Platform classes only (#55): no AppCompat, Material or AndroidX core.
+    // @Keep for the method native code calls; R8's default rules honour it.
+    implementation("androidx.annotation:annotation:1.7.1")
 }

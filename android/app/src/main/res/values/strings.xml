@@ -12,7 +12,7 @@
     <string name="btn_stop">Stop VPN</string>
     <string name="btn_settings">Settings</string>
 
-    <!-- Settings bottom sheet -->
+    <!-- Settings screen -->
     <string name="settings_title">Connection settings</string>
     <string name="server_host">Server host</string>
     <string name="server_port">Server port</string>
@@ -31,6 +31,7 @@
     <string name="err_exited">camex stopped (code %1$d): check the settings and the server</string>
     <string name="full_tunnel">Route all traffic through the tunnel</string>
     <string name="psk">Pre-shared key</string>
+    <string name="show_psk">Show the key</string>
 
     <!-- Advanced -->
     <string name="advanced">Advanced</string>

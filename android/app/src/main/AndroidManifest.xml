@@ -15,6 +15,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Guards the ACTION_EXITED receiver of MainActivity before Android 13 -->
+    <permission
+        android:name="org.openipc.camex.permission.INTERNAL"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="org.openipc.camex.permission.INTERNAL" />
+
     <application
         android:label="Camex VPN"
         android:icon="@mipmap/ic_launcher"
@@ -30,6 +36,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:label="@string/settings_title"
+            android:theme="@style/Theme.Camex" />
 
         <service
             android:name=".TunnelService"
