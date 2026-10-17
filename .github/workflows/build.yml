@@ -3,21 +3,30 @@
 #
 # build.yml — CI/CD for camex: build, test, release
 #
+# Release (#60): one release only, "latest", replaced by every push to master
+# (or a manual run on master) once all build and test jobs pass. Its title is
+# "Camex <CAMEX_VERSION from src/version.h>", its file names carry no version,
+# so download links never change, and SHA256SUMS lists them. No versioned
+# releases or v* tags are kept; the change history lives in CHANGELOG.md.
+#
 
 name: camex CI
 
 on:
   push:
     branches: [master, main, develop]
-    tags: ['v*']
   pull_request:
     branches: [master, main]
+  # a manual run on master rebuilds and republishes "latest"
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Release version (e.g., v3.0.2)'
-        required: true
-        default: 'v3.0.2'
+
+# One run per ref at a time. Branches and pull requests: a newer push cancels
+# the older run. master (pushes and manual runs share the group): runs are
+# queued, never cancelled, so a release is not stopped between deleting and
+# recreating "latest"; a newer queued run replaces an older waiting one.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 env:
   BUILD_DIR: build
@@ -210,16 +219,14 @@ jobs:
           if-no-files-found: error
 
       # Debuggable build for testing on devices (adb install, run-as, logcat).
-      # Not uploaded for tags, so it never ends up in a release.
+      # The release job takes camex-android.apk by name, so it never ends up there.
       - name: Build debug APK
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: |
           cd android
           gradle assembleDebug
           cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/camex-android-debug.apk
 
       - name: Upload artifact (debug APK)
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v7
         with:
           name: camex-android-debug-apk
@@ -455,41 +462,16 @@ jobs:
 
   # ----------------------------------------------------------------- release
   release:
-    name: GitHub Release
+    name: Release "latest"
     needs: [linux, smoke, android, windows, wine-smoke, macos]
     runs-on: ubuntu-latest
-    # Runs on tag push (auto) OR manual workflow_dispatch
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/master'
     permissions:
       contents: write
 
     steps:
-      - name: Determine tag name
-        id: tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Checkout (for release notes)
+      - name: Checkout
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Verify version.h matches git tag
-        run: |
-          FILE_VERSION=$(grep -Po '(?<=CAMEX_VERSION ")[^"]*' src/version.h)
-          TAG_VERSION="${{ steps.tag.outputs.tag }}"
-          TAG_VERSION="${TAG_VERSION#v}"
-          echo "version.h  → ${FILE_VERSION}"
-          echo "git tag    → ${TAG_VERSION}"
-          if [ "${FILE_VERSION}" != "${TAG_VERSION}" ]; then
-            echo "::error::VERSION MISMATCH: version.h says '${FILE_VERSION}' but git tag is 'v${TAG_VERSION}'"
-            exit 1
-          fi
-          echo "✅ Versions match: ${FILE_VERSION}"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v7
@@ -497,129 +479,106 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Collect release binaries
-        run: |
-          mkdir release-binaries
-          VERSION="${{ steps.tag.outputs.tag }}"
-          VERSION="${VERSION#v}"
-          [ -z "$VERSION" ] && VERSION="0.0.0"
-
-          # Collect all camex-* (Linux), camex-*.exe (Windows), and .apk (Android)
-          find artifacts -type f \( -name 'camex-*' -o -name 'camex.exe' -o -name '*.apk' \) \
-            -exec cp -v {} release-binaries/ \;
-
-          # Rename Linux binaries: camex-<arch> → camex-<version>-<arch>
-          for f in release-binaries/camex-aarch64 release-binaries/camex-arm \
-                   release-binaries/camex-mipsel  release-binaries/camex-x86_64; do
-            [ -f "$f" ] || continue
-            arch="${f#release-binaries/camex-}"
-            mv -v "$f" "release-binaries/camex-${VERSION}-${arch}"
-          done
-
-          # Rename APK: camex-android.apk → camex-<version>-android.apk
-          if [ -f release-binaries/camex-android.apk ]; then
-            mv -v release-binaries/camex-android.apk \
-                 "release-binaries/camex-${VERSION}-android.apk"
-          fi
-
-          echo "=== Release binaries ==="
-          ls -lh release-binaries/
-
-      - name: Package .zip archives for macOS and Windows
-        run: |
-          VERSION="${{ steps.tag.outputs.tag }}"
-          VERSION="${VERSION#v}"
-          [ -z "$VERSION" ] && VERSION="0.0.0"
-          # macOS .zip
-          if [ -f release-binaries/camex-darwin ]; then
-            mkdir -p pkg-macos
-            cp release-binaries/camex-darwin pkg-macos/camex
-            cp LICENSE README.md pkg-macos/ 2>/dev/null || true
-            cd pkg-macos && zip -9 "../release-binaries/camex-${VERSION}-macos.zip" * && cd ..
-            rm -rf pkg-macos
-            # Remove raw darwin binary — only .zip remains
-            rm -f release-binaries/camex-darwin
-          fi
-          # Windows .zip — download wintun.dll once, package per arch
-          if ls release-binaries/camex-*.exe >/dev/null 2>&1; then
-            # Download wintun.dll once
-            curl -fsSL "https://www.wintun.net/builds/wintun-0.14.1.zip" -o /tmp/wintun.zip
-            unzip -q -o /tmp/wintun.zip -d /tmp/wintun-extract
-
-            # x86_64 package
-            if [ -f release-binaries/camex-x86_64.exe ]; then
-              mkdir -p pkg-win64
-              cp release-binaries/camex-x86_64.exe pkg-win64/camex.exe
-              cp LICENSE README.md pkg-win64/ 2>/dev/null || true
-              find /tmp/wintun-extract -name 'wintun.dll' -path '*/amd64/*' -exec cp {} pkg-win64/wintun.dll \;
-              cd pkg-win64 && zip -9 "../release-binaries/camex-${VERSION}-windows-x86_64.zip" * && cd ..
-              rm -rf pkg-win64
-            fi
-
-            # i686 package
-            if [ -f release-binaries/camex-i686.exe ]; then
-              mkdir -p pkg-win32
-              cp release-binaries/camex-i686.exe pkg-win32/camex.exe
-              cp LICENSE README.md pkg-win32/ 2>/dev/null || true
-              find /tmp/wintun-extract -name 'wintun.dll' -path '*/x86/*' -exec cp {} pkg-win32/wintun.dll \;
-              cd pkg-win32 && zip -9 "../release-binaries/camex-${VERSION}-windows-i686.zip" * && cd ..
-              rm -rf pkg-win32
-            fi
-
-            rm -rf /tmp/wintun.zip /tmp/wintun-extract
-            # Remove raw .exe files — only .zip remains
-            rm -f release-binaries/camex-x86_64.exe release-binaries/camex-i686.exe
-          fi
-          echo "=== Release binaries (final) ==="
-          ls -lh release-binaries/
-
-      - name: Create or update release (gh CLI)
-        id: release
+      - name: Collect release files
+        id: vars
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "${{ steps.tag.outputs.tag }}" --repo "${{ github.repository }}" &>/dev/null; then
-            # Release exists — upload/clobber new assets
-            gh release upload "${{ steps.tag.outputs.tag }}" \
-              --repo "${{ github.repository }}" \
-              --clobber \
-              release-binaries/*
-          else
-            # Create new release
-            gh release create "${{ steps.tag.outputs.tag }}" \
-              --repo "${{ github.repository }}" \
-              --title "camex ${{ steps.tag.outputs.tag }}" \
-              --generate-notes \
-              release-binaries/*
-            echo "new=true" >> "$GITHUB_OUTPUT"
+          VER=$(sed -n 's/^#define CAMEX_VERSION "\(.*\)"/\1/p' src/version.h)
+          [ -n "$VER" ] || { echo "::error::no CAMEX_VERSION in src/version.h"; exit 1; }
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+          # Only the newest commit of master is published: a run of an older one
+          # (a manual run started before a push) stops here
+          HEAD=$(git ls-remote origin refs/heads/master | cut -f1)
+          if [ "$HEAD" != "$GITHUB_SHA" ]; then
+            echo "::notice::master is at ${HEAD::7} now, not ${GITHUB_SHA::7}: not published"
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
+          # The APK goes to Telegram only when the version changes. A missing
+          # release means a first one; any other lookup error stops the job, so
+          # an unchanged version is never posted by mistake.
+          if PREV=$(gh release view latest --repo "$GITHUB_REPOSITORY" --json name -q .name 2>err.txt); then
+            :
+          elif grep -q 'release not found' err.txt; then
+            PREV=
+          else
+            echo "::error::cannot read the current latest release: $(cat err.txt)"; exit 1
+          fi
+          echo "Previous release: ${PREV:-none}"
+          [ "$PREV" = "Camex $VER" ] || echo "new=true" >> "$GITHUB_OUTPUT"
 
-      # The Telegram channel gets the APK of every new release, as in
-      # OpenIPC/vtesse (#43). Organization secrets; only a signed APK is sent,
-      # and a failed upload is reported but does not fail the release.
+          mkdir release
+          # Linux: static musl binaries, one per architecture
+          for arch in aarch64 arm mipsel x86_64; do
+            cp -v "artifacts/camex-$arch" release/
+          done
+          # Android: the signed release APK only (the debug APK has another name)
+          cp -v artifacts/camex-android.apk release/
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1 || true)
+          [ -n "$APKSIGNER" ] || { echo "::error::apksigner not found"; exit 1; }
+          "$APKSIGNER" verify release/camex-android.apk ||
+            { echo "::error::camex-android.apk is not signed: an unsigned APK cannot be installed"; exit 1; }
+
+          # macOS: the binary with LICENSE and README
+          mkdir pkg-macos
+          cp artifacts/camex-darwin pkg-macos/camex
+          cp LICENSE README.md pkg-macos/
+          (cd pkg-macos && zip -9 ../release/camex-macos.zip *)
+          # Windows: camex.exe with wintun.dll of the same architecture
+          curl -fsSL "https://www.wintun.net/builds/wintun-0.14.1.zip" -o wintun.zip
+          unzip -q wintun.zip -d wintun
+          for pair in x86_64:amd64 i686:x86; do
+            arch=${pair%%:*}; wt=${pair#*:}
+            mkdir "pkg-$arch"
+            cp "artifacts/camex-$arch.exe" "pkg-$arch/camex.exe"
+            cp LICENSE README.md "pkg-$arch/"
+            cp "wintun/wintun/bin/$wt/wintun.dll" "pkg-$arch/"
+            (cd "pkg-$arch" && zip -9 "../release/camex-windows-$arch.zip" *)
+          done
+
+          (cd release && sha256sum * > SHA256SUMS && sha256sum -c SHA256SUMS)
+          ls -l release
+
+      - name: Publish "latest"
+        if: steps.vars.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VER: ${{ steps.vars.outputs.ver }}
+        run: |
+          gh release delete latest --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes 2>/dev/null || true
+          # Downloads are gone until the release is back: retry a failed create
+          for try in 1 2 3; do
+            if gh release create latest release/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --latest \
+              --title "Camex ${VER}" \
+              --target "${GITHUB_SHA}" \
+              --notes "Camex ${VER} (${GITHUB_SHA::7}): static musl builds for Linux (aarch64, arm, mipsel, x86_64), the Android app (camex-android.apk), macOS and Windows (x86_64, i686) packages, and SHA256SUMS. Rebuilt from every push to master. Changes: CHANGELOG.md; installation: README.md."; then
+              exit 0
+            fi
+            echo "::warning::gh release create failed (attempt $try)"
+            # a half-created release blocks the next attempt
+            gh release delete latest --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes 2>/dev/null || true
+            sleep 15
+          done
+          echo "::error::latest could not be published"; exit 1
+
+      # The Telegram channel gets the APK of every new version, as in
+      # OpenIPC/vtesse. Organization secrets; a failed upload is reported but
+      # does not fail the release.
       - name: Telegram
-        if: steps.release.outputs.new == 'true'
+        if: steps.vars.outputs.skip != 'true' && steps.vars.outputs.new == 'true'
         env:
           TG_TOKEN: ${{ secrets.TELEGRAM_TOKEN_BOT_OPENIPC }}
           TG_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL_OPENIPC_DEV }}
-          TAG: ${{ steps.tag.outputs.tag }}
+          VER: ${{ steps.vars.outputs.ver }}
         run: |
           if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHANNEL" ]; then
             echo "::warning::Telegram secrets are not available, APK not posted"; exit 0
           fi
-          VER="${TAG#v}"
-          APK="release-binaries/camex-${VER}-android.apk"
-          [ -f "$APK" ] || { echo "::warning::no APK in the release, nothing posted"; exit 0; }
-          # An unsigned APK (no release keystore) cannot be installed: do not post it
-          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1 || true)
-          if [ -z "$APKSIGNER" ] || ! "$APKSIGNER" verify "$APK" >/dev/null 2>&1; then
-            echo "::warning::$APK is not signed (or apksigner is missing), not posted"; exit 0
-          fi
-          # The commit the tag points to (a manual run may start from another one)
-          COMMIT=$(git rev-list -n 1 "$TAG" 2>/dev/null || echo "$GITHUB_SHA")
-          CAPTION=$(printf 'camex %s for Android\nCommit: %s\nTime: %s\n\n%s' "$VER" "${COMMIT::7}" \
-            "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}")
+          CAPTION=$(printf 'camex %s for Android\nCommit: %s\nTime: %s\n\n%s' "$VER" "${GITHUB_SHA::7}" \
+            "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/latest")
           HTTP=$(curl -sS -o tg.json -w '%{http_code}' "https://api.telegram.org/bot${TG_TOKEN}/sendDocument" \
-            -F chat_id="$TG_CHANNEL" -F caption="$CAPTION" -F document=@"$APK") || HTTP=000
+            -F chat_id="$TG_CHANNEL" -F caption="$CAPTION" -F document=@release/camex-android.apk) || HTTP=000
           echo "Telegram response: $HTTP"
           [ "$HTTP" = 200 ] || echo "::warning::Telegram upload failed (HTTP $HTTP): $(cat tg.json 2>/dev/null)"
