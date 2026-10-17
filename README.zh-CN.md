@@ -98,12 +98,10 @@ CI 会在每次推送到 `master` 时重新构建。其标题显示 camex 版本
 | `camex-macos.zip`          | macOS（utun）：`camex`、LICENSE、README                       |
 | `camex-windows-x86_64.zip` | Windows 64 位：`camex.exe` 和 `wintun.dll`                    |
 | `camex-windows-i686.zip`   | Windows 32 位：`camex.exe` 和 `wintun.dll`                    |
-| `SHA256SUMS`               | 以上所有文件的 SHA256                                         |
 
 ```sh
 URL=https://github.com/OpenIPC/camex/releases/latest/download
-curl -fL -O $URL/camex-arm -O $URL/SHA256SUMS
-sha256sum -c --ignore-missing SHA256SUMS
+curl -fL -O $URL/camex-arm
 ```
 
 变更历史见 [CHANGELOG.md](CHANGELOG.md)。
@@ -748,7 +746,7 @@ Android 的 `versionName` 和 `versionCode` 随之变化：`scripts/sync-android
 1. **在 PR 中**：更新 `CAMEX_VERSION`，运行 `scripts/sync-android-version.sh`，并在
    `CHANGELOG.md` 中添加该版本的章节。
 2. **合并到 `master`**。CI 删除旧的 `latest` 发布及其标签，并在构建所用的提交上重新创建：
-   标题 `Camex X.Y.Z`，[永久链接](#永久链接)中列出的文件，以及 `SHA256SUMS`。
+   标题 `Camex X.Y.Z`，以及[永久链接](#永久链接)中列出的文件。
 3. **Telegram**：当版本与之前 `latest` 的标题不同时，CI 会将 APK 发送到 OpenIPC
    Telegram 频道。未更改版本的推送只替换文件。
 

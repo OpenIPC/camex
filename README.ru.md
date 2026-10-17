@@ -99,12 +99,10 @@ sudo ./camex --mode client \
 | `camex-macos.zip`          | macOS (utun): `camex`, LICENSE, README                                           |
 | `camex-windows-x86_64.zip` | Windows 64-bit: `camex.exe` и `wintun.dll`                                       |
 | `camex-windows-i686.zip`   | Windows 32-bit: `camex.exe` и `wintun.dll`                                       |
-| `SHA256SUMS`               | SHA256 всех файлов выше                                                          |
 
 ```sh
 URL=https://github.com/OpenIPC/camex/releases/latest/download
-curl -fL -O $URL/camex-arm -O $URL/SHA256SUMS
-sha256sum -c --ignore-missing SHA256SUMS
+curl -fL -O $URL/camex-arm
 ```
 
 История изменений — в [CHANGELOG.md](CHANGELOG.md).
@@ -780,7 +778,7 @@ sudo rmmod camex
    раздел версии в `CHANGELOG.md`.
 2. **Смержить в `master`**. CI удаляет старый релиз `latest` вместе с тегом и создаёт его
    заново на собранном коммите: заголовок `Camex X.Y.Z`, файлы из раздела
-   [«Постоянные ссылки»](#постоянные-ссылки), `SHA256SUMS`.
+   [«Постоянные ссылки»](#постоянные-ссылки).
 3. **Telegram**: если версия отличается от заголовка прежнего `latest`, CI отправляет APK
    в Telegram-канал OpenIPC. Push без смены версии только заменяет файлы.
 

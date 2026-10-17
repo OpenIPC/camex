@@ -6,7 +6,7 @@
 # Release (#60): one release only, "latest", replaced by every push to master
 # (or a manual run on master) once all build and test jobs pass. Its title is
 # "Camex <CAMEX_VERSION from src/version.h>", its file names carry no version,
-# so download links never change, and SHA256SUMS lists them. No versioned
+# so download links never change. No versioned
 # releases or v* tags are kept; the change history lives in CHANGELOG.md.
 #
 
@@ -555,7 +555,6 @@ jobs:
             (cd "pkg-$arch" && zip -9 "../release/camex-windows-$arch.zip" *)
           done
 
-          (cd release && sha256sum * > SHA256SUMS && sha256sum -c SHA256SUMS)
           ls -l release
 
       - name: Publish "latest"
@@ -572,7 +571,7 @@ jobs:
               --latest \
               --title "Camex ${VER}" \
               --target "${GITHUB_SHA}" \
-              --notes "Camex ${VER} (${GITHUB_SHA::7}): static musl builds for Linux (aarch64, arm, mipsel, x86_64), the Android app (camex-android.apk), macOS and Windows (x86_64, i686) packages, and SHA256SUMS. Rebuilt from every push to master. Changes: CHANGELOG.md; installation: README.md."; then
+              --notes "Camex ${VER} (${GITHUB_SHA::7}): static musl builds for Linux (aarch64, arm, mipsel, x86_64), the Android app (camex-android.apk), macOS and Windows (x86_64, i686) packages. Rebuilt from every push to master. Changes: CHANGELOG.md; installation: README.md."; then
               exit 0
             fi
             echo "::warning::gh release create failed (attempt $try)"
