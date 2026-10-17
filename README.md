@@ -81,16 +81,18 @@ The app connects in auto mode: the server sends the address, routes and MTU.
 
 ## Binary Sizes
 
-| Platform | Size (stripped) | UPX compressed |
-|----------|:---------------:|:--------------:|
-| x86_64   | _see CI_        | _see CI_       |
-| armhf    | _see CI_        | _see CI_       |
-| aarch64  | _see CI_        | _see CI_       |
-| mipsel   | _see CI_        | _see CI_       |
+| Platform | Toolchain                            | Size    |
+|----------|--------------------------------------|---------|
+| x86_64   | Bootlin x86-64 musl                  | ~195 KB |
+| arm      | OpenIPC arm musleabi                 | ~200 KB |
+| aarch64  | Bootlin aarch64 musl                 | ~205 KB |
+| mipsel   | OpenWrt mipsel_24kc musl, soft-float | ~230 KB |
 
-> Sizes are updated by CI on each release. See the latest
-> [build artifacts](https://github.com/OpenIPC/camex/actions)
-> or [releases](https://github.com/OpenIPC/camex/releases).
+Release binaries are static and linked against musl: they need no libc on the
+device and run on any OpenIPC firmware. They are not packed with UPX, so they
+do not have to be unpacked into RAM on every start. Built by `ci/build-musl.sh`;
+exact sizes are in the size report of each
+[CI run](https://github.com/OpenIPC/camex/actions).
 
 ## Requirements
 
