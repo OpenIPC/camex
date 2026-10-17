@@ -81,7 +81,9 @@ if [ ! -d "$DIR/bin" ]; then
     rm -f "$CACHE/toolchain.tar"
     [ -x "$DIR/relocate-sdk.sh" ] && "$DIR/relocate-sdk.sh" >/dev/null 2>&1 || true
 fi
-GCC=$(ls "$DIR"/bin/*-linux-musl*-gcc | head -1)
+# An empty CROSS would build with the host compiler: a glibc binary
+GCC=$(ls "$DIR"/bin/*-linux-musl*-gcc 2>/dev/null | head -1)
+[ -n "$GCC" ] || { echo "no musl gcc in $DIR/bin: remove $DIR and run again" >&2; exit 1; }
 export STAGING_DIR="$DIR"     # OpenWrt's gcc wrapper warns without it
 CROSS=${GCC%gcc}
 
