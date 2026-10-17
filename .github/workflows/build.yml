@@ -158,6 +158,90 @@ jobs:
           path: sizes.md
           if-no-files-found: ignore
 
+  # ------------------------------------------------- keenetic (Entware .ipk)
+  # Static musl builds for Keenetic routers (issue #33), checked under QEMU
+  # against a native x86_64 camex in both roles, packed as Entware .ipk.
+  # Artifacts only; not part of releases yet.
+  keenetic:
+    name: Keenetic ${{ matrix.target.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: mipsel
+            zig: mipsel-linux-musleabi -mcpu=mips32r2
+            file_re: '32-bit LSB executable, MIPS, MIPS32 rel2.*statically linked'
+            qemu: mipsel
+            entware: mipsel-3.4
+          - name: mips
+            zig: mips-linux-musleabi -mcpu=mips32r2
+            file_re: '32-bit MSB executable, MIPS, MIPS32 rel2.*statically linked'
+            qemu: mips
+            entware: mips-3.4
+          - name: aarch64
+            zig: aarch64-linux-musl
+            file_re: '64-bit LSB executable, ARM aarch64.*statically linked'
+            qemu: aarch64
+            entware: aarch64-3.10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Zig
+        run: python3 -m pip install --quiet ziglang==0.17.0
+
+      - name: Build static binaries
+        run: |
+          mkdir -p out
+          # the workflow-level BUILD_DIR=build would move the binary to src/build/
+          make -C src clean BUILD_DIR=. >/dev/null
+          make -C src -j$(nproc) all BUILD_DIR=. \
+            CC="python3 -m ziglang cc -target ${{ matrix.target.zig }}" \
+            LDFLAGS="-static -s -Wl,--gc-sections"
+          cp src/camex out/camex-${{ matrix.target.name }}
+          # native peer for the QEMU interop test
+          make -C src clean BUILD_DIR=. >/dev/null
+          make -C src -j$(nproc) all BUILD_DIR=. \
+            CC="python3 -m ziglang cc -target x86_64-linux-musl" \
+            LDFLAGS="-static -s -Wl,--gc-sections"
+          cp src/camex camex-x86_64
+
+      - name: Check the binary
+        run: |
+          f=out/camex-${{ matrix.target.name }}
+          file "$f"
+          file "$f" | grep -Eq '${{ matrix.target.file_re }}'
+          if [ "${{ matrix.target.qemu }}" != aarch64 ]; then
+            # MT7621 and other Keenetic MIPS SoCs have no FPU
+            readelf -A "$f" | grep -q 'FP ABI: Soft float'
+          fi
+          ls -l "$f"
+
+      - name: QEMU interop test
+        run: ./docker/test-keenetic-qemu.sh ${{ matrix.target.qemu }} out/camex-${{ matrix.target.name }} camex-x86_64
+
+      - name: Build .ipk
+        run: |
+          ./packaging/keenetic/build-ipk.sh out/camex-${{ matrix.target.name }} \
+            ${{ matrix.target.entware }} "$(git describe --tags --always)" out
+          tar -tzvf out/*.ipk
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: camex-keenetic-${{ matrix.target.entware }}
+          path: out/
+          if-no-files-found: error
+
   # ----------------------------------------------------------- android (APK)
   android:
     name: Android (arm64 + armv7 APK)
