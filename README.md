@@ -749,6 +749,22 @@ The Android `versionName` and `versionCode` follow it: `scripts/sync-android-ver
 (or `make apk`, which calls it) updates `android/app/build.gradle.kts` and
 `android/app/src/main/AndroidManifest.xml`.
 
+### When to bump
+
+`CAMEX_VERSION` is `MAJOR.MINOR.PATCH`, numbers without leading zeros:
+
+- **PATCH** — fixes and small changes; **MINOR** — a new feature (option, config field,
+  protocol, platform); **MAJOR** — an incompatible change (arguments, config format,
+  protocol, default behaviour), only when the maintainer decides.
+- A pull request that changes the code or the build (`src/`, `android/`, `Makefile`,
+  `ci/`, `scripts/`) bumps the version as its last commit before the merge and adds
+  its `## X.Y.Z — YYYY-MM-DD` section to `CHANGELOG.md`. Pull requests with only docs,
+  tests, screenshots or workflows in `.github/` do not.
+- CI checks this on every pull request (`.github/check-version.sh`, job "Version
+  bump"): the new version must be well-formed, greater than the one on `master` and
+  have its new `CHANGELOG.md` section. Until the bump commit is pushed, the check is
+  red by design.
+
 ### Release process
 
 There are no version tags and no versioned releases: one release, `latest`, is

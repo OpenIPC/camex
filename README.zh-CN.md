@@ -726,6 +726,20 @@ Android 的 `versionName` 和 `versionCode` 随之变化：`scripts/sync-android
 （或调用它的 `make apk`）会更新 `android/app/build.gradle.kts` 和
 `android/app/src/main/AndroidManifest.xml`。
 
+### 何时提升版本号
+
+`CAMEX_VERSION` 为 `MAJOR.MINOR.PATCH`，各数字不带前导零：
+
+- **PATCH** —— 修复和小改动；**MINOR** —— 新功能（选项、配置字段、协议、平台）；
+  **MAJOR** —— 不兼容的变更（参数、配置格式、协议、默认行为），仅由维护者决定。
+- 修改代码或构建（`src/`、`android/`、`Makefile`、`ci/`、`scripts/`）的 pull request，
+  在合并前的最后一个提交中提升版本号，并在 `CHANGELOG.md` 中添加
+  `## X.Y.Z — YYYY-MM-DD` 章节。只涉及文档、测试、截图或 `.github/` 中工作流的
+  pull request 不提升版本号。
+- CI 会在每个 pull request 中检查这一点（`.github/check-version.sh`，job
+  “Version bump”）：新版本号格式必须正确、大于 `master` 上的版本，并带有新的
+  `CHANGELOG.md` 章节。在推送提升版本号的提交之前，该检查为红色，这是预期行为。
+
 ### 发布流程
 
 没有版本标签，也没有按版本的发布：只有一个发布 `latest`，每次推送到 `master`
