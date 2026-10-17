@@ -705,6 +705,9 @@ memory is unavailable in this context the packet is dropped
 
 ## Versioning & Release Process
 
+The change history of every version is in [CHANGELOG.md](CHANGELOG.md); a version
+bump adds its section there in the same PR.
+
 ### Single source of truth
 
 The **only** place to change the software version is `src/version.h`:
