@@ -27,32 +27,16 @@ env:
 jobs:
   # ------------------------------------------------------------------ linux
   linux:
-    name: Linux ${{ matrix.platform.name }}
+    name: Linux ${{ matrix.target }} (musl static)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        platform:
-          - name: x86_64
-            triple: x86_64-linux-gnu
-            arch: amd64
-            pkgs: gcc
-            strip_args: --strip-unneeded
-          - name: arm
-            triple: arm-linux-gnueabi
-            arch: armhf
-            pkgs: gcc-arm-linux-gnueabi
-            strip_args: --strip-unneeded
-          - name: aarch64
-            triple: aarch64-linux-gnu
-            arch: arm64
-            pkgs: gcc-aarch64-linux-gnu
-            strip_args: --strip-unneeded
-          - name: mipsel
-            triple: mipsel-linux-gnu
-            arch: mipsel
-            pkgs: gcc-mipsel-linux-gnu
-            strip_args: --strip-unneeded
+        # Release binaries are static and linked against musl (#54): OpenIPC firmware
+        # has no glibc. Toolchains and checks: ci/build-musl.sh
+        target: [x86_64, arm, aarch64, mipsel]
+    env:
+      TOOLCHAIN_CACHE: ${{ github.workspace }}/.toolchains
 
     steps:
       - name: Checkout
@@ -60,101 +44,91 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install cross-compiler
+      - name: Install qemu-user
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ${{ matrix.platform.pkgs }} upx-ucl upx 2>/dev/null || true
+          sudo apt-get install -y -qq qemu-user
 
+      # Native glibc build for the unit and e2e tests on the runner
       - name: Build native (x86_64)
         run: |
           make clean
           make -j$(nproc)
-          mkdir -p "${{ env.BUILD_DIR }}"
-          cp "${{ env.TARGET }}" "${{ env.BUILD_DIR }}/${{ env.TARGET }}-x86_64"
-          "${{ env.BUILD_DIR }}/${{ env.TARGET }}-x86_64" --help 2>&1 | head -5 || true
-        if: matrix.platform.name == 'x86_64'
+          ./${{ env.TARGET }} --help 2>&1 | head -5 || true
+        if: matrix.target == 'x86_64'
 
       - name: Unit tests
         run: make test
-        if: matrix.platform.name == 'x86_64'
+        if: matrix.target == 'x86_64'
 
       - name: E2E test (TCP pending data, issue #8)
         run: ./docker/test-e2e-tcp-pending.sh
-        if: matrix.platform.name == 'x86_64'
+        if: matrix.target == 'x86_64'
 
       - name: E2E test (client liveness, issue #10)
         run: ./docker/test-e2e-client-liveness.sh
-        if: matrix.platform.name == 'x86_64'
+        if: matrix.target == 'x86_64'
 
       - name: E2E test (key binding and source addresses, issues #5 #6)
         run: ./docker/test-e2e-key-binding.sh
-        if: matrix.platform.name == 'x86_64'
+        if: matrix.target == 'x86_64'
 
       - name: E2E test (REGISTER replay, issue #7)
         run: ./docker/test-e2e-register-replay.sh
-        if: matrix.platform.name == 'x86_64'
+        if: matrix.target == 'x86_64'
 
       - name: E2E test (TCP pre-auth connections, issue #9)
         run: ./docker/test-e2e-tcp-preauth.sh
-        if: matrix.platform.name == 'x86_64'
+        if: matrix.target == 'x86_64'
 
       - name: E2E test (auto pool and unknown clients, issue #15)
         run: ./docker/test-e2e-auto-pool.sh
-        if: matrix.platform.name == 'x86_64'
+        if: matrix.target == 'x86_64'
 
       - name: E2E test (hardening, issue #16)
         run: ./docker/test-e2e-hardening.sh
-        if: matrix.platform.name == 'x86_64'
+        if: matrix.target == 'x86_64'
 
       - name: E2E test (rekeying under traffic, issue #17)
         run: ./docker/test-e2e-rekey.sh
-        if: matrix.platform.name == 'x86_64'
+        if: matrix.target == 'x86_64'
 
       - name: E2E test (changed profile applied live, issue #49)
         run: ./docker/test-e2e-reconfig.sh
-        if: matrix.platform.name == 'x86_64'
+        if: matrix.target == 'x86_64'
 
       - name: E2E test (malformed CONFIG from a fake server, issue #12)
         run: ./docker/test-e2e-bad-config.sh
-        if: matrix.platform.name == 'x86_64'
+        if: matrix.target == 'x86_64'
 
-      - name: Build cross
-        run: |
-          make clean
-          make -j$(nproc) \
-            CROSS_COMPILE=${{ matrix.platform.triple }}-
-          mkdir -p "${{ env.BUILD_DIR }}"
-          cp "${{ env.TARGET }}" "${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.platform.name }}"
-        if: matrix.platform.name != 'x86_64'
+      - name: Cache toolchain
+        uses: actions/cache@v6
+        with:
+          path: .toolchains
+          key: toolchain-${{ matrix.target }}-${{ hashFiles('ci/build-musl.sh') }}
 
-      - name: Strip
-        run: |
-          ${{ matrix.platform.triple }}-strip ${{ matrix.platform.strip_args }} \
-            "${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.platform.name }}" || true
-
-      - name: Compress with UPX
-        run: |
-          upx --best --no-color \
-            "${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.platform.name }}" \
-            2>/dev/null || echo "UPX skipped (not available or cannot compress)"
+      - name: Build static (musl) and run the unit tests under qemu
+        env:
+          GITHUB_TOKEN: ${{ github.token }}   # toolchain digest lookup (ci/build-musl.sh)
+        run: QEMU=1 ci/build-musl.sh ${{ matrix.target }} "${{ env.BUILD_DIR }}"
 
       - name: Report size
         run: |
-          echo "## ${{ matrix.platform.name }} binary sizes" | tee -a sizes.md
-          ls -lh "${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.platform.name }}" | \
+          echo "## ${{ matrix.target }} binary sizes" | tee -a sizes.md
+          ls -lh "${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.target }}" | \
             awk '{print "- `" $5 "`  " $9}' | tee -a sizes.md
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: camex-${{ matrix.platform.name }}
-          path: ${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.platform.name }}
+          name: camex-${{ matrix.target }}
+          path: ${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.target }}
           if-no-files-found: error
 
       - name: Upload size report
         uses: actions/upload-artifact@v7
         with:
-          name: sizes-${{ matrix.platform.name }}
+          name: sizes-${{ matrix.target }}
           path: sizes.md
           if-no-files-found: ignore
 
@@ -462,7 +436,7 @@ jobs:
 
       - name: Generate size table
         run: |
-          echo "## camex binary sizes (UPX compressed)" > sizes-table.md
+          echo "## camex binary sizes" > sizes-table.md
           echo "" >> sizes-table.md
           echo "| Platform | Size |" >> sizes-table.md
           echo "|----------|------|" >> sizes-table.md

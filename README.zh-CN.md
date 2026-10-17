@@ -81,16 +81,17 @@ sudo ./camex --mode client \
 
 ## 二进制大小
 
-| 平台    | 大小（strip 后） | UPX 压缩后 |
-|---------|:----------------:|:----------:|
-| x86_64  | _见 CI_          | _见 CI_    |
-| armhf   | _见 CI_          | _见 CI_    |
-| aarch64 | _见 CI_          | _见 CI_    |
-| mipsel  | _见 CI_          | _见 CI_    |
+| 平台    | 工具链                               | 大小    |
+|---------|--------------------------------------|---------|
+| x86_64  | Bootlin x86-64 musl                  | ~195 KB |
+| arm     | OpenIPC arm musleabi                 | ~200 KB |
+| aarch64 | Bootlin aarch64 musl                 | ~205 KB |
+| mipsel  | OpenWrt mipsel_24kc musl, soft-float | ~230 KB |
 
-> 每次发布时由 CI 更新大小数据。请查看最新的
-> [构建产物](https://github.com/OpenIPC/camex/actions)
-> 或 [发布版本](https://github.com/OpenIPC/camex/releases)。
+发布的二进制文件使用 musl 静态链接：设备上不需要 libc，可在任何 OpenIPC
+固件上运行。它们未使用 UPX 压缩，因此每次启动时无需解压到内存。由
+`ci/build-musl.sh` 构建；准确大小见每次
+[CI 运行](https://github.com/OpenIPC/camex/actions)的大小报告。
 
 ## 系统要求
 

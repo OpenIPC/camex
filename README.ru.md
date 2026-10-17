@@ -82,16 +82,18 @@ sudo ./camex --mode client \
 
 ## Размер бинарных файлов
 
-| Платформа | Размер (stripped) | Со сжатием UPX |
-|-----------|:-----------------:|:--------------:|
-| x86_64    | _см. CI_          | _см. CI_       |
-| armhf     | _см. CI_          | _см. CI_       |
-| aarch64   | _см. CI_          | _см. CI_       |
-| mipsel    | _см. CI_          | _см. CI_       |
+| Платформа | Тулчейн                              | Размер  |
+|-----------|--------------------------------------|---------|
+| x86_64    | Bootlin x86-64 musl                  | ~195 KB |
+| arm       | OpenIPC arm musleabi                 | ~200 KB |
+| aarch64   | Bootlin aarch64 musl                 | ~205 KB |
+| mipsel    | OpenWrt mipsel_24kc musl, soft-float | ~230 KB |
 
-> Размеры обновляются CI при каждом релизе. Актуальные данные — в
-> [артефактах сборки](https://github.com/OpenIPC/camex/actions)
-> или в [релизах](https://github.com/OpenIPC/camex/releases).
+Бинарные файлы релиза собраны статически с musl: им не нужна libc на
+устройстве, и они запускаются на любой прошивке OpenIPC. Они не сжаты UPX,
+поэтому не распаковываются в RAM при каждом запуске. Сборка — `ci/build-musl.sh`;
+точные размеры — в отчёте о размерах каждого
+[запуска CI](https://github.com/OpenIPC/camex/actions).
 
 ## Требования
 
