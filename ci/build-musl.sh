@@ -19,7 +19,7 @@
 # `camex --version` are run under qemu-user as well.
 set -eu
 
-TARGET=$1
+ARCH=$1
 OUT=${2:-dist}
 BOOTLIN_VERSION=${BOOTLIN_VERSION:-stable-2026.08-1}
 OPENWRT_VERSION=${OPENWRT_VERSION:-23.05.5}
@@ -34,7 +34,7 @@ OPENIPC=https://github.com/OpenIPC/firmware/releases/download/toolchain
 BOOTLIN=https://toolchains.bootlin.com/downloads/releases/toolchains
 OPENWRT=https://downloads.openwrt.org/releases/$OPENWRT_VERSION/targets
 SUBDIR=     # toolchain directory inside the archive, if not its top level
-case "$TARGET" in
+case "$ARCH" in
     arm)
         URL=$OPENIPC/toolchain.hisilicon-hi3516cv100.tgz
         DIRNAME=arm-openipc-linux-musleabi_sdk-buildroot; QEMU_BIN=qemu-arm; SHA=github ;;
@@ -46,14 +46,14 @@ case "$TARGET" in
         URL=$OPENWRT/$OW/$DIRNAME.tar.xz
         SUBDIR=/toolchain-${OWA}_gcc-12.3.0_musl ;;
     aarch64|x86_64)
-        if [ "$TARGET" = x86_64 ]; then TC=x86-64; QEMU_BIN=qemu-x86_64
+        if [ "$ARCH" = x86_64 ]; then TC=x86-64; QEMU_BIN=qemu-x86_64
             SHA=78d3a4683d6ac47b5ee73bd5bce210b55eb93dff1b137c61298af97eb0d2b5a6
         else TC=aarch64; QEMU_BIN=qemu-aarch64
             SHA=b388c480a48e8e9f9b99e3d14e69219c4d61e5a2424a82faecb88a015b781a60; fi
         [ "$BOOTLIN_VERSION" = stable-2026.08-1 ] || SHA=
         DIRNAME=$TC--musl--$BOOTLIN_VERSION
         URL=$BOOTLIN/$TC/tarballs/$DIRNAME.tar.xz ;;
-    *) echo "unknown target: $TARGET (arm, mipsel, aarch64, x86_64)" >&2; exit 2 ;;
+    *) echo "unknown target: $ARCH (arm, mipsel, aarch64, x86_64)" >&2; exit 2 ;;
 esac
 
 DIR=$CACHE/$DIRNAME$SUBDIR
@@ -86,18 +86,18 @@ export STAGING_DIR="$DIR"     # OpenWrt's gcc wrapper warns without it
 CROSS=${GCC%gcc}
 
 # Objects of another toolchain are never rebuilt by make: a build directory per target
-BUILD=$ROOT/build/musl-$TARGET
+BUILD=$ROOT/build/musl-$ARCH
 rm -rf "$BUILD"
 mkdir -p "$BUILD" "$OUT"
-make -s -C "$ROOT/src" BUILD_DIR="$BUILD" CROSS_COMPILE="$CROSS" LDLIBS=-static all
-BIN=$OUT/camex-$TARGET
+make -s -C "$ROOT/src" TARGET=camex BUILD_DIR="$BUILD" CROSS_COMPILE="$CROSS" LDLIBS=-static all
+BIN=$OUT/camex-$ARCH
 cp "$BUILD/camex" "$BIN"
 
 # A static binary has no program interpreter (ld-linux*.so / ld-musl*.so)
 if "${CROSS}readelf" -l "$BIN" | grep -q 'Requesting program interpreter'; then
     echo "$BIN is dynamically linked" >&2; exit 1
 fi
-echo "camex-$TARGET: $(wc -c < "$BIN") bytes, static"
+echo "camex-$ARCH: $(wc -c < "$BIN") bytes, static"
 
 if [ "${QEMU:-0}" = 1 ]; then
     # tests/Makefile builds in tests/: build there, then move the binaries away
