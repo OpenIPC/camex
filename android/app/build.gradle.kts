@@ -21,6 +21,9 @@ android {
         val abis = (project.findProperty("camexAbis") as String?)
             ?: "arm64-v8a,armeabi-v7a"
         ndk { abiFilters += abis.split(",").map { it.trim() } }
+        // The app's own strings are English only; keep the libraries' translations
+        // just for the README languages (#55)
+        resourceConfigurations += listOf("en", "ru", "zh-rCN")
         externalNativeBuild {
             cmake { arguments("-DANDROID_STL=c++_static") }
         }
@@ -41,6 +44,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             isDebuggable = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
             if (releaseKeystore != null) {
