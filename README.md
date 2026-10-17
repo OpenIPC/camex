@@ -98,12 +98,10 @@ rebuilt by CI from every push to `master`. Its title shows the camex version
 | `camex-macos.zip`          | macOS (utun): `camex`, LICENSE, README                                        |
 | `camex-windows-x86_64.zip` | Windows 64-bit: `camex.exe` and `wintun.dll`                                  |
 | `camex-windows-i686.zip`   | Windows 32-bit: `camex.exe` and `wintun.dll`                                  |
-| `SHA256SUMS`               | SHA256 of all the files above                                                 |
 
 ```sh
 URL=https://github.com/OpenIPC/camex/releases/latest/download
-curl -fL -O $URL/camex-arm -O $URL/SHA256SUMS
-sha256sum -c --ignore-missing SHA256SUMS
+curl -fL -O $URL/camex-arm
 ```
 
 The change history is in [CHANGELOG.md](CHANGELOG.md).
@@ -774,7 +772,7 @@ replaced by CI after every push to `master`, once all build and test jobs pass.
    version's section to `CHANGELOG.md`.
 2. **Merge into `master`**. CI deletes the old `latest` release and its tag and creates
    it again on the built commit: title `Camex X.Y.Z`, the files from
-   [Permanent links](#permanent-links), `SHA256SUMS`.
+   [Permanent links](#permanent-links).
 3. **Telegram**: when the version differs from the title of the previous `latest`, CI
    posts the APK to the OpenIPC Telegram channel. A push without a version bump only
    replaces the files.
