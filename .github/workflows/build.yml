@@ -34,24 +34,8 @@ env:
   # actions target Node 24 natively (checkout@v5, upload-artifact@v5, download-artifact@v5, gh-release@v3)
 
 jobs:
-  # ---------------------------------------------------------------- version
-  # Pull requests: a change to the code or the build comes with a new
-  # CAMEX_VERSION (MAJOR.MINOR.PATCH) and its CHANGELOG.md section (#63)
-  version:
-    name: Version bump
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Code changes come with a new version
-        env:
-          # through the environment, not pasted into the script
-          BASE: ${{ github.base_ref }}
-        run: .github/check-version.sh "origin/$BASE"
+  # The version check of pull requests runs in version.yml: a label change
+  # re-runs only that check, not the builds.
 
   # ------------------------------------------------------------------ linux
   linux:
