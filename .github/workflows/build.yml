@@ -17,8 +17,6 @@ on:
     branches: [master, main, develop]
   pull_request:
     branches: [master, main]
-    # labeled / unlabeled: the version check reads the no-release label
-    types: [opened, synchronize, reopened, labeled, unlabeled]
   # a manual run on master rebuilds and republishes "latest"
   workflow_dispatch:
 
@@ -36,27 +34,8 @@ env:
   # actions target Node 24 natively (checkout@v5, upload-artifact@v5, download-artifact@v5, gh-release@v3)
 
 jobs:
-  # ---------------------------------------------------------------- version
-  # Pull requests: a change to the code or the build (this workflow included)
-  # comes with a new CAMEX_VERSION (MAJOR.MINOR.PATCH) and its CHANGELOG.md
-  # section (#63), unless the no-release label says the release files do not
-  # change (#69). The checkout is the merge commit; its first parent is the
-  # base it was made from (#68).
-  version:
-    name: Version bump
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Code changes come with a new version
-        env:
-          # a change that leaves the release files as they are may skip the new version
-          NO_RELEASE: ${{ contains(github.event.pull_request.labels.*.name, 'no-release') }}
-        run: .github/check-version.sh HEAD^1
+  # The version check of pull requests runs in version.yml: a label change
+  # re-runs only that check, not the builds.
 
   # ------------------------------------------------------------------ linux
   linux:

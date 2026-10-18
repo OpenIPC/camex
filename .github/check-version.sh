@@ -9,10 +9,11 @@
 # base branch does not have yet.  src/, android/, the Makefile, ci/,
 # scripts/ and the build workflow (.github/workflows/build.yml) count as code
 # or build, without the Markdown files in them; docs, tests, screenshots and
-# the rest of .github/ need no new version.  NO_RELEASE=true (the pull
-# request's `no-release` label) lets a change to the code or the build
-# through without a new version, for changes that leave the release files as
-# they are (a test or publication step, a build-script tidy-up, a comment).
+# the rest of .github/ (this check and its workflow, version.yml, included)
+# need no new version.  NO_RELEASE=true (the pull request's `no-release`
+# label) lets a change to the code or the build through without a new
+# version, for changes that leave the release files as they are (a test or
+# publication step, a build-script tidy-up, a comment).
 #
 # Usage: .github/check-version.sh [BASE]   (default origin/master; CI passes
 # HEAD^1, the base side of the pull request's merge commit)
@@ -24,12 +25,16 @@ base=${1:-origin/master}
 header=src/version.h
 code="src android Makefile ci scripts .github/workflows/build.yml"
 
-# The one CAMEX_VERSION definition (comments and other text do not count).
+# The one CAMEX_VERSION definition. Every "#define CAMEX_VERSION" counts,
+# however it is spaced ("# define" too), and it must be the plain form
+# '#define CAMEX_VERSION "X.Y.Z"' that the release job reads.
 ver() {
-	v=$(sed -n 's/^#define CAMEX_VERSION "\([^"]*\)"[[:space:]]*$/\1/p')
-	if [ "$(printf '%s\n' "$v" | grep -c .)" -ne 1 ]; then
-		echo "::error::$1:$header: expected one CAMEX_VERSION definition," \
-			"found: $(printf '%s' "$v" | tr '\n' ' ')" >&2
+	h=$(cat)
+	n=$(printf '%s\n' "$h" | grep -cE '^[[:space:]]*#[[:space:]]*define[[:space:]]+CAMEX_VERSION([[:space:]]|$)' || true)
+	v=$(printf '%s\n' "$h" | sed -n 's/^#define CAMEX_VERSION "\([^"]*\)"[[:space:]]*$/\1/p')
+	if [ "$n" -ne 1 ] || [ -z "$v" ]; then
+		echo "::error::$1:$header: expected one '#define CAMEX_VERSION \"X.Y.Z\"'," \
+			"found $n definition(s)" >&2
 		exit 1
 	fi
 	printf '%s\n' "$v"
