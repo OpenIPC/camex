@@ -2,44 +2,66 @@
 #
 # Copyright (c) OpenIPC  https://openipc.org  MIT License
 #
-# check-version.sh — fail a pull request that changes code or the build
-# but not CAMEX_VERSION in src/version.h (#63).  The new version must be
-# MAJOR.MINOR.PATCH without leading zeros, greater than the base one,
-# and have its section in CHANGELOG.md ("## <version> — <date>").
-# src/, android/, the Makefile, ci/ and scripts/ count as code or build;
-# docs, tests, screenshots and the workflows in .github/ do not need a new
-# version.  Same script as OpenIPC/vectis, other paths and version macro.
+# check-version.sh — fail a pull request that changes the code or the build
+# but not CAMEX_VERSION in src/version.h.  A new version must be
+# MAJOR.MINOR.PATCH without leading zeros, greater than the base one, and
+# have its section in CHANGELOG.md ("## <version> — YYYY-MM-DD") that the
+# base branch does not have yet.  src/, android/, the Makefile, ci/,
+# scripts/ and the build workflow (.github/workflows/build.yml) count as code
+# or build, without the Markdown files in them; docs, tests, screenshots and
+# the rest of .github/ need no new version.  NO_RELEASE=true (the pull
+# request's `no-release` label) lets a change to the code or the build
+# through without a new version, for changes that leave the release files as
+# they are (a test or publication step, a build-script tidy-up, a comment).
 #
-# Usage: .github/check-version.sh [BASE]   (default origin/master)
+# Usage: .github/check-version.sh [BASE]   (default origin/master; CI passes
+# HEAD^1, the base side of the pull request's merge commit)
 #
 
 set -eu
 
 base=${1:-origin/master}
-code="src android Makefile ci scripts"
+header=src/version.h
+code="src android Makefile ci scripts .github/workflows/build.yml"
 
-ver() { sed -n 's/^#define CAMEX_VERSION *"\(.*\)"/\1/p'; }
+# The one CAMEX_VERSION definition (comments and other text do not count).
+ver() {
+	v=$(sed -n 's/^#define CAMEX_VERSION "\([^"]*\)"[[:space:]]*$/\1/p')
+	if [ "$(printf '%s\n' "$v" | grep -c .)" -ne 1 ]; then
+		echo "::error::$1:$header: expected one CAMEX_VERSION definition," \
+			"found: $(printf '%s' "$v" | tr '\n' ' ')" >&2
+		exit 1
+	fi
+	printf '%s\n' "$v"
+}
 
-new=$(ver < src/version.h)
-old=$(git show "$base:src/version.h" | ver)
-
-if ! echo "$new" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
-	echo "::error::CAMEX_VERSION \"$new\" is not MAJOR.MINOR.PATCH"
-	exit 1
-fi
+new=$(ver HEAD < "$header")
+old=$(git show "$base:$header" | ver "$base")
 
 # shellcheck disable=SC2086 # $code is a list of paths
-changed=$(git diff --name-only "$base"...HEAD -- $code)
+changed=$(git diff --name-only "$base"...HEAD -- $code ':(exclude,glob)**/*.md')
 
 if [ "$new" = "$old" ]; then
+	if [ -n "$changed" ] && [ "${NO_RELEASE:-}" = true ]; then
+		echo "::notice::code or build changed, CAMEX_VERSION stays $old: the no-release" \
+			"label says the release files do not change"
+		echo "$changed"
+		exit 0
+	fi
 	if [ -n "$changed" ]; then
 		echo "::error::code or build changed, CAMEX_VERSION is still $old:" \
-			"bump PATCH (fix) or MINOR (feature) and add its CHANGELOG.md section"
+			"bump PATCH (fix) or MINOR (feature) and add its CHANGELOG.md section," \
+			"or label the pull request no-release if the release files do not change"
 		echo "$changed"
 		exit 1
 	fi
 	echo "version $new unchanged, no code or build changes"
 	exit 0
+fi
+
+if ! echo "$new" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+	echo "::error::CAMEX_VERSION \"$new\" is not MAJOR.MINOR.PATCH"
+	exit 1
 fi
 
 top=$(printf '%s\n%s\n' "$old" "$new" | sort -V | tail -n 1)
