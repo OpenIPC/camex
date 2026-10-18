@@ -565,9 +565,11 @@ jobs:
           done
           echo "::error::latest could not be published"; exit 1
 
-      # The Telegram channel gets the APK of every new version, as in
-      # OpenIPC/vtesse. Organization secrets; a failed upload is reported but
-      # does not fail the release.
+      # The files of every new version go to the Telegram channel, for the
+      # archive and test downloads: all the release files in one post
+      # (sendMediaGroup, the caption on the last file; sendDocument for a
+      # single file), a short caption, no text from CHANGELOG.md (#70).
+      # Organization secrets; a failed upload is a warning, not a failed release.
       - name: Telegram
         if: steps.vars.outputs.skip != 'true' && steps.vars.outputs.new == 'true'
         env:
@@ -576,11 +578,27 @@ jobs:
           VER: ${{ steps.vars.outputs.ver }}
         run: |
           if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHANNEL" ]; then
-            echo "::warning::Telegram secrets are not available, APK not posted"; exit 0
+            echo "::warning::Telegram secrets are not available, files not posted"; exit 0
           fi
-          CAPTION=$(printf 'camex %s for Android\nCommit: %s\nTime: %s\n\n%s' "$VER" "${GITHUB_SHA::7}" \
-            "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/latest")
-          HTTP=$(curl -sS -o tg.json -w '%{http_code}' "https://api.telegram.org/bot${TG_TOKEN}/sendDocument" \
-            -F chat_id="$TG_CHANNEL" -F caption="$CAPTION" -F document=@release/camex-android.apk) || HTTP=000
+          caption=$(printf 'Camex %s\nCommit: %s\nTime: %s\n\n%s' "$VER" "${GITHUB_SHA::7}" \
+            "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/latest")
+          files=(release/*)
+          if [ "${#files[@]}" -gt 10 ]; then
+            echo "::warning::${#files[@]} release files, a Telegram post takes at most 10: not posted"; exit 0
+          fi
+          if [ "${#files[@]}" -eq 1 ]; then
+            HTTP=$(curl -sS -o tg.json -w '%{http_code}' "https://api.telegram.org/bot${TG_TOKEN}/sendDocument" \
+              -F chat_id="$TG_CHANNEL" -F caption="$caption" -F document=@"${files[0]}") || HTTP=000
+          else
+            media='[]' form=()
+            for i in "${!files[@]}"; do
+              item=$(jq -cn --arg m "attach://f$i" '{type: "document", media: $m}')
+              [ "$i" -eq $(( ${#files[@]} - 1 )) ] && item=$(jq -c --arg c "$caption" '. + {caption: $c}' <<< "$item")
+              media=$(jq -c --argjson it "$item" '. + [$it]' <<< "$media")
+              form+=(-F "f$i=@${files[$i]}")
+            done
+            HTTP=$(curl -sS -o tg.json -w '%{http_code}' "https://api.telegram.org/bot${TG_TOKEN}/sendMediaGroup" \
+              -F chat_id="$TG_CHANNEL" -F media="$media" "${form[@]}") || HTTP=000
+          fi
           echo "Telegram response: $HTTP"
           [ "$HTTP" = 200 ] || echo "::warning::Telegram upload failed (HTTP $HTTP): $(cat tg.json 2>/dev/null)"
