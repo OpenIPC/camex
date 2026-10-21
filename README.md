@@ -345,7 +345,7 @@ A slot takes about 1.3 KB and a `[client ID]` block about 0.7 KB: 256 slots
 about 330 KB, 65534 about 85 MB. Finding a client does not depend on their
 number. Large networks are meant for a PC or a server; on a router keep the
 default `/24`. The server locks its memory (`mlockall`) so that keys are not
-swapped out; give it a memory lock limit for its slots (root has none;
+swapped out; give it a memory lock limit for its slots and configuration (root has none;
 otherwise `ulimit -l`, `LimitMEMLOCK=infinity` in systemd, `--cap-add IPC_LOCK`
 or `--ulimit memlock=-1` in Docker), or it runs unlocked with a `SECURITY
 WARNING` in the log. With thousands of `[client ID]` blocks, give their `psk=`

@@ -339,7 +339,7 @@ auto_pool=10.50.0.0/16
 每个槽位约占 1.3 KB，每个 `[client ID]` 块约占 0.7 KB：256 个槽位约 330 KB，
 65534 个约 85 MB。查找客户端的开销与客户端数量无关。大型网络适用于 PC 或服务器；
 在路由器上请保留默认的 `/24`。服务器会锁定自身内存（`mlockall`），以免密钥被换出到
-swap；请为槽位提供足够的内存锁定上限（root 不受限制；否则使用 `ulimit -l`、systemd 中的
+swap；请为槽位和配置提供足够的内存锁定上限（root 不受限制；否则使用 `ulimit -l`、systemd 中的
 `LimitMEMLOCK=infinity`、Docker 中的 `--cap-add IPC_LOCK` 或 `--ulimit memlock=-1`），
 否则服务器将在不锁定内存的情况下运行，并在日志中写入 `SECURITY WARNING`。当有数千个
 `[client ID]` 块时，请用 `hex:` 或 `base64:` 密钥设置其 `psk=`：每个口令在服务器启动时

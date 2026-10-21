@@ -175,7 +175,8 @@ camex_server_profile_t *config_db_get_client_slot(const char *client_id)
     if (server_db.client_count == server_db.client_cap) {
         size_t cap = server_db.client_cap != 0U ? server_db.client_cap * 2U
                                                 : 16U;
-        camex_server_profile_t *grown = calloc(cap, sizeof(*grown));
+        camex_server_profile_t *grown =
+            key_locked_calloc(cap, sizeof(*grown), "[client] profiles");
 
         if (grown == NULL) {
             log_message(LOG_ERR, "Out of memory for client profiles");
@@ -697,7 +698,7 @@ int config_build_keystore(void)
     }
 
     cap = server_db.client_count + 1U;
-    ks->entries = calloc(cap, sizeof(*ks->entries));
+    ks->entries = key_locked_calloc(cap, sizeof(*ks->entries), "the keystore");
     if (ks->entries == NULL || slotidx_reset(&ks->by_key, cap) != 0 ||
         slotidx_reset(&ks->by_owner, cap) != 0) {
         log_message(LOG_ERR, "Out of memory for the keystore");

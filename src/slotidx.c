@@ -11,6 +11,7 @@
  */
 
 #include "slotidx.h"
+#include "keys.h"
 
 #include <ctype.h>
 #include <stdlib.h>
@@ -42,8 +43,8 @@ void slotidx_free(slotidx_t *x)
 
 static int alloc_table(slotidx_t *x, uint32_t n)
 {
-    x->hash = calloc(n, sizeof(*x->hash));
-    x->slot = calloc(n, sizeof(*x->slot));
+    x->hash = key_locked_calloc(n, sizeof(*x->hash), "lookup indexes");
+    x->slot = key_locked_calloc(n, sizeof(*x->slot), "lookup indexes");
     if (x->hash == NULL || x->slot == NULL) {
         slotidx_free(x);
         return -1;

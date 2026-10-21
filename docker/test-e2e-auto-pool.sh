@@ -283,6 +283,18 @@ SRV_CAPS="--ulimit nofile=300:300" srv_conf tcpfd '[server]\nauto_pool=10.91.0.0
 sleep 1
 docker logs "$P-tcpfd" 2>&1 | grep -q "TCP: 65533 client slots reduced to 268"
 check $? "with 300 open files the TCP slots follow that limit ($(docker logs "$P-tcpfd" 2>&1 | grep -o 'reduced to [0-9]*'))"
+SRV_CAPS="--ulimit nofile=40:40" srv_conf tcp40 '[server]\n' --local-cidr 10.200.0.1/24 --transport tcp
+sleep 1
+docker logs "$P-tcp40" 2>&1 | grep -q "TCP: 256 client slots reduced to 8"
+check $? "with 40 open files 8 descriptors are left for clients"
+SRV_CAPS="--ulimit nofile=32:32" srv_conf tcp32 '[server]\n' --local-cidr 10.200.0.1/24 --transport tcp
+stopped=1
+for _ in $(seq 1 10); do
+    [ "$(docker inspect -f '{{.State.Running}}' "$P-tcp32")" = false ] && { stopped=0; break; }
+    sleep 0.5
+done
+[ "$stopped" = 0 ] && docker logs "$P-tcp32" 2>&1 | grep -q "leaves no descriptors for clients"
+check $? "with 32 open files a TCP server refuses to start and says why"
 
 echo "== 11. the default pool outside the server's tunnel network is reported"
 docker logs "$P-srv2" 2>&1 | grep -q "Auto pool 10.200.0.0/24 is not inside the server's tunnel network 10.201.0.1/24"
@@ -304,6 +316,27 @@ check $? "the server says the slots do not fit the memory lock limit"
 atk "$P-nolock" UNLOCKED > "$BUILD_CTX/nolock.txt"
 grep -q "^UNLOCKED 10.62.0.2/16$" "$BUILD_CTX/nolock.txt"
 check $? "and still serves clients ($(cut -d' ' -f2 "$BUILD_CTX/nolock.txt"))"
+
+echo "== 13. a config above the memory lock limit: the server starts, with a warning"
+# 12000 [client] sections (~12 MB of profiles) under Docker's 8 MB limit
+{
+    printf '[server]\nauto_pool=10.63.0.0/16\n'
+    for i in $(seq 1 12000); do
+        printf '[client PROF%05d]\nlocal_cidr=10.63.%d.%d/16\ngateway_ip=10.63.0.1\n' \
+            "$i" $((100 + i / 200)) $((2 + i % 200))
+    done
+} > "$BUILD_CTX/profiles.conf"
+docker create --name "$P-prof" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    "$IMAGE" --mode server --port 5800 $SERVER_KEY_ARGS --psk "$PSK" \
+    --config /etc/camex.conf --local-cidr 10.63.0.1/16 >/dev/null
+docker cp "$BUILD_CTX/profiles.conf" "$P-prof:/etc/camex.conf" >/dev/null
+docker start "$P-prof" >/dev/null
+sleep 2
+docker logs "$P-prof" 2>&1 | grep -q "SECURITY WARNING: \[client\] profiles (.* MB) do not fit the memory lock limit"
+check $? "the server says the profiles do not fit the memory lock limit"
+atk "$P-prof" PROF11999 > "$BUILD_CTX/prof.txt"
+grep -q "^PROF11999 10.63.159.201/16$" "$BUILD_CTX/prof.txt"
+check $? "and serves a client listed near the end ($(cut -d' ' -f2 "$BUILD_CTX/prof.txt"))"
 
 if [ "$FAILS" != 0 ]; then
     echo "--- server 1 log (tail) ---"

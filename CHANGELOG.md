@@ -17,8 +17,8 @@ release, rebuilt from every push to `master`; this file is the change history.
   at startup); without it the number of pool addresses, at least 256, so a `/24` pool
   keeps today's 256 (#75). Slots, `[client ID]` profiles and keys are allocated at
   runtime instead of fixed arrays of 256; over TCP the slots stay below `FD_SETSIZE`.
-  Slots that do not fit the memory lock limit are allocated unlocked, with a
-  `SECURITY WARNING` that names the limit to raise. TCP slots also stay within the
+  Slots, profiles and indexes that do not fit the memory lock limit are allocated
+  unlocked, with a `SECURITY WARNING` that names the limit to raise. TCP slots also stay within the
   open files limit, and `accept()` failures such as `EMFILE` no longer spin the
   accept loop. A reload that asks for another number of slots says a restart is
   needed.

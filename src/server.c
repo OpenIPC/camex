@@ -35,7 +35,6 @@
 #include <time.h>
 
 #ifndef _WIN32
-#include <sys/mman.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -271,29 +270,13 @@ int server_clients_init(size_t count)
     size_t i;
 
     server_clients_free();
-    server_clients = calloc(count, sizeof(*server_clients));
-#ifndef _WIN32
-    /* With mlockall(MCL_FUTURE) a table above RLIMIT_MEMLOCK cannot be
-     * allocated (non-root, containers). As for the Argon2id work area:
-     * unlock, allocate, lock again; if the limit is too small for that,
-     * keep running unlocked and say what to change (#75). */
-    if (server_clients == NULL && key_memory_is_locked() &&
-        munlockall() == 0) {
-        server_clients = calloc(count, sizeof(*server_clients));
-        if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
-            key_set_memory_locked(0);
-            log_message(LOG_WARNING, "SECURITY WARNING: %u client slots "
-                        "(%u MB) do not fit the memory lock limit: memory "
-                        "is not locked, keys may be swapped to disk. Raise "
-                        "the limit (ulimit -l; LimitMEMLOCK= in systemd, "
-                        "--ulimit memlock or --cap-add IPC_LOCK in Docker) "
-                        "or lower max_clients=",
-                        (unsigned)count,
-                        (unsigned)((count * sizeof(*server_clients) +
-                                    (1U << 20) - 1U) >> 20));
-        }
+    {
+        char what[64];
+
+        snprintf(what, sizeof(what), "%u client slots", (unsigned)count);
+        server_clients = key_locked_calloc(count, sizeof(*server_clients),
+                                           what);
     }
-#endif
     if (server_clients == NULL) {
         log_message(LOG_ERR, "Out of memory for %u client slots",
                     (unsigned)count);

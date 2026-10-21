@@ -426,8 +426,8 @@ static size_t camex_tcp_slot_cap(void)
             (void)getrlimit(RLIMIT_NOFILE, &rl);
         }
         if (rl.rlim_cur != RLIM_INFINITY) {
-            size_t usable = rl.rlim_cur > 64 ? (size_t)rl.rlim_cur - 32U
-                                             : 32U;
+            size_t usable = rl.rlim_cur > 32 ? (size_t)rl.rlim_cur - 32U
+                                             : 0U;
 
             if (usable < cap) {
                 cap = usable;
@@ -541,6 +541,13 @@ int camex_init(camex_config_t *config)
             char net[INET_ADDRSTRLEN];
             struct in_addr a;
 
+            if (slots == 0U) {
+                log_message(LOG_ERR, "TCP: the open files limit leaves no "
+                            "descriptors for clients (32 are kept for the "
+                            "server): raise it (ulimit -n)");
+                config_db_free(&server_db);
+                return -1;
+            }
             if (server_clients_init(slots) != 0) {
                 config_db_free(&server_db);
                 return -1;
