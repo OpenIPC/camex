@@ -747,9 +747,12 @@ int config_build_keystore(void)
     wipe_profile_psks();
 
     for (i = 0U; i < ks->count; ++i) {
-        if (slotidx_insert(&ks->by_key,
-                           slotidx_hash_bytes(ks->entries[i].psk_key, 32),
-                           (uint32_t)i) != 0 ||
+        /* A locked entry matches no key: only its owner is indexed (its
+         * wiped key would pile all of them into one probe chain) */
+        if ((!ks->entries[i].locked &&
+             slotidx_insert(&ks->by_key,
+                            slotidx_hash_bytes(ks->entries[i].psk_key, 32),
+                            (uint32_t)i) != 0) ||
             (ks->entries[i].owner[0] != '\0' &&
              slotidx_insert(&ks->by_owner,
                             slotidx_hash_nocase(ks->entries[i].owner),

@@ -18,7 +18,13 @@ release, rebuilt from every push to `master`; this file is the change history.
   keeps today's 256 (#75). Slots, `[client ID]` profiles and keys are allocated at
   runtime instead of fixed arrays of 256; over TCP the slots stay below `FD_SETSIZE`.
   Slots that do not fit the memory lock limit are allocated unlocked, with a
-  `SECURITY WARNING` that names the limit to raise.
+  `SECURITY WARNING` that names the limit to raise. TCP slots also stay within the
+  open files limit, and `accept()` failures such as `EMFILE` no longer spin the
+  accept loop. A reload that asks for another number of slots says a restart is
+  needed.
+- Server: a handshake tries the per-client keys in turn, now at most 51200 tries a
+  second for all handshakes (the old worst case, 200 handshakes × 256 keys), so
+  thousands of per-client keys cannot be used to load the server.
 - Server: finding a client no longer scans all slots (#75). The session index of a
   packet carries the client's slot number, and clients, profiles and keys are found
   through indexes by address, ID and key; a reload no longer compares every session

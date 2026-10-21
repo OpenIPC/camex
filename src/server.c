@@ -62,6 +62,11 @@ static int idx_ok = 0;
 /* Auto pool (#15, #75): server_db.globals.pool_net/pool_prefix; the first
  * address is the gateway, clients get the second to the last but one. */
 static uint32_t auto_pool_next = 0U;   /* host order, 0 = pool start */
+/* When the pool was last found full (and which pool): until the next
+ * second further handshakes do not walk it again */
+static time_t pool_full_at = 0;
+static uint32_t pool_full_net = 0U;
+static uint8_t pool_full_prefix = 0U;
 
 static uint32_t pool_size(void)
 {
@@ -496,8 +501,8 @@ void server_expire_clients(void)
 /* Take a free auto-pool address for entry (#15, #75): not used by another
  * live client nor by a [client ID] profile. Addresses of expired clients
  * become free again. Returns 0 and the address (network order), or -1 if
- * the pool is full. Busy addresses are at most the live clients plus the
- * profiles, so the search ends long before it walks a large pool. */
+ * the pool is full. A full pool is walked at most once a second: clients
+ * expire on whole seconds, and a client that finds no address retries. */
 static int server_auto_pool_take(const server_client_t *entry,
                                  uint32_t *ip_be)
 {
@@ -508,6 +513,11 @@ static int server_auto_pool_take(const server_client_t *entry,
                                ? auto_pool_next - first : 0U;
     uint32_t n;
 
+    if (pool_full_at == g_now && pool_full_at != 0 &&
+        pool_full_net == server_db.globals.pool_net &&
+        pool_full_prefix == server_db.globals.pool_prefix) {
+        return -1;
+    }
     for (n = 0U; n < size; ++n) {
         uint32_t host = first + (start + n) % size;
         uint32_t a = htonl(host);
@@ -521,6 +531,9 @@ static int server_auto_pool_take(const server_client_t *entry,
         auto_pool_next = host < pool_last() ? host + 1U : first;
         return 0;
     }
+    pool_full_at = g_now;
+    pool_full_net = server_db.globals.pool_net;
+    pool_full_prefix = server_db.globals.pool_prefix;
     return -1;
 }
 
@@ -786,6 +799,23 @@ static int server_handshake_budget(void)
     return 0;
 }
 
+/* One more key trial within SERVER_KEY_TRIALS_PER_SEC, or -1 */
+static int server_key_trial_budget(void)
+{
+    static time_t window = 0;
+    static unsigned int count = 0U;
+
+    if (window != g_now) {
+        window = g_now;
+        count = 0U;
+    }
+    if (count >= SERVER_KEY_TRIALS_PER_SEC) {
+        return -1;
+    }
+    count++;
+    return 0;
+}
+
 static int server_send(server_client_t *entry, const uint8_t *pkt, size_t len)
 {
     if (entry->tcp_fd >= 0) {
@@ -1015,6 +1045,12 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     for (i = 0U; i < server_keystore_count; ++i) {
         if (server_keystore[i].locked) {
             continue;
+        }
+        if (server_key_trial_budget() != 0) {
+            log_peer(LOG_WARNING, "Dropped handshake from %s: more than "
+                     "%u key trials per second (per-client keys are tried "
+                     "in turn)", peer, SERVER_KEY_TRIALS_PER_SEC);
+            break;
         }
         hs = base;
         if (noise_read_msg1(&hs, server_keystore[i].psk_key, es,

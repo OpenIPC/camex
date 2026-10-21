@@ -64,6 +64,7 @@ typedef int socklen_t;
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #endif
 #ifdef __linux__
 #include <sys/prctl.h>
@@ -399,6 +400,62 @@ static int camex_load_v2_keys(void)
     return rc;
 }
 
+/* TCP client slots that can be used (#75): one descriptor each, below
+ * FD_SETSIZE (select()) and within RLIMIT_NOFILE, keeping 32 for the
+ * listening socket, the tunnel, logs and the like. The soft limit is
+ * raised towards the hard one first. */
+static size_t camex_tcp_slot_cap(void)
+{
+    size_t cap = (size_t)FD_SETSIZE;
+#ifndef _WIN32
+    struct rlimit rl;
+
+    if (getrlimit(RLIMIT_NOFILE, &rl) == 0) {
+        rlim_t want = (rlim_t)FD_SETSIZE + 32;
+
+        if (rl.rlim_cur != RLIM_INFINITY && rl.rlim_cur < want &&
+            (rl.rlim_max == RLIM_INFINITY || rl.rlim_max > rl.rlim_cur)) {
+            rl.rlim_cur = (rl.rlim_max == RLIM_INFINITY ||
+                           rl.rlim_max > want) ? want : rl.rlim_max;
+            (void)setrlimit(RLIMIT_NOFILE, &rl);
+            (void)getrlimit(RLIMIT_NOFILE, &rl);
+        }
+        if (rl.rlim_cur != RLIM_INFINITY) {
+            size_t usable = rl.rlim_cur > 64 ? (size_t)rl.rlim_cur - 32U
+                                             : 32U;
+
+            if (usable < cap) {
+                cap = usable;
+            }
+        }
+    }
+#endif
+    return cap;
+}
+
+/* Slots the configuration asks for: max_clients=, else the pool's size;
+ * over TCP within camex_tcp_slot_cap() */
+static size_t camex_wanted_slots(int quiet)
+{
+    const camex_server_globals_t *g = &server_db.globals;
+    size_t slots = g->max_clients != 0U ? (size_t)g->max_clients
+                                        : server_default_max_clients();
+
+    if (current_config.transport == CAMEX_TRANSPORT_TCP) {
+        size_t cap = camex_tcp_slot_cap();
+
+        if (slots > cap) {
+            if (!quiet) {
+                log_message(LOG_WARNING, "TCP: %u client slots reduced "
+                            "to %u (FD_SETSIZE and the open files limit)",
+                            (unsigned)slots, (unsigned)cap);
+            }
+            slots = cap;
+        }
+    }
+    return slots;
+}
+
 int camex_init(camex_config_t *config)
 {
     char local_ip[16];
@@ -475,21 +532,10 @@ int camex_init(camex_config_t *config)
         /* Client slots (#75): max_clients=, else the auto pool's size */
         {
             const camex_server_globals_t *g = &server_db.globals;
-            size_t slots = g->max_clients != 0U
-                               ? (size_t)g->max_clients
-                               : server_default_max_clients();
+            size_t slots = camex_wanted_slots(0);
             char net[INET_ADDRSTRLEN];
             struct in_addr a;
 
-            /* TCP keeps select(): a connection needs a descriptor below
-             * FD_SETSIZE, so more slots could never be used */
-            if (current_config.transport == CAMEX_TRANSPORT_TCP &&
-                slots > (size_t)FD_SETSIZE) {
-                log_message(LOG_WARNING, "TCP: %u client slots reduced to "
-                            "%u (FD_SETSIZE)", (unsigned)slots,
-                            (unsigned)FD_SETSIZE);
-                slots = (size_t)FD_SETSIZE;
-            }
             if (server_clients_init(slots) != 0) {
                 config_db_free(&server_db);
                 return -1;
@@ -789,8 +835,18 @@ static void drain_tcp_server_accept(void)
             if (net_sock_err_is_again()) {
                 break;  /* no pending connections */
             }
-            /* Retry on transient errors (EINTR, ECONNABORTED, EPROTO) */
+#ifndef _WIN32
+            /* Retry on transient errors (EINTR, ECONNABORTED, EPROTO);
+             * anything else (EMFILE, ENFILE, ENOBUFS...) would repeat at
+             * once: leave, serve the clients, try on the next pass */
+            if (errno == EINTR || errno == ECONNABORTED || errno == EPROTO) {
+                continue;
+            }
+            log_peer(LOG_WARNING, "accept: %s", strerror(errno));
+            break;
+#else
             continue;
+#endif
         }
 
 #ifndef _WIN32
@@ -1177,11 +1233,18 @@ void camex_run(void)
                     log_message(LOG_WARNING,
                                 "Keeping previous server configuration");
                 } else {
-                    /* The slots are allocated at startup (#75) */
-                    if (server_db.globals.max_clients !=
-                        saved_db.globals.max_clients) {
-                        log_message(LOG_NOTICE, "max_clients= is read at "
-                                    "startup only: restart to change it");
+                    /* The slots are allocated at startup (#75): say when
+                     * the new max_clients= or pool asks for another number */
+                    {
+                        size_t wanted = camex_wanted_slots(1);
+
+                        if (wanted != server_max_clients) {
+                            log_message(LOG_NOTICE, "The configuration asks "
+                                        "for %u client slots, the server "
+                                        "has %u: restart to change them",
+                                        (unsigned)wanted,
+                                        (unsigned)server_max_clients);
+                        }
                     }
                     server_check_pool(current_config.local_cidr);
                     config_db_free(&saved_db);

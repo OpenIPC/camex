@@ -329,8 +329,10 @@ Two `[server]` keys size the server for its network:
   auto-mode clients move to it with their next handshake.
 - `max_clients=<n>` — client slots, from 1 to 65534; default: the number of
   pool addresses, at least 256 (a `/24` or smaller pool keeps 256). Read at
-  startup only. Over TCP the server uses `select()` and keeps at most
-  `FD_SETSIZE` slots (1024 on Linux); the log says so.
+  startup only; a reload that asks for another number says a restart is
+  needed. Over TCP the server uses `select()` and keeps at most `FD_SETSIZE`
+  slots (1024 on Linux) and no more than the open files limit allows (it
+  raises its soft limit towards the hard one); the log says so.
 
 ```ini
 [server]
@@ -349,7 +351,10 @@ or `--ulimit memlock=-1` in Docker), or it runs unlocked with a `SECURITY
 WARNING` in the log. With thousands of `[client ID]` blocks, give their `psk=`
 as `hex:` or `base64:` keys: each passphrase costs an Argon2id run (8 MiB, tens
 of milliseconds) when the server starts, and on reloads beyond the 260 keys it
-caches.
+caches. A handshake tries the keys in turn (the global key first), at most
+51200 tries a second for all handshakes together: per-client keys suit tens or
+hundreds of clients; for thousands give them the global key (they are still
+told apart by their ID) and per-client keys only where needed.
 
 The session index in each packet carries the client's slot number in its low
 16 bits (the high 16 bits are random), so the server finds a packet's session

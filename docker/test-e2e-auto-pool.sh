@@ -265,18 +265,36 @@ grep -q "^MOVER@10.80.0.2 10.81.0.2/24$" "$BUILD_CTX/mv2.txt"
 check $? "its next handshake gets an address of the new pool ($(cut -d' ' -f2 "$BUILD_CTX/mv2.txt"))"
 docker logs "$P-mv" 2>&1 | grep -q "Auto pool 10.81.0.0/24 is not inside the server's tunnel network"
 check $? "the reload reports that the new pool is outside the server's tunnel network"
+! docker logs "$P-mv" 2>&1 | grep -q "asks for .* client slots"
+check $? "a pool of the same size needs no restart"
+printf '[server]\nauto_pool=10.80.0.0/16\n' > "$BUILD_CTX/mv3.conf"
+docker cp "$BUILD_CTX/mv3.conf" "$P-mv:/etc/camex.conf" >/dev/null
+docker kill -s HUP "$P-mv" >/dev/null
+sleep 2
+docker logs "$P-mv" 2>&1 | grep -q "The configuration asks for 65533 client slots, the server has 256: restart"
+check $? "a reload to a /16 pool says the slots need a restart"
 
 echo "== 10. TCP: slots stay below FD_SETSIZE"
 srv_conf tcp '[server]\nauto_pool=10.90.0.0/16\n' --local-cidr 10.90.0.1/16 --transport tcp
 sleep 1
 docker logs "$P-tcp" 2>&1 | grep -q "TCP: 65533 client slots reduced to 1024"
 check $? "a TCP server with a /16 pool gets 1024 slots"
+SRV_CAPS="--ulimit nofile=300:300" srv_conf tcpfd '[server]\nauto_pool=10.91.0.0/16\n' --local-cidr 10.91.0.1/16 --transport tcp
+sleep 1
+docker logs "$P-tcpfd" 2>&1 | grep -q "TCP: 65533 client slots reduced to 268"
+check $? "with 300 open files the TCP slots follow that limit ($(docker logs "$P-tcpfd" 2>&1 | grep -o 'reduced to [0-9]*'))"
 
 echo "== 11. the default pool outside the server's tunnel network is reported"
 docker logs "$P-srv2" 2>&1 | grep -q "Auto pool 10.200.0.0/24 is not inside the server's tunnel network 10.201.0.1/24"
 check $? "--local-cidr 10.201.0.1/24 with the default pool gives a warning"
 docker logs "$P-srv1" 2>&1 | grep -q "Client slots: 256, auto pool 10.200.0.0/24"
 check $? "without auto_pool= and max_clients=: 256 slots and 10.200.0.0/24"
+srv_conf half '[server]\nauto_pool=10.0.128.0/17\n' --local-cidr 10.0.0.1/16
+sleep 1
+! docker logs "$P-half" 2>&1 | grep -q "is not inside"
+check $? "a /17 pool inside the server's /16 is not reported as outside"
+docker logs "$P-half" 2>&1 | grep -q "Auto pool clients get the gateway 10.0.128.1, but the server's tunnel address is 10.0.0.1"
+check $? "but its gateway that is not the server's address is"
 
 echo "== 12. slots above the memory lock limit: the server runs, with a warning"
 srv_conf nolock '[server]\nauto_pool=10.62.0.0/16\n' --local-cidr 10.62.0.1/16
