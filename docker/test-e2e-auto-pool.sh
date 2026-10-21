@@ -25,6 +25,10 @@
 #    server; a reload moves clients to a new pool; TCP slots stay below
 #    FD_SETSIZE; a pool outside the server's tunnel network is reported;
 #    slots above the memory lock limit run unlocked with a warning.
+# 6. A live client keeps its address until it confirms the new one (#77):
+#    after a pool change a handshake whose RESP the client never gets (one
+#    from v2tool with its ID) leaves its old address working, the new one
+#    stays reserved for it, and its own next handshake moves it.
 #
 # Usage: ./test-e2e-auto-pool.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
@@ -65,7 +69,7 @@ gen_server_key "$BUILD_CTX" "$CAMEX_BINARY" || { echo "cannot create a server ke
 cat > "$BUILD_CTX/Dockerfile" <<'EOF'
 FROM ubuntu:24.04
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
-        python3-minimal iputils-ping >/dev/null && rm -rf /var/lib/apt/lists/*
+        python3-minimal iputils-ping iproute2 >/dev/null && rm -rf /var/lib/apt/lists/*
 COPY camex /usr/local/bin/camex
 COPY server.key /etc/camex/server.key
 COPY v2tool /usr/local/bin/v2tool
@@ -343,6 +347,44 @@ check $? "the server says the profiles do not fit the memory lock limit"
 atk "$P-prof" PROF11999 > "$BUILD_CTX/prof.txt"
 grep -q "^PROF11999 10.63.159.201/16$" "$BUILD_CTX/prof.txt"
 check $? "and serves a client listed near the end ($(cut -d' ' -f2 "$BUILD_CTX/prof.txt"))"
+
+echo "== 14. a live client keeps its address until it confirms the new one (#77)"
+# The server network covers both pools, so it can reach either address
+srv_conf pend '[server]\nauto_pool=10.82.0.0/24\n' --local-cidr 10.82.0.1/15
+docker run -d --name "$P-pcli" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    -e CAMEX_REKEY_AFTER=20 \
+    "$IMAGE" --mode client --auto --name REAL77 --server-host "$P-pend" --port 5800 \
+    --server-pubkey "$SERVER_PUBKEY" --psk "$PSK" >/dev/null
+got=1
+for _ in $(seq 1 15); do
+    docker logs "$P-pend" 2>&1 | grep -q "Auto-assigned 10.82.0.2/24 to client REAL77" && { got=0; break; }
+    sleep 1
+done
+check $got "the client gets 10.82.0.2"
+sleep 1
+docker exec "$P-pend" ping -c 2 -W 2 10.82.0.2 >/dev/null 2>&1
+check $? "traffic to 10.82.0.2 works"
+printf '[server]\nauto_pool=10.83.0.0/24\n' > "$BUILD_CTX/pend2.conf"
+docker cp "$BUILD_CTX/pend2.conf" "$P-pend:/etc/camex.conf" >/dev/null
+docker kill -s HUP "$P-pend" >/dev/null
+# The new pool's gateway on the server, so the client can answer there
+docker exec "$P-pend" ip addr add 10.83.0.1/24 dev tun0
+sleep 1
+# A handshake with its ID whose RESP goes elsewhere (as if it were lost)
+atk "$P-pend" REAL77 > "$BUILD_CTX/pend.txt"
+grep -q "^REAL77 10.83.0.2/24$" "$BUILD_CTX/pend.txt"
+check $? "that handshake is offered 10.83.0.2 ($(cut -d' ' -f2 "$BUILD_CTX/pend.txt"))"
+docker exec "$P-pend" ping -c 3 -W 2 10.82.0.2 >/dev/null 2>&1
+check $? "the client's old address still carries traffic: it has not confirmed the new one"
+atk "$P-pend" OTHER77@10.83.0.2 > "$BUILD_CTX/other.txt"
+! grep -q " 10.83.0.2/24$" "$BUILD_CTX/other.txt"
+check $? "the pending 10.83.0.2 is not given to another client ($(cut -d' ' -f2 "$BUILD_CTX/other.txt"))"
+moved=1
+for _ in $(seq 1 40); do
+    docker exec "$P-pend" ping -c 1 -W 1 10.83.0.2 >/dev/null 2>&1 && { moved=0; break; }
+    sleep 1
+done
+check $moved "with its own next handshake the client moves to 10.83.0.2 and traffic follows"
 
 if [ "$FAILS" != 0 ]; then
     echo "--- server 1 log (tail) ---"

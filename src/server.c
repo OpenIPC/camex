@@ -162,10 +162,15 @@ void server_check_pool(const char *server_cidr)
     }
 }
 
+/* A pending address (#77) is the client's too: forwarding and the pool
+ * see it as taken */
 static int match_ip(uint32_t slot, const void *key)
 {
+    const uint32_t ip = *(const uint32_t *)key;
+
     return slot < server_max_clients && server_clients[slot].active &&
-           server_clients[slot].ip_be == *(const uint32_t *)key;
+           (server_clients[slot].ip_be == ip ||
+            server_clients[slot].pending_ip_be == ip);
 }
 
 static int match_id(uint32_t slot, const void *key)
@@ -213,6 +218,9 @@ static void server_index_rebuild(void)
         if ((c->ip_be != 0U &&
              slotidx_insert(&idx_ip, slotidx_hash_u32(c->ip_be),
                             (uint32_t)i) != 0) ||
+            (c->pending_ip_be != 0U &&
+             slotidx_insert(&idx_ip, slotidx_hash_u32(c->pending_ip_be),
+                            (uint32_t)i) != 0) ||
             (c->client_id[0] != '\0' &&
              slotidx_insert(&idx_id, slotidx_hash_nocase(c->client_id),
                             (uint32_t)i) != 0) ||
@@ -252,6 +260,23 @@ void server_set_ip(server_client_t *entry, uint32_t ip_be)
     if (ip_be != 0U) {
         server_index_add(&idx_ip, slotidx_hash_u32(ip_be), entry);
     }
+}
+
+/* The address an auto client gets at a handshake (#77). A client with a
+ * working session keeps its address until it confirms the new session
+ * (its first packet on it, server_handle_data()): until then the new one
+ * is pending, reserved for it. Otherwise it is taken at once. */
+static void server_assign_ip(server_client_t *entry, uint32_t ip_be)
+{
+    if (entry->cur.valid && entry->ip_be != 0U && ip_be != entry->ip_be) {
+        if (entry->pending_ip_be != ip_be) {
+            entry->pending_ip_be = ip_be;
+            server_index_add(&idx_ip, slotidx_hash_u32(ip_be), entry);
+        }
+        return;
+    }
+    entry->pending_ip_be = 0U;
+    server_set_ip(entry, ip_be);
 }
 
 void server_set_id(server_client_t *entry, const char *client_id)
@@ -332,7 +357,7 @@ server_client_t *server_find_by_ip(uint32_t ip_be)
         return k >= 0 ? &server_clients[k] : NULL;
     }
     for (i = 0; i < server_max_clients; ++i) {
-        if (server_clients[i].active && server_clients[i].ip_be == ip_be) {
+        if (match_ip((uint32_t)i, &ip_be)) {
             return &server_clients[i];
         }
     }
@@ -474,6 +499,7 @@ void server_expire_clients(void)
         if (c->next.valid &&
             difftime(now, c->next.created) > (double)V2_PREV_SESSION_GRACE) {
             session_wipe(&c->next);
+            c->pending_ip_be = 0U;   /* the old address stays (#77) */
         }
         /* Pre-auth: counted from the accept, so frames that arrive without
          * a handshake cannot keep an unregistered connection open. */
@@ -571,7 +597,9 @@ static int server_build_config(server_client_t *entry, const char *client_id,
                                char *message, size_t message_size)
 {
     camex_profile_t profile;
-    uint32_t old_ip_be = entry != NULL ? entry->ip_be : 0U;
+    uint32_t old_ip_be = entry == NULL ? 0U
+                         : entry->pending_ip_be != 0U ? entry->pending_ip_be
+                                                      : entry->ip_be;
 
     if (config_db_lookup_profile(client_id, &profile) != 0) {
         log_message(LOG_ERR, "Missing config for client %s",
@@ -600,10 +628,15 @@ static int server_build_config(server_client_t *entry, const char *client_id,
                     server_set_ip(entry, h.s_addr);
                 }
             }
-            if (pool_has(entry->ip_be) && entry->ip_be != server_tunnel_ip &&
-                profile_owner_of_ip(entry->ip_be) == NULL) {
+            /* The address the client was last given: a pending one when
+             * it has not confirmed it yet (#77) */
+            uint32_t given = entry->pending_ip_be != 0U ? entry->pending_ip_be
+                                                        : entry->ip_be;
+
+            if (pool_has(given) && given != server_tunnel_ip &&
+                profile_owner_of_ip(given) == NULL) {
                 /* Keep the same IP (a changed pool takes it away) */
-                ip_be = entry->ip_be;
+                ip_be = given;
             } else if (server_auto_pool_take(entry, &ip_be) != 0) {
                 char net[16];
 
@@ -620,9 +653,9 @@ static int server_build_config(server_client_t *entry, const char *client_id,
             ip_text(pool_gateway(), profile.gateway_ip,
                     sizeof(profile.gateway_ip));
             /* Store assigned IP in client entry for packet forwarding */
-            server_set_ip(entry, ip_be);
+            server_assign_ip(entry, ip_be);
             /* Rekeys repeat the CONFIG: log new assignments only */
-            if (entry->ip_be != old_ip_be) {
+            if (ip_be != old_ip_be) {
                 log_message(LOG_INFO,
                             "Auto-assigned %s to client %s (no config file)",
                             profile.local_cidr, client_id);
@@ -1021,6 +1054,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     size_t resp_len;
     size_t i;
     int fresh = 0;
+    uint32_t pending_before = 0U;
     int first;
 
     net_sockaddr_to_string(from, peer, sizeof(peer));
@@ -1143,6 +1177,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         return -1;
     }
     first = !entry->registered;
+    pending_before = entry->pending_ip_be;
     /* A UDP entry with a working session keeps its address until the first
      * packet on the new one (server_handle_data), so a replayed message 1
      * cannot redirect its traffic; over TCP the connection carries it */
@@ -1165,7 +1200,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
             if (parse_local_cidr(profile.local_cidr, ip, sizeof(ip),
                                  mask, sizeof(mask)) == 0 &&
                 inet_pton(AF_INET, ip, &a) == 1) {
-                server_set_ip(entry, a.s_addr);
+                server_assign_ip(entry, a.s_addr);
             }
         }
         if (server_build_config(entry, client_id, local_ip, reply,
@@ -1245,6 +1280,9 @@ fail:
     if (fresh) {
         crypto_wipe(entry, sizeof(*entry));
         entry->tcp_fd = -1;
+    } else {
+        /* An address this handshake made pending is not given (#77) */
+        entry->pending_ip_be = pending_before;
     }
     return -1;
 }
@@ -1258,6 +1296,7 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
     uint32_t idx = v2_data_receiver(buffer);
     uint32_t src_ip_be = 0;
     uint32_t dst_ip_be = 0;
+    uint32_t own_ip_be;
     server_client_t *entry = NULL;
     session_t *s = NULL;
     char peer[64];
@@ -1295,9 +1334,15 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
         session_wipe(&entry->prev);
         entry->prev = entry->cur;
         entry->prev_until = g_now + V2_PREV_SESSION_GRACE;
+        entry->prev_ip_be = entry->ip_be;
         entry->cur = entry->next;
         session_wipe(&entry->next);
         s = &entry->cur;
+        /* The client has its new CONFIG: its new address counts now */
+        if (entry->pending_ip_be != 0U) {
+            server_set_ip(entry, entry->pending_ip_be);
+            entry->pending_ip_be = 0U;
+        }
     }
 
     /* Authenticated: the client may have moved (NAT rebinding, roaming) */
@@ -1321,8 +1366,11 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
     if (ipv4_parse_endpoints(plain, plain_len, &src_ip_be, &dst_ip_be) != 0) {
         return 0;
     }
-    /* A client may only send from its own tunnel address (#6). */
-    if (entry->ip_be == 0U || src_ip_be != entry->ip_be) {
+    /* A client may only send from its own tunnel address (#6): the one of
+     * the session the packet came on (#77) */
+    own_ip_be = (s == &entry->prev && entry->prev_ip_be != 0U)
+                    ? entry->prev_ip_be : entry->ip_be;
+    if (own_ip_be == 0U || src_ip_be != own_ip_be) {
         char claimed[INET_ADDRSTRLEN];
         struct in_addr a;
 
