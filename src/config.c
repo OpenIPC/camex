@@ -749,8 +749,13 @@ int config_build_keystore(void)
 
     for (i = 0U; i < ks->count; ++i) {
         /* A locked entry matches no key: only its owner is indexed (its
-         * wiped key would pile all of them into one probe chain) */
+         * wiped key would pile all of them into one probe chain). Of
+         * entries with the same key only the first is indexed by key:
+         * every lookup by key wants the first one (the global key is
+         * entry 0), and many clients sharing one psk= would otherwise
+         * make one long chain */
         if ((!ks->entries[i].locked &&
+             ks_find_key(ks->entries[i].psk_key, NULL, i) < 0 &&
              slotidx_insert(&ks->by_key,
                             slotidx_hash_bytes(ks->entries[i].psk_key, 32),
                             (uint32_t)i) != 0) ||

@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 /* Globals normally provided by camex.c / client.c */
@@ -252,6 +253,63 @@ int main(void)
                     ++failures;
                 }
             }
+            unlink(path);
+        }
+    }
+
+    /* 60000 [client ID] sections with one shared psk= (#75): the key is
+     * indexed once (one long probe chain made the build quadratic) and
+     * names its first owner */
+    {
+        const char *hex = "hex:202122232425262728292a2b2c2d2e2f"
+                          "303132333435363738393a3b3c3d3e3f";
+        char path[] = "/tmp/test_proto_XXXXXX";
+        int fd = mkstemp(path);
+        FILE *fp = fd >= 0 ? fdopen(fd, "w") : NULL;
+
+        if (fp == NULL || crypto_init(NULL) != 0) {
+            fprintf(stderr, "FAIL: cannot set up the shared-key test\n");
+            ++failures;
+            if (fp != NULL) {
+                fclose(fp);
+            }
+        } else {
+            clock_t t0;
+            double secs;
+            int i;
+            uint8_t key[32];
+
+            for (i = 0; i < 60000; ++i) {
+                fprintf(fp, "[client SH%05d]\npsk=%s\n", i, hex);
+            }
+            fclose(fp);
+            config_db_free(&server_db);
+            config_keystore_free(&server_ks);
+            t0 = clock();
+            if (config_db_load_file(path) != 0 ||
+                config_build_keystore() != 0) {
+                fprintf(stderr, "FAIL: the shared-key config was not "
+                        "loaded\n");
+                ++failures;
+            } else {
+                secs = (double)(clock() - t0) / CLOCKS_PER_SEC;
+                printf("shared key: 60000 entries in %.2f s\n", secs);
+                fflush(stdout);
+                memcpy(key, server_keystore[0].psk_key, 32);
+                if (server_keystore_count != 60000U ||
+                    strcmp(config_ks_owner(key), "SH00000") != 0 ||
+                    !config_ks_key_owned_by(key, "SH59999") ||
+                    config_ks_is_global(key) ||
+                    server_ks.by_key.used != 1U) {
+                    fprintf(stderr, "FAIL: shared key: %u entries, owner "
+                            "%s, %u indexed by key\n",
+                            (unsigned)server_keystore_count,
+                            config_ks_owner(key),
+                            (unsigned)server_ks.by_key.used);
+                    ++failures;
+                }
+            }
+            config_keystore_free(&server_ks);
             unlink(path);
         }
     }
