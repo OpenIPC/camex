@@ -156,6 +156,9 @@ make && make kmod
 make CROSS_COMPILE=mipsel-linux-
 ```
 
+为嵌入式内核（OpenWrt 等）构建内核模块，请参阅
+[为嵌入式内核构建](#为嵌入式内核构建openwrt-等)。
+
 ### 安装内核模块
 
 ```sh
@@ -560,6 +563,48 @@ sudo rmmod camex
 
 > 只要有任何进程仍打开着 `/dev/camex`，卸载就会被阻止
 > （`rmmod` 返回 `EBUSY`）。
+
+#### 为嵌入式内核构建（OpenWrt 等）
+
+固件内核很少提供头文件包，而 OpenWrt 会去掉模块中的 `vermagic`，并且内核构建时未启用
+`CONFIG_MODVERSIONS`：`insmod` 会加载任何 `camex.ko`，即使它是针对另一套内核配置构建的。
+这样的模块可以加载，隧道也能建立，但它访问内核结构（`struct sk_buff`、`struct net_device`）
+时使用的偏移量是错的：所有数据包都会被丢弃，模块还可能破坏内核内存。请针对设备上实际运行的
+内核构建模块：
+
+1. **相同的内核源码和编译器。** 相同版本的内核加上固件的补丁（OpenWrt：发布分支上设置该内核
+   版本的那个提交，`target/linux/generic` 和 `target/linux/<target>` 中的 `files/` 与
+   `patches-*`），并使用相同的编译器（该发布版本和平台的 OpenWrt SDK 工具链）。
+2. **相同的内核配置。** 如果设备上有 `/proc/config.gz`，直接使用它。否则以 SDK 或构建系统的
+   配置为起点，关闭设备上没有的功能：对照设备的 `/proc/kallsyms`（未启用
+   `CONFIG_KALLSYMS_ALL` 时只包含函数）和 `/proc/net`。最重要的是会改变 `struct sock`、
+   `struct sk_buff` 或 `struct net_device` 的选项，例如 `IPV6`、`XFRM`、`BRIDGE_NETFILTER`、
+   `NET_CLS_ACT`、`NETWORK_SECMARK`、`NET_RX_BUSY_POLL`、`NF_CONNTRACK`。通过 `select`
+   打开的选项，只有连同选择它的选项一起关闭才会真正关闭。
+3. **准备内核树并构建：**
+
+   ```sh
+   make -C <kernel-tree> ARCH=mips CROSS_COMPILE=<prefix> olddefconfig modules_prepare
+   make kmod KDIR=<kernel-tree> ARCH=mips CROSS_COMPILE=<prefix>
+   ```
+
+   如果旧内核的主机工具在 GCC 10 及更新版本下链接失败（`dtc`：multiple definition of
+   `yylloc`），请加上 `HOSTCFLAGS=-fcommon`。
+4. **加载前检查结构布局。** 用同一内核树构建一个设备上已有的模块，例如
+   `make -C <kernel-tree> ARCH=mips CROSS_COMPILE=<prefix> drivers/net/tun.ko`，并与设备上的
+   `/lib/modules/$(uname -r)/tun.ko` 比较：`.text` 大小（`objdump -h`）以及每一条内存读写
+   指令中的偏移量（`objdump -d`，例如 `lw v0,452(a0)`）必须一致。同一编译器的不同构建可能
+   导致指令顺序不同，但偏移量不能不同。
+5. **不匹配的症状。** 握手和自动配置都正常，但没有流量，并且 `camex` 的 `rx_dropped`
+   （`cat /proc/net/dev`）随服务器发来的每个数据包增长。此时请立即停止客户端并执行
+   `rmmod camex`。
+
+已验证的示例：OpenWrt 15.05.1 ramips/mt7620（MT7620N，MIPS 24KEc），自编译内核 3.18.92 ——
+linux 3.18.92 加上 `openwrt/chaos_calmer` 在 `31cce51cc7`（"kernel: bump to 3.18.92"）的补丁，
+使用 OpenWrt SDK 15.05.1 ramips/mt7620 的工具链和 `.config`，并关闭 `IPV6`、`XFRM`（以及选择它的
+`INET_AH`、`INET_ESP`、`INET_IPCOMP`、`INET_XFRM_MODE_*`、`NET_KEY`、`XFRM_USER`、
+`XFRM_IPCOMP`、`XFRM_ALGO`）和 `BRIDGE_NETFILTER`。使用未修改的 SDK 配置时，模块可以加载，
+但会丢弃所有数据包（[#73](https://github.com/OpenIPC/camex/issues/73)）。
 
 ### 字符设备 API
 

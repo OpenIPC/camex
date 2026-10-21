@@ -157,6 +157,9 @@ make && make kmod
 make CROSS_COMPILE=mipsel-linux-
 ```
 
+For the kernel module on an embedded kernel (OpenWrt and similar) see
+[Building for an embedded kernel](#building-for-an-embedded-kernel-openwrt-and-similar).
+
 ### Install kernel module
 
 ```sh
@@ -583,6 +586,58 @@ sudo rmmod camex
 
 > Unloading is blocked while `/dev/camex` is held open by any process
 > (`rmmod` returns `EBUSY`).
+
+#### Building for an embedded kernel (OpenWrt and similar)
+
+Firmware kernels rarely come with a headers package, and OpenWrt strips
+`vermagic` from its modules and builds without `CONFIG_MODVERSIONS`: `insmod`
+loads any `camex.ko`, even one built for another kernel configuration. Such a
+module loads and the tunnel comes up, but its offsets into kernel structures
+(`struct sk_buff`, `struct net_device`) are wrong: every packet is dropped, and
+the module can corrupt kernel memory. Build it against the kernel that runs on
+the device:
+
+1. **Same kernel source and compiler.** The same kernel version with the
+   firmware's patches (OpenWrt: the release branch at the commit that set this
+   kernel version, `target/linux/generic` and `target/linux/<target>` —
+   `files/` and `patches-*`), built with the same compiler (the OpenWrt SDK
+   toolchain of that release and target).
+2. **Same kernel config.** If the device has `/proc/config.gz`, use it. If not,
+   start from the SDK or build-system config and turn off what the device
+   lacks: compare its `/proc/kallsyms` (functions only, unless
+   `CONFIG_KALLSYMS_ALL`) and `/proc/net`. Options that change `struct sock`,
+   `struct sk_buff` or `struct net_device` matter most, for example `IPV6`,
+   `XFRM`, `BRIDGE_NETFILTER`, `NET_CLS_ACT`, `NETWORK_SECMARK`,
+   `NET_RX_BUSY_POLL`, `NF_CONNTRACK`. An option turned on by `select` goes
+   off only together with the options that select it.
+3. **Prepare the tree and build:**
+
+   ```sh
+   make -C <kernel-tree> ARCH=mips CROSS_COMPILE=<prefix> olddefconfig modules_prepare
+   make kmod KDIR=<kernel-tree> ARCH=mips CROSS_COMPILE=<prefix>
+   ```
+
+   If the host tools of an older kernel fail to link with GCC 10 or newer
+   (`dtc`: multiple definition of `yylloc`), add `HOSTCFLAGS=-fcommon`.
+4. **Check the layout before loading.** Build a module the device already has
+   from the same tree, for example
+   `make -C <kernel-tree> ARCH=mips CROSS_COMPILE=<prefix> drivers/net/tun.ko`,
+   and compare it with the device's `/lib/modules/$(uname -r)/tun.ko`: the
+   `.text` size (`objdump -h`) and the offsets in every load and store
+   (`objdump -d`, e.g. `lw v0,452(a0)`) must be the same. Instruction order may
+   differ with another build of the same compiler; offsets must not.
+5. **Symptom of a mismatch.** The handshake and auto-config work, but there is
+   no traffic, and `rx_dropped` of `camex` (`cat /proc/net/dev`) grows with
+   every packet from the server. Stop the client and `rmmod camex` at once.
+
+Tested example: OpenWrt 15.05.1 ramips/mt7620 (MT7620N, MIPS 24KEc) with a
+custom kernel 3.18.92 — linux 3.18.92 with the patches of `openwrt/chaos_calmer`
+at `31cce51cc7` ("kernel: bump to 3.18.92"), the toolchain and `.config` of the
+OpenWrt SDK 15.05.1 ramips/mt7620 with `IPV6`, `XFRM` (and `INET_AH`,
+`INET_ESP`, `INET_IPCOMP`, `INET_XFRM_MODE_*`, `NET_KEY`, `XFRM_USER`,
+`XFRM_IPCOMP`, `XFRM_ALGO`, which select it) and `BRIDGE_NETFILTER` turned off.
+With the unchanged SDK config the module loaded but dropped every packet
+([#73](https://github.com/OpenIPC/camex/issues/73)).
 
 ### Character Device API
 
