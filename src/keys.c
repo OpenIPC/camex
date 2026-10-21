@@ -171,6 +171,11 @@ void key_set_memory_locked(int locked)
     key_memory_locked = locked;
 }
 
+int key_memory_is_locked(void)
+{
+    return key_memory_locked;
+}
+
 void key_cache_clear(void)
 {
     crypto_wipe(key_cache, sizeof(key_cache));

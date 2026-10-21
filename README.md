@@ -305,15 +305,55 @@ sudo ./camex --mode server --port 5800 --config /etc/camex/camex.conf
 
 Auto-mode clients get their addresses from the config file. A client whose ID
 has no `[client ID]` block gets `[defaults]`, or, when no address is configured,
-one from the auto pool `10.200.0.2`–`10.200.0.254` (addresses in use and those
-of `[client ID]` blocks are skipped; addresses of expired clients are reused).
-To serve only the IDs listed in the file, set `allow_unknown_clients=no` in the
-`[server]` block.
+one from the auto pool, `10.200.0.2`–`10.200.0.254` by default (addresses in use
+and those of `[client ID]` blocks are skipped; addresses of expired clients are
+reused). To serve only the IDs listed in the file, set `allow_unknown_clients=no`
+in the `[server]` block.
 
 After a change to the file, `kill -HUP` the server. A running auto-mode client
 picks up a changed address, gateway, MTU or routes with its next handshake (a
 key renewal, at most 10 minutes later, or a reconnect): it reopens its tunnel
 with the new settings and replaces its routes, without a restart.
+
+### Auto pool and number of clients
+
+Two `[server]` keys size the server for its network:
+
+- `auto_pool=<network>/<prefix>` — the auto pool, from `/8` to `/30`; default
+  `10.200.0.0/24`. The first address is the gateway the clients get, so give it
+  to the server with `--local-cidr` or `local_cidr=` (for the default pool
+  `10.200.0.1/24`). Clients get the second to the last but one address, with
+  the pool's prefix (`10.50.3.7/16` from `10.50.0.0/16`). The server warns at
+  startup and after a reload when its tunnel address is not the pool's gateway
+  or the pool is outside its tunnel network. After a reload with a new pool,
+  auto-mode clients move to it with their next handshake.
+- `max_clients=<n>` — client slots, from 1 to 65534; default: the number of
+  pool addresses, at least 256 (a `/24` or smaller pool keeps 256). Read at
+  startup only. Over TCP the server uses `select()` and keeps at most
+  `FD_SETSIZE` slots (1024 on Linux); the log says so.
+
+```ini
+[server]
+local_cidr=10.50.0.1/16
+# 65533 client addresses and as many slots
+auto_pool=10.50.0.0/16
+```
+
+A slot takes about 1.3 KB and a `[client ID]` block about 0.7 KB: 256 slots
+about 330 KB, 65534 about 85 MB. Finding a client does not depend on their
+number. Large networks are meant for a PC or a server; on a router keep the
+default `/24`. The server locks its memory (`mlockall`) so that keys are not
+swapped out; give it a memory lock limit for its slots (root has none;
+otherwise `ulimit -l`, `LimitMEMLOCK=infinity` in systemd, `--cap-add IPC_LOCK`
+or `--ulimit memlock=-1` in Docker), or it runs unlocked with a `SECURITY
+WARNING` in the log. With thousands of `[client ID]` blocks, give their `psk=`
+as `hex:` or `base64:` keys: each passphrase costs an Argon2id run (8 MiB, tens
+of milliseconds) when the server starts, and on reloads beyond the 260 keys it
+caches.
+
+The session index in each packet carries the client's slot number in its low
+16 bits (the high 16 bits are random), so the server finds a packet's session
+without a search.
 
 ## Security Model
 
@@ -371,8 +411,8 @@ protects before exposing it to an untrusted network.
   per second.
 - Log messages that a peer can trigger (dropped packets, rejected
   registrations) are rate-limited; the number suppressed is logged.
-- The auto pool hands out `10.200.0.2`–`.254` and never gives one address to two
-  live clients (an expired client's address is handed out again; a client that
+- The auto pool hands out only client addresses of its network (by default
+  `10.200.0.2`–`.254`) and never gives one address to two live clients (an expired client's address is handed out again; a client that
   reconnects, also after a server restart, gets its previous address back while
   it is free);
   `allow_unknown_clients=no` serves only auto-mode IDs listed in the config file

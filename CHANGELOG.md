@@ -4,6 +4,29 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.1.0 — 2026-10-21
+
+- Server: the auto pool is configurable with `auto_pool=<network>/<prefix>` in
+  `[server]`, from `/8` to `/30` (#75). The first address is the clients' gateway,
+  clients get the second to the last but one with the pool's prefix. Without the key
+  the pool stays `10.200.0.0/24`. A reload applies a new pool; auto-mode clients move
+  to it with their next handshake. The server warns when its tunnel address is not the
+  pool's gateway or the pool is outside its tunnel network (before, such a server
+  silently handed out addresses it had no route to).
+- Server: the number of client slots is configurable with `max_clients=` (1–65534, read
+  at startup); without it the number of pool addresses, at least 256, so a `/24` pool
+  keeps today's 256 (#75). Slots, `[client ID]` profiles and keys are allocated at
+  runtime instead of fixed arrays of 256; over TCP the slots stay below `FD_SETSIZE`.
+  Slots that do not fit the memory lock limit are allocated unlocked, with a
+  `SECURITY WARNING` that names the limit to raise.
+- Server: finding a client no longer scans all slots (#75). The session index of a
+  packet carries the client's slot number, and clients, profiles and keys are found
+  through indexes by address, ID and key; a reload no longer compares every session
+  with every key.
+- Tests: the auto pool test covers a `/16` pool with 600 clients and traffic to a client
+  above slot 256, `max_clients=`, a `/30` pool, invalid values, a pool change by reload,
+  the TCP limit, the pool warning and slots above the memory lock limit.
+
 ## 3.0.2 — 2026-10-17
 
 - Linux release binaries (`arm`, `mipsel`, `aarch64`, `x86_64`) are static and linked

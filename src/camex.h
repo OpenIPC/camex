@@ -24,7 +24,11 @@
 #endif
 
 #define CAMEX_MAX_ROUTES 16
-#define CAMEX_MAX_CLIENTS 256
+/* Live client slots of a server (#75): max_clients= in [server]; without
+ * it the size of the auto pool, but at least CAMEX_MAX_CLIENTS_DEFAULT.
+ * The limit keeps a slot number within the 16 bits of a session index. */
+#define CAMEX_MAX_CLIENTS_DEFAULT 256U
+#define CAMEX_MAX_CLIENTS_LIMIT   65534U
 #define CAMEX_CLIENT_ID_LEN 32
 #define CAMEX_CONFIG_PATH_LEN 256
 #define CAMEX_DEFAULT_CONFIG_PATH "/etc/camex/camex.conf"

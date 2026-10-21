@@ -10,6 +10,7 @@
 #include "server.h"
 #include "client.h"
 #include "crypto.h"
+#include "keys.h"
 #include "monocypher.h"
 #include "noise.h"
 #include "session.h"
@@ -21,6 +22,7 @@
 #include "tun.h"
 #include "config.h"
 #include "camex.h"
+#include "slotidx.h"
 
 #ifndef _WIN32
 #include <arpa/inet.h>
@@ -33,6 +35,7 @@
 #include <time.h>
 
 #ifndef _WIN32
+#include <sys/mman.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -43,43 +46,291 @@
 #define close(fd) closesocket(fd)
 #endif
 
-server_client_t server_clients[CAMEX_MAX_CLIENTS];
+server_client_t *server_clients = NULL;
+size_t server_max_clients = 0U;
 
-/* Dynamic IP pool for auto-config clients when no config file is loaded.
- * Server uses 10.200.0.1, clients get 10.200.0.2 .. 10.200.0.254 */
-#define AUTO_POOL_BASE "10.200.0"
-#define AUTO_POOL_GATEWAY "10.200.0.1"
-#define AUTO_POOL_FIRST 2U
-#define AUTO_POOL_LAST  254U   /* .255 is the /24 broadcast address */
-static unsigned int auto_pool_next = AUTO_POOL_FIRST;
+/* Indexes of the live table (#75): tunnel IP, client ID, peer address.
+ * Entries are added when a key is set (server_set_ip/_id/_addr); stale
+ * ones (a freed or reused slot) are skipped by the match functions and
+ * dropped when the index is rebuilt. Without memory for an index the
+ * lookups fall back to a scan (idx_ok = 0). */
+static slotidx_t idx_ip;
+static slotidx_t idx_id;
+static slotidx_t idx_addr;
+static int idx_ok = 0;
 
-static const char *profile_owner_of_ip(uint32_t ip_be);
+/* Auto pool (#15, #75): server_db.globals.pool_net/pool_prefix; the first
+ * address is the gateway, clients get the second to the last but one. */
+static uint32_t auto_pool_next = 0U;   /* host order, 0 = pool start */
 
-/* Look up a client by its auto-assigned tunnel IP and return the IP octet */
-static int server_find_auto_ip_octet(uint32_t ip_be, uint8_t *octet)
+static uint32_t pool_size(void)
+{
+    return 1U << (32U - server_db.globals.pool_prefix);
+}
+
+static uint32_t pool_gateway(void)
+{
+    return server_db.globals.pool_net + 1U;
+}
+
+static uint32_t pool_first(void)
+{
+    return server_db.globals.pool_net + 2U;
+}
+
+static uint32_t pool_last(void)
+{
+    return server_db.globals.pool_net + pool_size() - 2U;
+}
+
+/* host-order address -> dotted text */
+static void ip_text(uint32_t host, char *buf, size_t size)
 {
     struct in_addr a;
-    a.s_addr = ip_be;
-    {
-        const char *s = inet_ntoa(a);
-        int o1, o2, o3, o4;
-        if (s && sscanf(s, "%d.%d.%d.%d", &o1, &o2, &o3, &o4) == 4) {
-            char base[32];
-            snprintf(base, sizeof(base), "%d.%d.%d", o1, o2, o3);
-            if (strcmp(base, "10.200.0") == 0) {
-                *octet = (uint8_t)o4;
-                return 0;
-            }
+
+    a.s_addr = htonl(host);
+    inet_ntop(AF_INET, &a, buf, (socklen_t)size);
+}
+
+/* Is ip_be (network order) a client address of the pool? */
+static int pool_has(uint32_t ip_be)
+{
+    uint32_t host = ntohl(ip_be);
+
+    return ip_be != 0U && host >= pool_first() && host <= pool_last();
+}
+
+size_t server_default_max_clients(void)
+{
+    size_t hosts = (size_t)(pool_last() - pool_first() + 1U);
+
+    if (hosts > CAMEX_MAX_CLIENTS_LIMIT) {
+        hosts = CAMEX_MAX_CLIENTS_LIMIT;
+    }
+    return hosts > CAMEX_MAX_CLIENTS_DEFAULT ? hosts
+                                             : CAMEX_MAX_CLIENTS_DEFAULT;
+}
+
+void server_check_pool(const char *server_cidr)
+{
+    char ip[16];
+    char mask[16];
+    char gw[16];
+    struct in_addr a;
+    struct in_addr m;
+    uint32_t sip;
+    uint32_t smask;
+    uint32_t pmask = 0xFFFFFFFFU << (32U - server_db.globals.pool_prefix);
+
+    if (server_cidr == NULL || server_cidr[0] == '\0' ||
+        parse_local_cidr(server_cidr, ip, sizeof(ip), mask,
+                         sizeof(mask)) != 0 ||
+        inet_pton(AF_INET, ip, &a) != 1 || inet_pton(AF_INET, mask, &m) != 1) {
+        return;
+    }
+    sip = ntohl(a.s_addr);
+    smask = ntohl(m.s_addr);
+    ip_text(pool_gateway(), gw, sizeof(gw));
+    if ((sip & smask) != (server_db.globals.pool_net & smask) ||
+        smask > pmask) {
+        char net[16];
+
+        ip_text(server_db.globals.pool_net, net, sizeof(net));
+        log_message(LOG_WARNING, "Auto pool %s/%u is not inside the server's "
+                    "tunnel network %s: the server has no route to the "
+                    "clients it gives these addresses", net,
+                    (unsigned)server_db.globals.pool_prefix, server_cidr);
+    } else if (sip != pool_gateway()) {
+        log_message(LOG_WARNING, "Auto pool clients get the gateway %s, but "
+                    "the server's tunnel address is %s", gw, ip);
+    }
+}
+
+static int match_ip(uint32_t slot, const void *key)
+{
+    return slot < server_max_clients && server_clients[slot].active &&
+           server_clients[slot].ip_be == *(const uint32_t *)key;
+}
+
+static int match_id(uint32_t slot, const void *key)
+{
+    return slot < server_max_clients && server_clients[slot].active &&
+           strcasecmp(server_clients[slot].client_id,
+                      (const char *)key) == 0;
+}
+
+static int match_addr(uint32_t slot, const void *key)
+{
+    return slot < server_max_clients && server_clients[slot].active &&
+           net_sockaddr_equal(&server_clients[slot].addr,
+                              (const struct sockaddr_in *)key);
+}
+
+static uint32_t hash_addr(const struct sockaddr_in *addr)
+{
+    uint8_t k[6];
+
+    memcpy(k, &addr->sin_addr.s_addr, 4);
+    memcpy(k + 4, &addr->sin_port, 2);
+    return slotidx_hash_bytes(k, sizeof(k));
+}
+
+static int addr_is_set(const struct sockaddr_in *addr)
+{
+    return addr->sin_addr.s_addr != 0U || addr->sin_port != 0U;
+}
+
+/* Rebuild all three indexes from the table */
+static void server_index_rebuild(void)
+{
+    size_t i;
+
+    idx_ok = slotidx_reset(&idx_ip, server_max_clients) == 0 &&
+             slotidx_reset(&idx_id, server_max_clients) == 0 &&
+             slotidx_reset(&idx_addr, server_max_clients) == 0;
+    for (i = 0U; idx_ok && i < server_max_clients; ++i) {
+        const server_client_t *c = &server_clients[i];
+
+        if (!c->active) {
+            continue;
+        }
+        if ((c->ip_be != 0U &&
+             slotidx_insert(&idx_ip, slotidx_hash_u32(c->ip_be),
+                            (uint32_t)i) != 0) ||
+            (c->client_id[0] != '\0' &&
+             slotidx_insert(&idx_id, slotidx_hash_nocase(c->client_id),
+                            (uint32_t)i) != 0) ||
+            (addr_is_set(&c->addr) &&
+             slotidx_insert(&idx_addr, hash_addr(&c->addr),
+                            (uint32_t)i) != 0)) {
+            idx_ok = 0;
         }
     }
-    return -1;
+    if (!idx_ok) {
+        log_message(LOG_WARNING, "Out of memory for the client indexes: "
+                    "lookups scan the table");
+    }
 }
+
+/* Add slot under h to x; rebuilds when stale entries crowd it */
+static void server_index_add(slotidx_t *x, uint32_t h, const server_client_t *c)
+{
+    if (!idx_ok) {
+        return;
+    }
+    if (slotidx_crowded(x, server_max_clients)) {
+        server_index_rebuild();   /* takes the new key from the table */
+        return;
+    }
+    if (slotidx_insert(x, h, (uint32_t)(c - server_clients)) != 0) {
+        server_index_rebuild();
+    }
+}
+
+void server_set_ip(server_client_t *entry, uint32_t ip_be)
+{
+    if (entry->ip_be == ip_be) {
+        return;
+    }
+    entry->ip_be = ip_be;
+    if (ip_be != 0U) {
+        server_index_add(&idx_ip, slotidx_hash_u32(ip_be), entry);
+    }
+}
+
+void server_set_id(server_client_t *entry, const char *client_id)
+{
+    if (strcmp(entry->client_id, client_id) == 0) {
+        return;
+    }
+    snprintf(entry->client_id, sizeof(entry->client_id), "%s", client_id);
+    if (entry->client_id[0] != '\0') {
+        server_index_add(&idx_id, slotidx_hash_nocase(entry->client_id),
+                         entry);
+    }
+}
+
+void server_set_addr(server_client_t *entry, const struct sockaddr_in *addr)
+{
+    if (net_sockaddr_equal(&entry->addr, addr) && addr_is_set(addr)) {
+        return;
+    }
+    entry->addr = *addr;
+    if (addr_is_set(addr)) {
+        server_index_add(&idx_addr, hash_addr(addr), entry);
+    }
+}
+
+int server_clients_init(size_t count)
+{
+    size_t i;
+
+    server_clients_free();
+    server_clients = calloc(count, sizeof(*server_clients));
+#ifndef _WIN32
+    /* With mlockall(MCL_FUTURE) a table above RLIMIT_MEMLOCK cannot be
+     * allocated (non-root, containers). As for the Argon2id work area:
+     * unlock, allocate, lock again; if the limit is too small for that,
+     * keep running unlocked and say what to change (#75). */
+    if (server_clients == NULL && key_memory_is_locked() &&
+        munlockall() == 0) {
+        server_clients = calloc(count, sizeof(*server_clients));
+        if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+            key_set_memory_locked(0);
+            log_message(LOG_WARNING, "SECURITY WARNING: %u client slots "
+                        "(%u MB) do not fit the memory lock limit: memory "
+                        "is not locked, keys may be swapped to disk. Raise "
+                        "the limit (ulimit -l; LimitMEMLOCK= in systemd, "
+                        "--ulimit memlock or --cap-add IPC_LOCK in Docker) "
+                        "or lower max_clients=",
+                        (unsigned)count,
+                        (unsigned)((count * sizeof(*server_clients) +
+                                    (1U << 20) - 1U) >> 20));
+        }
+    }
+#endif
+    if (server_clients == NULL) {
+        log_message(LOG_ERR, "Out of memory for %u client slots",
+                    (unsigned)count);
+        return -1;
+    }
+    server_max_clients = count;
+    for (i = 0U; i < count; ++i) {
+        server_clients[i].tcp_fd = -1;
+    }
+    auto_pool_next = 0U;
+    server_index_rebuild();
+    return 0;
+}
+
+void server_clients_free(void)
+{
+    if (server_clients != NULL) {
+        crypto_wipe(server_clients,
+                    server_max_clients * sizeof(*server_clients));
+        free(server_clients);
+    }
+    server_clients = NULL;
+    server_max_clients = 0U;
+    slotidx_free(&idx_ip);
+    slotidx_free(&idx_id);
+    slotidx_free(&idx_addr);
+    idx_ok = 0;
+}
+
+static const char *profile_owner_of_ip(uint32_t ip_be);
 
 server_client_t *server_find_by_ip(uint32_t ip_be)
 {
     size_t i;
 
-    for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
+    if (idx_ok) {
+        long k = slotidx_find(&idx_ip, slotidx_hash_u32(ip_be), match_ip,
+                              &ip_be);
+
+        return k >= 0 ? &server_clients[k] : NULL;
+    }
+    for (i = 0; i < server_max_clients; ++i) {
         if (server_clients[i].active && server_clients[i].ip_be == ip_be) {
             return &server_clients[i];
         }
@@ -95,8 +346,13 @@ server_client_t *server_find_by_client_id(const char *client_id)
     if (client_id == NULL || *client_id == '\0') {
         return NULL;
     }
+    if (idx_ok) {
+        long k = slotidx_find(&idx_id, slotidx_hash_nocase(client_id),
+                              match_id, client_id);
 
-    for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
+        return k >= 0 ? &server_clients[k] : NULL;
+    }
+    for (i = 0; i < server_max_clients; ++i) {
         if (server_clients[i].active &&
             strcasecmp(server_clients[i].client_id, client_id) == 0) {
             return &server_clients[i];
@@ -113,8 +369,12 @@ server_client_t *server_find_by_addr(const struct sockaddr_in *addr)
     if (addr == NULL) {
         return NULL;
     }
+    if (idx_ok && addr_is_set(addr)) {
+        long k = slotidx_find(&idx_addr, hash_addr(addr), match_addr, addr);
 
-    for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
+        return k >= 0 ? &server_clients[k] : NULL;
+    }
+    for (i = 0; i < server_max_clients; ++i) {
         if (server_clients[i].active &&
             net_sockaddr_equal(&server_clients[i].addr, addr)) {
             return &server_clients[i];
@@ -131,7 +391,7 @@ server_client_t *server_alloc_client(void)
     time_t oldest_seen = 0;
     int oldest_found = 0;
 
-    for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
+    for (i = 0; i < server_max_clients; ++i) {
         if (!server_clients[i].active) {
             memset(&server_clients[i], 0, sizeof(server_clients[i]));
             server_clients[i].tcp_fd = -1;
@@ -192,7 +452,7 @@ void server_expire_clients(void)
     }
     last_expire_check = now;
 
-    for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
+    for (i = 0; i < server_max_clients; ++i) {
         server_client_t *c = &server_clients[i];
         int preauth = c->tcp_fd >= 0 && !c->registered;
 
@@ -233,33 +493,32 @@ void server_expire_clients(void)
     }
 }
 
-/* Take a free auto-pool address for entry (#15): .2-.254, not used by
- * another live client nor by a [client ID] profile. Addresses of expired
- * clients become free again. Returns 0 and the last octet, or -1 if the
- * pool is full. */
-static int server_auto_pool_take(const server_client_t *entry, uint8_t *octet)
+/* Take a free auto-pool address for entry (#15, #75): not used by another
+ * live client nor by a [client ID] profile. Addresses of expired clients
+ * become free again. Returns 0 and the address (network order), or -1 if
+ * the pool is full. Busy addresses are at most the live clients plus the
+ * profiles, so the search ends long before it walks a large pool. */
+static int server_auto_pool_take(const server_client_t *entry,
+                                 uint32_t *ip_be)
 {
-    const unsigned int size = AUTO_POOL_LAST - AUTO_POOL_FIRST + 1U;
-    unsigned int n;
+    const uint32_t first = pool_first();
+    const uint32_t size = pool_last() - first + 1U;
+    const uint32_t start = (auto_pool_next >= first &&
+                            auto_pool_next <= pool_last())
+                               ? auto_pool_next - first : 0U;
+    uint32_t n;
 
     for (n = 0U; n < size; ++n) {
-        unsigned int o = AUTO_POOL_FIRST +
-                         (auto_pool_next - AUTO_POOL_FIRST + n) % size;
-        char ip[16];
-        struct in_addr a;
-        server_client_t *user;
+        uint32_t host = first + (start + n) % size;
+        uint32_t a = htonl(host);
+        server_client_t *user = server_find_by_ip(a);
 
-        snprintf(ip, sizeof(ip), AUTO_POOL_BASE ".%u", o);
-        if (inet_pton(AF_INET, ip, &a) != 1) {
-            continue;
-        }
-        user = server_find_by_ip(a.s_addr);
         if ((user != NULL && user != entry) ||
-            profile_owner_of_ip(a.s_addr) != NULL) {
+            profile_owner_of_ip(a) != NULL) {
             continue;
         }
-        *octet = (uint8_t)o;
-        auto_pool_next = (o < AUTO_POOL_LAST) ? o + 1U : AUTO_POOL_FIRST;
+        *ip_be = a;
+        auto_pool_next = host < pool_last() ? host + 1U : first;
         return 0;
     }
     return -1;
@@ -274,7 +533,7 @@ void server_revalidate_unknown_clients(void)
     }
     /* After a reload that set allow_unknown_clients = no, auto clients
      * whose ID is not in the file lose their session (#15). */
-    for (i = 0U; i < CAMEX_MAX_CLIENTS; ++i) {
+    for (i = 0U; i < server_max_clients; ++i) {
         server_client_t *c = &server_clients[i];
 
         if (!c->active || !c->auto_client ||
@@ -307,7 +566,8 @@ static int server_build_config(server_client_t *entry, const char *client_id,
     if (profile.local_cidr[0] == '\0' || profile.gateway_ip[0] == '\0') {
         /* No config file loaded — auto-assign dynamic IP for auto-config client */
         if (entry != NULL && client_id != NULL && client_id[0] != '\0') {
-            uint8_t octet;
+            uint32_t ip_be = 0U;
+            char ip[16];
 
             /* Reuse existing auto-IP if client already has one, else the
              * address the client asks for (its previous one) when free */
@@ -317,39 +577,34 @@ static int server_build_config(server_client_t *entry, const char *client_id,
                 server_client_t *user;
 
                 if (inet_pton(AF_INET, hint_ip, &h) == 1 &&
-                    server_find_auto_ip_octet(h.s_addr, &octet) == 0 &&
-                    octet >= AUTO_POOL_FIRST && octet <= AUTO_POOL_LAST &&
+                    pool_has(h.s_addr) &&
                     profile_owner_of_ip(h.s_addr) == NULL &&
                     ((user = server_find_by_ip(h.s_addr)) == NULL ||
                      user == entry)) {
-                    entry->ip_be = h.s_addr;
+                    server_set_ip(entry, h.s_addr);
                 }
             }
-            if (entry->ip_be != 0U &&
-                server_find_auto_ip_octet(entry->ip_be, &octet) == 0 &&
-                octet >= AUTO_POOL_FIRST && octet <= AUTO_POOL_LAST &&
+            if (pool_has(entry->ip_be) &&
                 profile_owner_of_ip(entry->ip_be) == NULL) {
-                /* Keep the same IP */
-            } else if (server_auto_pool_take(entry, &octet) != 0) {
+                /* Keep the same IP (a changed pool takes it away) */
+                ip_be = entry->ip_be;
+            } else if (server_auto_pool_take(entry, &ip_be) != 0) {
+                char net[16];
+
+                ip_text(server_db.globals.pool_net, net, sizeof(net));
                 log_peer(LOG_WARNING,
-                         "Auto pool " AUTO_POOL_BASE ".0/24 is full: "
-                         "no address for client %s", client_id);
+                         "Auto pool %s/%u is full: no address for client %s",
+                         net, (unsigned)server_db.globals.pool_prefix,
+                         client_id);
                 return -1;
             }
+            ip_text(ntohl(ip_be), ip, sizeof(ip));
             snprintf(profile.local_cidr, sizeof(profile.local_cidr),
-                     AUTO_POOL_BASE ".%u/24", (unsigned)octet);
-            snprintf(profile.gateway_ip, sizeof(profile.gateway_ip),
-                     "%s", AUTO_POOL_GATEWAY);
+                     "%s/%u", ip, (unsigned)server_db.globals.pool_prefix);
+            ip_text(pool_gateway(), profile.gateway_ip,
+                    sizeof(profile.gateway_ip));
             /* Store assigned IP in client entry for packet forwarding */
-            {
-                struct in_addr a;
-                char ip[16];
-                snprintf(ip, sizeof(ip), AUTO_POOL_BASE ".%u",
-                         (unsigned)octet);
-                if (inet_pton(AF_INET, ip, &a) == 1) {
-                    entry->ip_be = a.s_addr;
-                }
-            }
+            server_set_ip(entry, ip_be);
             /* Rekeys repeat the CONFIG: log new assignments only */
             if (entry->ip_be != old_ip_be) {
                 log_message(LOG_INFO,
@@ -374,111 +629,47 @@ static int server_build_config(server_client_t *entry, const char *client_id,
  */
 static const char *keystore_owner(const uint8_t *key)
 {
-    size_t i;
-
-    if (key == NULL) {
-        return "";
-    }
-    for (i = 0U; i < server_keystore_count; ++i) {
-        if (!server_keystore[i].locked &&
-            memcmp(server_keystore[i].psk_key, key, 32) == 0) {
-            return server_keystore[i].owner;
-        }
-    }
-    return "";
+    return config_ks_owner(key);
 }
 
 static int keystore_has_owner(const char *client_id)
 {
-    size_t i;
-
-    for (i = 0U; i < server_keystore_count; ++i) {
-        if (server_keystore[i].owner[0] != '\0' &&
-            strcasecmp(server_keystore[i].owner, client_id) == 0) {
-            return 1;
-        }
-    }
-    return 0;
+    return config_ks_has_owner(client_id);
 }
 
 static int keystore_key_owned_by(const uint8_t *key, const char *client_id)
 {
-    size_t i;
-
-    if (key == NULL) {
-        return 0;
-    }
-    for (i = 0U; i < server_keystore_count; ++i) {
-        if (server_keystore[i].owner[0] != '\0' &&
-            !server_keystore[i].locked &&
-            strcasecmp(server_keystore[i].owner, client_id) == 0 &&
-            memcmp(server_keystore[i].psk_key, key, 32) == 0) {
-            return 1;
-        }
-    }
-    return 0;
+    return config_ks_key_owned_by(key, client_id);
 }
 
 /* Tunnel IP configured for client_id in its own [client ID] section. */
 static int profile_ip(const char *client_id, uint32_t *ip_be)
 {
     camex_server_profile_t *p = config_db_find_client(client_id);
-    char ip[16];
-    char mask[16];
-    struct in_addr a;
 
-    if (p == NULL || p->profile.local_cidr[0] == '\0' ||
-        parse_local_cidr(p->profile.local_cidr, ip, sizeof(ip),
-                         mask, sizeof(mask)) != 0 ||
-        inet_pton(AF_INET, ip, &a) != 1) {
+    if (p == NULL || !p->has_ip) {
         return -1;
     }
-    *ip_be = a.s_addr;
+    *ip_be = p->ip_be;
     return 0;
 }
 
 /* The [client ID] section whose local_cidr address is ip_be, if any. */
 static const char *profile_owner_of_ip(uint32_t ip_be)
 {
-    size_t i;
+    camex_server_profile_t *p = config_db_find_profile_by_ip(ip_be);
 
-    for (i = 0U; i < CAMEX_MAX_CLIENTS; ++i) {
-        uint32_t want;
-
-        if (server_db.clients[i].active &&
-            profile_ip(server_db.clients[i].client_id, &want) == 0 &&
-            want == ip_be) {
-            return server_db.clients[i].client_id;
-        }
-    }
-    return NULL;
+    return p != NULL ? p->client_id : NULL;
 }
 
 static int keystore_contains(const uint8_t *key)
 {
-    size_t i;
-
-    for (i = 0U; i < server_keystore_count; ++i) {
-        if (!server_keystore[i].locked &&
-            memcmp(server_keystore[i].psk_key, key, 32) == 0) {
-            return 1;
-        }
-    }
-    return 0;
+    return config_ks_contains(key);
 }
 
 static int keystore_is_global(const uint8_t *key)
 {
-    size_t i;
-
-    for (i = 0U; i < server_keystore_count; ++i) {
-        if (server_keystore[i].owner[0] == '\0' &&
-            !server_keystore[i].locked &&
-            memcmp(server_keystore[i].psk_key, key, 32) == 0) {
-            return 1;
-        }
-    }
-    return 0;
+    return config_ks_is_global(key);
 }
 
 void server_revalidate_keys(void)
@@ -488,7 +679,7 @@ void server_revalidate_keys(void)
     /* After a config reload (SIGHUP) every live session must still be
      * allowed with the key it registered with: a removed or changed key,
      * or a key that now belongs to another client, ends it (#16 L3). */
-    for (i = 0U; i < CAMEX_MAX_CLIENTS; ++i) {
+    for (i = 0U; i < server_max_clients; ++i) {
         server_client_t *c = &server_clients[i];
         const char *owner;
         int allowed;
@@ -606,28 +797,25 @@ static int server_send(server_client_t *entry, const uint8_t *pkt, size_t len)
     return net_send_payload(net_fd, &entry->addr, pkt, len);
 }
 
-/* A random session index no session uses, or 0 */
-static uint32_t server_new_index(void)
+/* A session index for entry, or 0 (#75): the low 16 bits are the slot
+ * number + 1, so a data packet finds its client without a search; the high
+ * 16 bits are random and differ from the entry's other sessions. The slot
+ * number is readable on the wire, as the whole index always was. */
+static uint32_t server_new_index(const server_client_t *entry)
 {
+    uint32_t slot1 = (uint32_t)(entry - server_clients) + 1U;
     int tries;
 
     for (tries = 0; tries < 16; ++tries) {
         uint32_t idx = v2_new_index();
-        size_t i;
-        int used = 0;
 
         if (idx == 0U) {
             return 0U;
         }
-        for (i = 0U; i < CAMEX_MAX_CLIENTS && !used; ++i) {
-            const server_client_t *c = &server_clients[i];
-
-            used = c->active &&
-                   ((c->cur.valid && c->cur.local_index == idx) ||
-                    (c->next.valid && c->next.local_index == idx) ||
-                    (c->prev.valid && c->prev.local_index == idx));
-        }
-        if (!used) {
+        idx = (idx & 0xFFFF0000U) | slot1;
+        if (!((entry->cur.valid && entry->cur.local_index == idx) ||
+              (entry->next.valid && entry->next.local_index == idx) ||
+              (entry->prev.valid && entry->prev.local_index == idx))) {
             return idx;
         }
     }
@@ -644,7 +832,7 @@ static void server_adopt_tcp(server_client_t *entry, int fd)
     if (fd < 0 || entry->tcp_fd == fd) {
         return;
     }
-    for (j = 0; j < CAMEX_MAX_CLIENTS; ++j) {
+    for (j = 0; j < server_max_clients; ++j) {
         if (server_clients[j].active && server_clients[j].tcp_fd == fd &&
             &server_clients[j] != entry) {
             crypto_wipe(&server_clients[j], sizeof(server_clients[j]));
@@ -756,7 +944,7 @@ static server_client_t *server_entry_for(const char *client_id,
             }
             *fresh = 1;
         }
-        entry->ip_be = addr.s_addr;
+        server_set_ip(entry, addr.s_addr);
         return entry;
     }
 }
@@ -905,11 +1093,11 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
      * packet on the new one (server_handle_data), so a replayed message 1
      * cannot redirect its traffic; over TCP the connection carries it */
     if (!entry->cur.valid || fd >= 0) {
-        entry->addr = *from;
+        server_set_addr(entry, from);
     }
     entry->last_seen = g_now;
     entry->auto_client = auto_request;
-    snprintf(entry->client_id, sizeof(entry->client_id), "%s", client_id);
+    server_set_id(entry, client_id);
 
     if (auto_request) {
         /* ip_be from the profile, so forwarding finds the client */
@@ -923,7 +1111,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
             if (parse_local_cidr(profile.local_cidr, ip, sizeof(ip),
                                  mask, sizeof(mask)) == 0 &&
                 inet_pton(AF_INET, ip, &a) == 1) {
-                entry->ip_be = a.s_addr;
+                server_set_ip(entry, a.s_addr);
             }
         }
         if (server_build_config(entry, client_id, local_ip, reply,
@@ -942,7 +1130,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         noise_wipe(&hs);
         goto fail;
     }
-    server_index = server_new_index();
+    server_index = server_new_index(entry);
     if (server_index == 0U) {
         noise_wipe(&hs);
         goto fail;
@@ -1019,14 +1207,13 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
     server_client_t *entry = NULL;
     session_t *s = NULL;
     char peer[64];
-    size_t i;
+    uint32_t slot1 = idx & 0xFFFFU;
 
-    for (i = 0U; i < CAMEX_MAX_CLIENTS && s == NULL; ++i) {
-        server_client_t *c = &server_clients[i];
+    /* The index names the slot (server_new_index()) */
+    if (slot1 != 0U && slot1 <= server_max_clients &&
+        server_clients[slot1 - 1U].active) {
+        server_client_t *c = &server_clients[slot1 - 1U];
 
-        if (!c->active) {
-            continue;
-        }
         if (c->cur.valid && c->cur.local_index == idx) {
             entry = c;
             s = &c->cur;
@@ -1061,7 +1248,7 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
 
     /* Authenticated: the client may have moved (NAT rebinding, roaming) */
     if (fd < 0 && !net_sockaddr_equal(&entry->addr, from)) {
-        entry->addr = *from;
+        server_set_addr(entry, from);
     }
     entry->last_seen = g_now;
     entry->last_data = g_now;

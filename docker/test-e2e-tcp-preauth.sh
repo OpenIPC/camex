@@ -8,7 +8,7 @@
 # keeps sending frames that do not decrypt. A legitimate client that
 # connects during the attack must still register and reach the server.
 # Before the fix every connection took a client slot at accept() and any
-# frame refreshed it, so CAMEX_MAX_CLIENTS (256) connections locked
+# frame refreshed it, so 256 connections (all client slots) locked
 # legitimate clients out for as long as the attack lasted.
 # Also: unregistered connections that keep sending well-formed v2 DATA
 # frames (keepalive-sized, unknown session) are still closed after the

@@ -10,6 +10,7 @@
 #define CAMEX_CFG_H
 
 #include "camex.h"
+#include "slotidx.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -37,6 +38,8 @@ typedef struct {
     char client_id[CAMEX_CLIENT_ID_LEN];
     camex_profile_t profile;
     uint8_t active;
+    uint8_t has_ip;     /* ip_be is the address of profile.local_cidr */
+    uint32_t ip_be;     /* filled when the file is loaded */
 } camex_server_profile_t;
 
 /* Server-level globals from [server] section */
@@ -53,20 +56,46 @@ typedef struct {
     uint8_t encrypt_set;
     uint8_t deny_unknown_clients;  /* allow_unknown_clients = no (#15) */
     char server_key[64];           /* base64 private key (server_key=) */
+    uint32_t pool_net;             /* auto pool (#75), host byte order */
+    uint8_t pool_prefix;           /* 8..30; default 10.200.0.0/24 */
+    uint8_t pool_set;              /* auto_pool= was given */
+    unsigned int max_clients;      /* max_clients=, 0 = not given */
 } camex_server_globals_t;
 
+/* Default auto pool (#15, #75): 10.200.0.0/24 */
+#define CAMEX_AUTO_POOL_DEFAULT_NET    0x0AC80000U
+#define CAMEX_AUTO_POOL_DEFAULT_PREFIX 24U
+#define CAMEX_AUTO_POOL_MIN_PREFIX     8U
+#define CAMEX_AUTO_POOL_MAX_PREFIX     30U
+
 /* Full server DB */
+/* [client ID] profiles are kept in a growing array, at most
+ * CAMEX_MAX_CLIENTS_LIMIT of them (#75) */
 typedef struct {
     camex_profile_t defaults;
-    camex_server_profile_t clients[CAMEX_MAX_CLIENTS];
+    camex_server_profile_t *clients;
+    size_t client_count;     /* used entries of clients[] */
+    size_t client_cap;       /* allocated entries */
+    slotidx_t by_id;         /* client ID -> entry */
+    slotidx_t by_ip;         /* address of local_cidr -> entry */
     camex_server_globals_t globals;
     uint8_t loaded;
 } camex_server_db_t;
 
+/* Keystore: the global key (owner "") and one entry per [client ID] with
+ * its own psk=, with indexes by owner and by key (#75) */
+typedef struct {
+    camex_keystore_entry_t *entries;
+    size_t count;
+    slotidx_t by_owner;
+    slotidx_t by_key;
+} camex_keystore_t;
+
 /* Externals (global server DB + keystore) */
 extern camex_server_db_t server_db;
-extern camex_keystore_entry_t server_keystore[];
-extern size_t server_keystore_count;
+extern camex_keystore_t server_ks;
+#define server_keystore       (server_ks.entries)
+#define server_keystore_count (server_ks.count)
 
 /* Reset profile */
 void config_profile_reset(camex_profile_t *profile);
@@ -77,8 +106,29 @@ void config_profile_merge(camex_profile_t *dst, const camex_profile_t *src);
 /* Append a route to a profile */
 int config_profile_append_route(camex_profile_t *profile, const char *value);
 
-/* Reset server DB */
+/* Reset server DB. It does not free: the arrays may belong to a copy the
+ * caller keeps (a config reload); config_db_free() releases them. */
 void config_server_db_reset(void);
+
+/* Wipe the key texts of db and free its arrays; db is then empty */
+void config_db_free(camex_server_db_t *db);
+
+/* Wipe and free a keystore; it is then empty */
+void config_keystore_free(camex_keystore_t *ks);
+
+/* Parse "network/prefix" of auto_pool= (#75): prefix 8..30, the network
+ * address without host bits. 0, or -1 with a logged reason. */
+int config_parse_pool(const char *value, uint32_t *net, uint8_t *prefix);
+
+/* [client ID] profile whose local_cidr address is ip_be, or NULL */
+camex_server_profile_t *config_db_find_profile_by_ip(uint32_t ip_be);
+
+/* Keystore queries (#5); keys are 32 bytes */
+const char *config_ks_owner(const uint8_t *key);   /* "" = global/none */
+int config_ks_has_owner(const char *client_id);
+int config_ks_key_owned_by(const uint8_t *key, const char *client_id);
+int config_ks_contains(const uint8_t *key);
+int config_ks_is_global(const uint8_t *key);
 
 /* Find client by ID in server DB */
 camex_server_profile_t *config_db_find_client(const char *client_id);

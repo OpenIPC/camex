@@ -53,6 +53,9 @@ void key_cache_drop_new(void);
  * work area and locks it again. Otherwise memory locking is left alone. */
 void key_set_memory_locked(int locked);
 
+/* 1 while mlockall(MCL_FUTURE) is in force */
+int key_memory_is_locked(void);
+
 /* 32-byte value in base64 (public key, private key) */
 int key_parse_b64(const char *text, uint8_t key[KEY_LEN]);
 
