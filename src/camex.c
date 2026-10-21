@@ -829,6 +829,11 @@ static void drain_udp_packets(void)
     }
 }
 
+/* After accept() fails with EMFILE and the like, the listening socket stays
+ * readable (the connection waits in the backlog): it is left out of
+ * select() until this second has passed, so the server does not spin */
+static time_t accept_paused_until = 0;
+
 static void drain_tcp_server_accept(void)
 {
     struct sockaddr_in peer;
@@ -854,7 +859,9 @@ static void drain_tcp_server_accept(void)
             if (errno == EINTR || errno == ECONNABORTED || errno == EPROTO) {
                 continue;
             }
-            log_peer(LOG_WARNING, "accept: %s", strerror(errno));
+            log_peer(LOG_WARNING, "accept: %s; new connections wait a "
+                     "second", strerror(errno));
+            accept_paused_until = g_now + 1;
             break;
 #else
             continue;
@@ -1109,7 +1116,7 @@ void camex_run(void)
                 maxfd = net_fd;
             } else {
                 /* TCP: monitor listen_fd + all active client fds */
-                if (listen_fd >= 0) {
+                if (listen_fd >= 0 && g_now >= accept_paused_until) {
                     FD_SET(listen_fd, &readset);
                 }
                 maxfd = listen_fd;

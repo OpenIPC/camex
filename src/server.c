@@ -144,7 +144,8 @@ void server_check_pool(const char *server_cidr)
                     "tunnel network %s: the server has no route to the "
                     "clients it gives these addresses", net,
                     (unsigned)server_db.globals.pool_prefix, server_cidr);
-    } else if (sip != pool_gateway()) {
+    }
+    if (sip != pool_gateway()) {
         log_message(LOG_WARNING, "Auto pool clients get the gateway %s, but "
                     "the server's tunnel address is %s", gw, ip);
     }

@@ -20,7 +20,7 @@ release, rebuilt from every push to `master`; this file is the change history.
   Slots, profiles and indexes that do not fit the memory lock limit are allocated
   unlocked, with a `SECURITY WARNING` that names the limit to raise. TCP slots also stay within the
   open files limit, and `accept()` failures such as `EMFILE` no longer spin the
-  accept loop. A reload that asks for another number of slots says a restart is
+  server: new connections wait a second. A reload that asks for another number of slots says a restart is
   needed.
 - Server: a handshake tries the per-client keys in turn, now at most 51200 tries a
   second for all handshakes (the old worst case, 200 handshakes × 256 keys) or twice

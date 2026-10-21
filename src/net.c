@@ -12,6 +12,7 @@
 #include "util.h"
 #include "camex.h"
 #include "crypto.h"
+#include "keys.h"
 #include "tun.h"
 
 #include <errno.h>
@@ -127,7 +128,8 @@ static tcp_send_pending_t *tcp_pending_acquire(int fd)
         return NULL;
     }
     if (slot->buf == NULL) {
-        slot->buf = malloc(TCP_SEND_BUF_SIZE);
+        slot->buf = key_locked_calloc(1U, TCP_SEND_BUF_SIZE,
+                                      "TCP send buffers");
         if (slot->buf == NULL) {
             return NULL;
         }
