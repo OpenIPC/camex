@@ -351,10 +351,11 @@ or `--ulimit memlock=-1` in Docker), or it runs unlocked with a `SECURITY
 WARNING` in the log. With thousands of `[client ID]` blocks, give their `psk=`
 as `hex:` or `base64:` keys: each passphrase costs an Argon2id run (8 MiB, tens
 of milliseconds) when the server starts, and on reloads beyond the 260 keys it
-caches. A handshake tries the keys in turn (the global key first), at most
-51200 tries a second for all handshakes together: per-client keys suit tens or
-hundreds of clients; for thousands give them the global key (they are still
-told apart by their ID) and per-client keys only where needed.
+caches. A handshake tries the keys in turn (the global key first, always), at
+most 51200 tries of per-client keys a second for all handshakes together, or
+twice their number when there are more: per-client keys suit tens or hundreds
+of clients; for thousands give them the global key (they are still told apart
+by their ID) and per-client keys only where needed.
 
 The session index in each packet carries the client's slot number in its low
 16 bits (the high 16 bits are random), so the server finds a packet's session

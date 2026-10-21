@@ -23,8 +23,9 @@ release, rebuilt from every push to `master`; this file is the change history.
   accept loop. A reload that asks for another number of slots says a restart is
   needed.
 - Server: a handshake tries the per-client keys in turn, now at most 51200 tries a
-  second for all handshakes (the old worst case, 200 handshakes × 256 keys), so
-  thousands of per-client keys cannot be used to load the server.
+  second for all handshakes (the old worst case, 200 handshakes × 256 keys) or twice
+  the number of keys when there are more, so that every key stays reachable; the
+  global key is always tried first and not counted.
 - Server: finding a client no longer scans all slots (#75). The session index of a
   packet carries the client's slot number, and clients, profiles and keys are found
   through indexes by address, ID and key; a reload no longer compares every session

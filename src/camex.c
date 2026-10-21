@@ -407,7 +407,12 @@ static int camex_load_v2_keys(void)
 static size_t camex_tcp_slot_cap(void)
 {
     size_t cap = (size_t)FD_SETSIZE;
-#ifndef _WIN32
+#ifdef _WIN32
+    /* A Winsock fd_set holds FD_SETSIZE sockets (64 by default), and the
+     * read set also takes the listening socket and the tunnel's signal
+     * socket */
+    cap = (size_t)FD_SETSIZE - 2U;
+#else
     struct rlimit rl;
 
     if (getrlimit(RLIMIT_NOFILE, &rl) == 0) {

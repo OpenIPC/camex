@@ -28,8 +28,10 @@
 #define SERVER_HANDSHAKES_PER_SEC 200U
 
 /* Keys tried per second, all handshakes together (#75): each handshake
- * tries the keystore in turn (the global key first) until one opens it.
- * The bound is the old worst case, 200 handshakes with 256 keys each. */
+ * tries the keystore in turn (the global key first, not counted) until one
+ * opens it. The bound is the old worst case, 200 handshakes with 256 keys
+ * each, or twice the keystore when it is larger, so that every key can
+ * be reached. */
 #define SERVER_KEY_TRIALS_PER_SEC (SERVER_HANDSHAKES_PER_SEC * 256U)
 
 /* Per-server-client state */

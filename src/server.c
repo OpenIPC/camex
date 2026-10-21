@@ -799,17 +799,29 @@ static int server_handshake_budget(void)
     return 0;
 }
 
-/* One more key trial within SERVER_KEY_TRIALS_PER_SEC, or -1 */
+/* Key trials allowed per second: SERVER_KEY_TRIALS_PER_SEC, or twice the
+ * keystore when it is larger (one handshake may have to try every key) */
+static size_t server_key_trials_limit(void)
+{
+    size_t limit = SERVER_KEY_TRIALS_PER_SEC;
+
+    if (server_keystore_count * 2U > limit) {
+        limit = server_keystore_count * 2U;
+    }
+    return limit;
+}
+
+/* One more key trial within server_key_trials_limit(), or -1 */
 static int server_key_trial_budget(void)
 {
     static time_t window = 0;
-    static unsigned int count = 0U;
+    static size_t count = 0U;
 
     if (window != g_now) {
         window = g_now;
         count = 0U;
     }
-    if (count >= SERVER_KEY_TRIALS_PER_SEC) {
+    if (count >= server_key_trials_limit()) {
         return -1;
     }
     count++;
@@ -1046,10 +1058,13 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         if (server_keystore[i].locked) {
             continue;
         }
-        if (server_key_trial_budget() != 0) {
+        /* The global key (entry 0, owner "") is always tried: clients
+         * that use it are not starved by per-client key trials */
+        if ((i != 0U || server_keystore[i].owner[0] != '\0') &&
+            server_key_trial_budget() != 0) {
             log_peer(LOG_WARNING, "Dropped handshake from %s: more than "
                      "%u key trials per second (per-client keys are tried "
-                     "in turn)", peer, SERVER_KEY_TRIALS_PER_SEC);
+                     "in turn)", peer, (unsigned)server_key_trials_limit());
             break;
         }
         hs = base;
