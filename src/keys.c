@@ -171,6 +171,36 @@ void key_set_memory_locked(int locked)
     key_memory_locked = locked;
 }
 
+int key_memory_is_locked(void)
+{
+    return key_memory_locked;
+}
+
+void *key_locked_calloc(size_t count, size_t size, const char *what)
+{
+    void *p = calloc(count, size);
+
+#ifndef _WIN32
+    if (p == NULL && count != 0U && size != 0U && key_memory_locked &&
+        munlockall() == 0) {
+        p = calloc(count, size);
+        if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+            key_memory_locked = 0;
+            log_message(LOG_WARNING, "SECURITY WARNING: %s (%u MB) do not "
+                        "fit the memory lock limit: memory is not locked, "
+                        "keys may be swapped to disk. Raise the limit "
+                        "(ulimit -l; LimitMEMLOCK= in systemd, --ulimit "
+                        "memlock or --cap-add IPC_LOCK in Docker) or make "
+                        "the configuration smaller", what,
+                        (unsigned)((count * size + (1U << 20) - 1U) >> 20));
+        }
+    }
+#else
+    (void)what;
+#endif
+    return p;
+}
+
 void key_cache_clear(void)
 {
     crypto_wipe(key_cache, sizeof(key_cache));

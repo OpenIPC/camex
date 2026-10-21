@@ -53,6 +53,16 @@ void key_cache_drop_new(void);
  * work area and locks it again. Otherwise memory locking is left alone. */
 void key_set_memory_locked(int locked);
 
+/* 1 while mlockall(MCL_FUTURE) is in force */
+int key_memory_is_locked(void);
+
+/* calloc() for server tables (#75). With mlockall(MCL_FUTURE) a block
+ * above RLIMIT_MEMLOCK cannot be allocated (non-root, containers): as for
+ * the Argon2id work area, unlock, allocate, lock again; if the limit is
+ * too small for that, memory stays unlocked with a SECURITY WARNING that
+ * names `what`. NULL only when there is no memory at all. */
+void *key_locked_calloc(size_t count, size_t size, const char *what);
+
 /* 32-byte value in base64 (public key, private key) */
 int key_parse_b64(const char *text, uint8_t key[KEY_LEN]);
 

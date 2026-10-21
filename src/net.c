@@ -12,6 +12,7 @@
 #include "util.h"
 #include "camex.h"
 #include "crypto.h"
+#include "keys.h"
 #include "tun.h"
 
 #include <errno.h>
@@ -61,7 +62,9 @@
  */
 /* Largest frame: 2-byte length + encrypted packet of TUN_PACKET_MAX bytes */
 #define TCP_SEND_BUF_SIZE (2U + V2_OVERHEAD + TUN_PACKET_MAX)
-#define TCP_PENDING_SLOTS (CAMEX_MAX_CLIENTS + 1U)
+/* One per TCP connection: a server refuses descriptors at or beyond
+ * FD_SETSIZE (select()), so it never has more (#75) */
+#define TCP_PENDING_SLOTS ((size_t)FD_SETSIZE + 1U)
 
 typedef struct {
     int fd;            /* owner fd, -1 = slot free */
@@ -125,7 +128,8 @@ static tcp_send_pending_t *tcp_pending_acquire(int fd)
         return NULL;
     }
     if (slot->buf == NULL) {
-        slot->buf = malloc(TCP_SEND_BUF_SIZE);
+        slot->buf = key_locked_calloc(1U, TCP_SEND_BUF_SIZE,
+                                      "TCP send buffers");
         if (slot->buf == NULL) {
             return NULL;
         }

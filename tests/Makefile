@@ -19,10 +19,10 @@ HEADERS = $(wildcard $(SRC)/*.h)
 all: $(TESTS)
 
 test_net_tcp: test_net_tcp.c $(SRC)/net.c $(SRC)/util.c $(SRC)/log.c \
-              $(SRC)/monocypher.c $(HEADERS)
+              $(SRC)/keys.c $(SRC)/noise.c $(SRC)/monocypher.c $(HEADERS)
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
 
-test_proto: test_proto.c $(SRC)/proto.c $(SRC)/config.c $(SRC)/util.c $(SRC)/log.c \
+test_proto: test_proto.c $(SRC)/proto.c $(SRC)/config.c $(SRC)/slotidx.c $(SRC)/util.c $(SRC)/log.c \
             $(SRC)/crypto.c $(SRC)/keys.c $(SRC)/monocypher.c $(HEADERS)
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
 

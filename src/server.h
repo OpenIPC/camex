@@ -27,6 +27,13 @@
  * each costs X25519 operations */
 #define SERVER_HANDSHAKES_PER_SEC 200U
 
+/* Keys tried per second, all handshakes together (#75): each handshake
+ * tries the keystore in turn (the global key first, not counted) until one
+ * opens it. The bound is the old worst case, 200 handshakes with 256 keys
+ * each, or twice the keystore when it is larger, so that every key can
+ * be reached. */
+#define SERVER_KEY_TRIALS_PER_SEC (SERVER_HANDSHAKES_PER_SEC * 256U)
+
 /* Per-server-client state */
 typedef struct {
     struct sockaddr_in addr;
@@ -54,7 +61,29 @@ typedef struct {
                                     * zero on accept/reuse, see net.h */
 } server_client_t;
 
-extern server_client_t server_clients[];
+/* Live client slots, allocated at startup (#75) */
+extern server_client_t *server_clients;
+extern size_t server_max_clients;
+
+/* Allocate count empty slots (replacing any table); 0 or -1 */
+int server_clients_init(size_t count);
+
+/* Wipe and free the table */
+void server_clients_free(void);
+
+/* Slots when max_clients= is not given: the auto pool's size, at least
+ * CAMEX_MAX_CLIENTS_DEFAULT, at most CAMEX_MAX_CLIENTS_LIMIT */
+size_t server_default_max_clients(void);
+
+/* Warn when the auto pool does not fit the server's tunnel address
+ * (local_cidr); nothing without one */
+void server_check_pool(const char *server_cidr);
+
+/* Set a key of an entry and index it: always through these, or the
+ * lookups below do not find the entry */
+void server_set_ip(server_client_t *entry, uint32_t ip_be);
+void server_set_id(server_client_t *entry, const char *client_id);
+void server_set_addr(server_client_t *entry, const struct sockaddr_in *addr);
 
 /* Find clients */
 server_client_t *server_find_by_ip(uint32_t ip_be);

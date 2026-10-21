@@ -64,6 +64,7 @@ typedef int socklen_t;
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #endif
 #ifdef __linux__
 #include <sys/prctl.h>
@@ -399,6 +400,70 @@ static int camex_load_v2_keys(void)
     return rc;
 }
 
+/* TCP client slots that can be used (#75): one descriptor each, below
+ * FD_SETSIZE (select()) and within RLIMIT_NOFILE, keeping 32 for the
+ * listening socket, the tunnel, logs and the like. The soft limit is
+ * raised towards the hard one first. */
+static size_t camex_tcp_slot_cap(void)
+{
+    size_t cap = (size_t)FD_SETSIZE;
+#ifdef _WIN32
+    /* A Winsock fd_set holds FD_SETSIZE sockets (64 by default), and the
+     * read set also takes the listening socket and the tunnel's signal
+     * socket */
+    cap = (size_t)FD_SETSIZE - 2U;
+#else
+    /* Descriptors are numbered from 0: the listener, the tunnel, logs and
+     * the like take some below FD_SETSIZE too */
+    cap = (size_t)FD_SETSIZE - 32U;
+    struct rlimit rl;
+
+    if (getrlimit(RLIMIT_NOFILE, &rl) == 0) {
+        rlim_t want = (rlim_t)FD_SETSIZE + 32;
+
+        if (rl.rlim_cur != RLIM_INFINITY && rl.rlim_cur < want &&
+            (rl.rlim_max == RLIM_INFINITY || rl.rlim_max > rl.rlim_cur)) {
+            rl.rlim_cur = (rl.rlim_max == RLIM_INFINITY ||
+                           rl.rlim_max > want) ? want : rl.rlim_max;
+            (void)setrlimit(RLIMIT_NOFILE, &rl);
+            (void)getrlimit(RLIMIT_NOFILE, &rl);
+        }
+        if (rl.rlim_cur != RLIM_INFINITY) {
+            size_t usable = rl.rlim_cur > 32 ? (size_t)rl.rlim_cur - 32U
+                                             : 0U;
+
+            if (usable < cap) {
+                cap = usable;
+            }
+        }
+    }
+#endif
+    return cap;
+}
+
+/* Slots the configuration asks for: max_clients=, else the pool's size;
+ * over TCP within camex_tcp_slot_cap() */
+static size_t camex_wanted_slots(int quiet)
+{
+    const camex_server_globals_t *g = &server_db.globals;
+    size_t slots = g->max_clients != 0U ? (size_t)g->max_clients
+                                        : server_default_max_clients();
+
+    if (current_config.transport == CAMEX_TRANSPORT_TCP) {
+        size_t cap = camex_tcp_slot_cap();
+
+        if (slots > cap) {
+            if (!quiet) {
+                log_message(LOG_WARNING, "TCP: %u client slots reduced "
+                            "to %u (FD_SETSIZE and the open files limit)",
+                            (unsigned)slots, (unsigned)cap);
+            }
+            slots = cap;
+        }
+    }
+    return slots;
+}
+
 int camex_init(camex_config_t *config)
 {
     char local_ip[16];
@@ -414,7 +479,6 @@ int camex_init(camex_config_t *config)
     client_mode = (config->mode == CAMEX_MODE_CLIENT) ? 1U : 0U;
     server_mode = (config->mode == CAMEX_MODE_SERVER) ? 1U : 0U;
     client_state_init(&client_state);
-    memset(server_clients, 0, (size_t)CAMEX_MAX_CLIENTS * sizeof(server_client_t));
 
     if (client_mode && current_config.keepalive == 0) {
         log_message(LOG_WARNING,
@@ -472,6 +536,31 @@ int camex_init(camex_config_t *config)
                 "Server port must be specified (use -p or port= in [server])");
             return -1;
         }
+
+        /* Client slots (#75): max_clients=, else the auto pool's size */
+        {
+            const camex_server_globals_t *g = &server_db.globals;
+            size_t slots = camex_wanted_slots(0);
+            char net[INET_ADDRSTRLEN];
+            struct in_addr a;
+
+            if (slots == 0U) {
+                log_message(LOG_ERR, "TCP: the open files limit leaves no "
+                            "descriptors for clients (32 are kept for the "
+                            "server): raise it (ulimit -n)");
+                config_db_free(&server_db);
+                return -1;
+            }
+            if (server_clients_init(slots) != 0) {
+                config_db_free(&server_db);
+                return -1;
+            }
+            a.s_addr = htonl(g->pool_net);
+            inet_ntop(AF_INET, &a, net, sizeof(net));
+            log_message(LOG_INFO, "Client slots: %u, auto pool %s/%u",
+                        (unsigned)slots, net, (unsigned)g->pool_prefix);
+            server_check_pool(current_config.local_cidr);
+        }
     }
 
     /* Protocol v2 is always encrypted (#17) */
@@ -500,7 +589,8 @@ int camex_init(camex_config_t *config)
         if (!keys_ok) {
             crypto_wipe_ctx();
             key_cache_clear();
-            crypto_wipe(&server_db, sizeof(server_db));  /* client psk= */
+            config_db_free(&server_db);  /* client psk= */
+            server_clients_free();
             return -1;
         }
     }
@@ -742,6 +832,11 @@ static void drain_udp_packets(void)
     }
 }
 
+/* After accept() fails with EMFILE and the like, the listening socket stays
+ * readable (the connection waits in the backlog): it is left out of
+ * select() until this second has passed, so the server does not spin */
+static time_t accept_paused_until = 0;
+
 static void drain_tcp_server_accept(void)
 {
     struct sockaddr_in peer;
@@ -760,8 +855,20 @@ static void drain_tcp_server_accept(void)
             if (net_sock_err_is_again()) {
                 break;  /* no pending connections */
             }
-            /* Retry on transient errors (EINTR, ECONNABORTED, EPROTO) */
+#ifndef _WIN32
+            /* Retry on transient errors (EINTR, ECONNABORTED, EPROTO);
+             * anything else (EMFILE, ENFILE, ENOBUFS...) would repeat at
+             * once: leave, serve the clients, try on the next pass */
+            if (errno == EINTR || errno == ECONNABORTED || errno == EPROTO) {
+                continue;
+            }
+            log_peer(LOG_WARNING, "accept: %s; new connections wait a "
+                     "second", strerror(errno));
+            accept_paused_until = g_now + 1;
+            break;
+#else
             continue;
+#endif
         }
 
 #ifndef _WIN32
@@ -788,9 +895,10 @@ static void drain_tcp_server_accept(void)
         {
             size_t pending = 0U;
             size_t pending_ip = 0U;
+            size_t preauth_max;
             server_client_t *oldest = NULL;
 
-            for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
+            for (i = 0; i < server_max_clients; ++i) {
                 server_client_t *c = &server_clients[i];
 
                 if (!c->active || c->tcp_fd < 0 || c->registered) {
@@ -815,7 +923,18 @@ static void drain_tcp_server_accept(void)
                          peer_str);
                 continue;
             }
-            if (pending >= CAMEX_TCP_PREAUTH_MAX && oldest == NULL) {
+            /* With few slots, at most half of them may be pre-auth, so
+             * unregistered connections can never fill the table (#75) */
+            {
+                size_t half = server_max_clients / 2U;
+
+                preauth_max = half < CAMEX_TCP_PREAUTH_MAX ? half
+                                                           : CAMEX_TCP_PREAUTH_MAX;
+                if (preauth_max == 0U) {
+                    preauth_max = 1U;
+                }
+            }
+            if (pending >= preauth_max && oldest == NULL) {
                 /* All pre-auth connections are younger than the grace
                  * period: refuse; the client retries */
                 net_tcp_close(client_fd);
@@ -825,7 +944,7 @@ static void drain_tcp_server_accept(void)
                          "unregistered connections", peer_str);
                 continue;
             }
-            if (pending >= CAMEX_TCP_PREAUTH_MAX) {
+            if (pending >= preauth_max) {
                 net_sockaddr_to_string(&oldest->addr, peer_str,
                                        sizeof(peer_str));
                 log_peer(LOG_WARNING,
@@ -836,21 +955,21 @@ static void drain_tcp_server_accept(void)
             }
         }
 
-        for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
+        for (i = 0; i < server_max_clients; ++i) {
             if (!server_clients[i].active) {
                 memset(&server_clients[i], 0, sizeof(server_clients[i]));
                 server_clients[i].tcp_fd = client_fd;
-                server_clients[i].addr = peer;
                 server_clients[i].last_seen = g_now;
                 server_clients[i].connected_at = g_now;
                 server_clients[i].active = 1U;
+                server_set_addr(&server_clients[i], &peer);
                 net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
                 log_message(LOG_INFO, "TCP client connected: %s (fd=%d)",
                             peer_str, client_fd);
                 break;
             }
         }
-        if (i >= CAMEX_MAX_CLIENTS) {
+        if (i >= server_max_clients) {
             net_tcp_close(client_fd);
             net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
             log_message(LOG_WARNING,
@@ -870,7 +989,7 @@ static void drain_tcp_client_read(int fd)
 
     /* Find this fd's own persistent partial-read tracker up front — each
      * TCP client has its own (see server_client_t.recv_state in server.h). */
-    for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
+    for (i = 0; i < server_max_clients; ++i) {
         if (server_clients[i].active && server_clients[i].tcp_fd == fd) {
             rstate = &server_clients[i].recv_state;
             break;
@@ -887,7 +1006,7 @@ static void drain_tcp_client_read(int fd)
     }
     if (rc < 0) {
         /* Connection closed or error — find and remove this client */
-        for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
+        for (i = 0; i < server_max_clients; ++i) {
             if (server_clients[i].active &&
                 server_clients[i].tcp_fd == fd) {
                 net_sockaddr_to_string(&server_clients[i].addr,
@@ -904,7 +1023,7 @@ static void drain_tcp_client_read(int fd)
     }
 
     /* Find the client entry for this fd */
-    for (i = 0; i < CAMEX_MAX_CLIENTS; ++i) {
+    for (i = 0; i < server_max_clients; ++i) {
         if (server_clients[i].active &&
             server_clients[i].tcp_fd == fd) {
             /* last_seen is refreshed by server_handle_packet() only for
@@ -1012,11 +1131,11 @@ void camex_run(void)
                 maxfd = net_fd;
             } else {
                 /* TCP: monitor listen_fd + all active client fds */
-                if (listen_fd >= 0) {
+                if (listen_fd >= 0 && g_now >= accept_paused_until) {
                     FD_SET(listen_fd, &readset);
                 }
                 maxfd = listen_fd;
-                for (si = 0; si < CAMEX_MAX_CLIENTS; ++si) {
+                for (si = 0; si < server_max_clients; ++si) {
                     if (server_clients[si].active &&
                         server_clients[si].tcp_fd >= 0) {
                         FD_SET(server_clients[si].tcp_fd, &readset);
@@ -1054,7 +1173,7 @@ void camex_run(void)
                         drain_tcp_server_accept();
                     }
                     /* Read from active TCP clients */
-                    for (si = 0; si < CAMEX_MAX_CLIENTS; ++si) {
+                    for (si = 0; si < server_max_clients; ++si) {
                         if (server_clients[si].active &&
                             server_clients[si].tcp_fd >= 0 &&
                             FD_ISSET(server_clients[si].tcp_fd, &readset)) {
@@ -1073,9 +1192,11 @@ void camex_run(void)
             server_expire_clients();
             log_limit_tick();
             if (reload_config) {
+                /* The previous configuration stays allocated until the new
+                 * one is in place: a failed reload switches back to it */
                 camex_server_db_t saved_db = server_db;
-                static camex_keystore_entry_t saved_keystore[CAMEX_MAX_CLIENTS + 1];
-                size_t saved_keystore_count = server_keystore_count;
+                camex_keystore_t saved_ks = server_ks;
+                int ks_rebuilt = 0;
                 int restore;
                 camex_crypto_t saved_ctx;
 
@@ -1084,8 +1205,6 @@ void camex_run(void)
                             current_config.config_path);
                 key_cache_mark();
                 crypto_save_ctx(&saved_ctx);
-                memcpy(saved_keystore, server_keystore,
-                       sizeof(saved_keystore));
                 restore = config_db_load_file(current_config.config_path) != 0;
 
                 if (!restore) {
@@ -1126,6 +1245,9 @@ void camex_run(void)
                     }
                     /* Out of memory for Argon2id: nothing is wrong with
                      * the keys, so keep the previous ones */
+                    if (!restore) {
+                        ks_rebuilt = 1;
+                    }
                     if (!restore && config_build_keystore() != 0) {
                         restore = 1;
                     }
@@ -1135,14 +1257,32 @@ void camex_run(void)
                     }
                 }
                 if (restore) {
-                    crypto_wipe(&server_db, sizeof(server_db));
+                    config_db_free(&server_db);
                     server_db = saved_db;
-                    memcpy(server_keystore, saved_keystore,
-                           sizeof(saved_keystore));
-                    server_keystore_count = saved_keystore_count;
+                    if (ks_rebuilt) {
+                        config_keystore_free(&server_ks);
+                        server_ks = saved_ks;
+                    }
                     crypto_restore_ctx(&saved_ctx);
                     log_message(LOG_WARNING,
                                 "Keeping previous server configuration");
+                } else {
+                    /* The slots are allocated at startup (#75): say when
+                     * the new max_clients= or pool asks for another number */
+                    {
+                        size_t wanted = camex_wanted_slots(1);
+
+                        if (wanted != server_max_clients) {
+                            log_message(LOG_NOTICE, "The configuration asks "
+                                        "for %u client slots, the server "
+                                        "has %u: restart to change them",
+                                        (unsigned)wanted,
+                                        (unsigned)server_max_clients);
+                        }
+                    }
+                    server_check_pool(current_config.local_cidr);
+                    config_db_free(&saved_db);
+                    config_keystore_free(&saved_ks);
                 }
                 /* Cached keys: those the new configuration does not use
                  * go; after a rollback only those it added */
@@ -1155,7 +1295,7 @@ void camex_run(void)
                 /* The copies hold passphrases and keys of the previous
                  * config */
                 crypto_wipe(&saved_db, sizeof(saved_db));
-                crypto_wipe(saved_keystore, sizeof(saved_keystore));
+                crypto_wipe(&saved_ks, sizeof(saved_ks));
             }
         }
 
@@ -1233,27 +1373,15 @@ void camex_stop(void)
 
 void camex_cleanup(void)
 {
-    size_t i;
-
     /* Wipe all key material from memory */
     crypto_wipe_ctx();
     {
         /* Wipe per-client keys and the passphrase key cache */
         key_cache_clear();
-        extern camex_keystore_entry_t server_keystore[];
-        extern size_t server_keystore_count;
-        for (i = 0; i < server_keystore_count; ++i) {
-            crypto_wipe(server_keystore[i].psk_key,
-                        sizeof(server_keystore[i].psk_key));
-        }
-        server_keystore_count = 0;
+        config_keystore_free(&server_ks);
+        config_db_free(&server_db);
     }
-    {
-        extern server_client_t server_clients[];
-        for (i = 0; i < (size_t)CAMEX_MAX_CLIENTS; ++i) {
-            crypto_wipe(&server_clients[i], sizeof(server_clients[i]));
-        }
-    }
+    server_clients_free();
     client_wipe();
     crypto_wipe_ctx();
     crypto_wipe(current_config.psk, sizeof(current_config.psk));
