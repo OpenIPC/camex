@@ -892,6 +892,7 @@ static void drain_tcp_server_accept(void)
         {
             size_t pending = 0U;
             size_t pending_ip = 0U;
+            size_t preauth_max;
             server_client_t *oldest = NULL;
 
             for (i = 0; i < server_max_clients; ++i) {
@@ -919,7 +920,18 @@ static void drain_tcp_server_accept(void)
                          peer_str);
                 continue;
             }
-            if (pending >= CAMEX_TCP_PREAUTH_MAX && oldest == NULL) {
+            /* With few slots, at most half of them may be pre-auth, so
+             * unregistered connections can never fill the table (#75) */
+            {
+                size_t half = server_max_clients / 2U;
+
+                preauth_max = half < CAMEX_TCP_PREAUTH_MAX ? half
+                                                           : CAMEX_TCP_PREAUTH_MAX;
+                if (preauth_max == 0U) {
+                    preauth_max = 1U;
+                }
+            }
+            if (pending >= preauth_max && oldest == NULL) {
                 /* All pre-auth connections are younger than the grace
                  * period: refuse; the client retries */
                 net_tcp_close(client_fd);
@@ -929,7 +941,7 @@ static void drain_tcp_server_accept(void)
                          "unregistered connections", peer_str);
                 continue;
             }
-            if (pending >= CAMEX_TCP_PREAUTH_MAX) {
+            if (pending >= preauth_max) {
                 net_sockaddr_to_string(&oldest->addr, peer_str,
                                        sizeof(peer_str));
                 log_peer(LOG_WARNING,

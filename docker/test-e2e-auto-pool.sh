@@ -308,6 +308,12 @@ check $? "a /17 pool inside the server's /16 is not reported as outside"
 docker logs "$P-half" 2>&1 | grep -q "Auto pool clients get the gateway 10.0.128.1, but the server's tunnel address is 10.0.0.1"
 check $? "but its gateway that is not the server's address is"
 
+srv_conf own '[server]\nauto_pool=10.84.0.0/24\n' --local-cidr 10.84.0.5/24
+sleep 1
+atk "$P-own" OWN1 OWN2 OWN3 OWN4 OWN5@10.84.0.5 > "$BUILD_CTX/own.txt"
+! grep -q " 10.84.0.5/24$" "$BUILD_CTX/own.txt"
+check $? "the server's own tunnel address inside the pool is never handed out ($(cut -d' ' -f2 "$BUILD_CTX/own.txt" | tr '\n' ' '))"
+
 echo "== 12. slots above the memory lock limit: the server runs, with a warning"
 srv_conf nolock '[server]\nauto_pool=10.62.0.0/16\n' --local-cidr 10.62.0.1/16
 sleep 1

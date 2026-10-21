@@ -48,6 +48,11 @@
 server_client_t *server_clients = NULL;
 size_t server_max_clients = 0U;
 
+/* Where the search for a free slot starts: after the last slot handed out,
+ * so a table with live clients in its low slots is not walked from 0 on
+ * every new client (#75) */
+static size_t alloc_next = 0U;
+
 /* Indexes of the live table (#75): tunnel IP, client ID, peer address.
  * Entries are added when a key is set (server_set_ip/_id/_addr); stale
  * ones (a freed or reused slot) are skipped by the match functions and
@@ -115,6 +120,10 @@ size_t server_default_max_clients(void)
                                              : CAMEX_MAX_CLIENTS_DEFAULT;
 }
 
+/* The server's own tunnel address (network order), never given to a
+ * client (#75); set by server_check_pool() at startup and reload */
+static uint32_t server_tunnel_ip = 0U;
+
 void server_check_pool(const char *server_cidr)
 {
     char ip[16];
@@ -126,12 +135,14 @@ void server_check_pool(const char *server_cidr)
     uint32_t smask;
     uint32_t pmask = 0xFFFFFFFFU << (32U - server_db.globals.pool_prefix);
 
+    server_tunnel_ip = 0U;
     if (server_cidr == NULL || server_cidr[0] == '\0' ||
         parse_local_cidr(server_cidr, ip, sizeof(ip), mask,
                          sizeof(mask)) != 0 ||
         inet_pton(AF_INET, ip, &a) != 1 || inet_pton(AF_INET, mask, &m) != 1) {
         return;
     }
+    server_tunnel_ip = a.s_addr;
     sip = ntohl(a.s_addr);
     smask = ntohl(m.s_addr);
     ip_text(pool_gateway(), gw, sizeof(gw));
@@ -284,6 +295,7 @@ int server_clients_init(size_t count)
         return -1;
     }
     server_max_clients = count;
+    alloc_next = 0U;
     for (i = 0U; i < count; ++i) {
         server_clients[i].tcp_fd = -1;
     }
@@ -375,27 +387,34 @@ server_client_t *server_find_by_addr(const struct sockaddr_in *addr)
 
 server_client_t *server_alloc_client(void)
 {
+    size_t n;
     size_t i;
     size_t oldest = 0;
     time_t oldest_seen = 0;
     int oldest_found = 0;
 
-    for (i = 0; i < server_max_clients; ++i) {
+    if (server_max_clients == 0U) {
+        return NULL;
+    }
+    for (n = 0; n < server_max_clients; ++n) {
+        i = (alloc_next + n) % server_max_clients;
         if (!server_clients[i].active) {
             memset(&server_clients[i], 0, sizeof(server_clients[i]));
             server_clients[i].tcp_fd = -1;
             server_clients[i].active = 1U;
+            alloc_next = (i + 1U) % server_max_clients;
             return &server_clients[i];
         }
+    }
 
+    /* Full: evict the client that was quiet longest */
+    for (i = 0; i < server_max_clients; ++i) {
         if (!oldest_found || server_clients[i].last_seen < oldest_seen) {
             oldest_found = 1;
             oldest = i;
             oldest_seen = server_clients[i].last_seen;
         }
     }
-
-    /* Full: evict the client that was quiet longest */
     server_drop_entry(&server_clients[oldest]);
     server_clients[oldest].active = 1U;
     return &server_clients[oldest];
@@ -507,7 +526,7 @@ static int server_auto_pool_take(const server_client_t *entry,
         uint32_t a = htonl(host);
         server_client_t *user = server_find_by_ip(a);
 
-        if ((user != NULL && user != entry) ||
+        if ((user != NULL && user != entry) || a == server_tunnel_ip ||
             profile_owner_of_ip(a) != NULL) {
             continue;
         }
@@ -574,14 +593,14 @@ static int server_build_config(server_client_t *entry, const char *client_id,
                 server_client_t *user;
 
                 if (inet_pton(AF_INET, hint_ip, &h) == 1 &&
-                    pool_has(h.s_addr) &&
+                    pool_has(h.s_addr) && h.s_addr != server_tunnel_ip &&
                     profile_owner_of_ip(h.s_addr) == NULL &&
                     ((user = server_find_by_ip(h.s_addr)) == NULL ||
                      user == entry)) {
                     server_set_ip(entry, h.s_addr);
                 }
             }
-            if (pool_has(entry->ip_be) &&
+            if (pool_has(entry->ip_be) && entry->ip_be != server_tunnel_ip &&
                 profile_owner_of_ip(entry->ip_be) == NULL) {
                 /* Keep the same IP (a changed pool takes it away) */
                 ip_be = entry->ip_be;
