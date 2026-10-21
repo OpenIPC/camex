@@ -331,7 +331,7 @@ Two `[server]` keys size the server for its network:
   pool addresses, at least 256 (a `/24` or smaller pool keeps 256). Read at
   startup only; a reload that asks for another number says a restart is
   needed. Over TCP the server uses `select()` and keeps at most `FD_SETSIZE`
-  slots (1024 on Linux) and no more than the open files limit allows (it
+  − 32 slots (992 on Linux) and no more than the open files limit allows (it
   raises its soft limit towards the hard one); the log says so.
 
 ```ini

@@ -413,6 +413,9 @@ static size_t camex_tcp_slot_cap(void)
      * socket */
     cap = (size_t)FD_SETSIZE - 2U;
 #else
+    /* Descriptors are numbered from 0: the listener, the tunnel, logs and
+     * the like take some below FD_SETSIZE too */
+    cap = (size_t)FD_SETSIZE - 32U;
     struct rlimit rl;
 
     if (getrlimit(RLIMIT_NOFILE, &rl) == 0) {

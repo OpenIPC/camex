@@ -277,8 +277,8 @@ check $? "a reload to a /16 pool says the slots need a restart"
 echo "== 10. TCP: slots stay below FD_SETSIZE"
 srv_conf tcp '[server]\nauto_pool=10.90.0.0/16\n' --local-cidr 10.90.0.1/16 --transport tcp
 sleep 1
-docker logs "$P-tcp" 2>&1 | grep -q "TCP: 65533 client slots reduced to 1024"
-check $? "a TCP server with a /16 pool gets 1024 slots"
+docker logs "$P-tcp" 2>&1 | grep -q "TCP: 65533 client slots reduced to 992"
+check $? "a TCP server with a /16 pool gets 992 slots (FD_SETSIZE - 32)"
 SRV_CAPS="--ulimit nofile=300:300" srv_conf tcpfd '[server]\nauto_pool=10.91.0.0/16\n' --local-cidr 10.91.0.1/16 --transport tcp
 sleep 1
 docker logs "$P-tcpfd" 2>&1 | grep -q "TCP: 65533 client slots reduced to 268"
