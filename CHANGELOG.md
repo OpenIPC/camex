@@ -4,6 +4,17 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.1.1 — 2026-10-21
+
+- Server: a live auto-mode client keeps its address until it confirms the new one
+  (#77). A changed `[client ID]` `local_cidr` or `auto_pool=` used to switch the
+  client's address at the handshake, before the client had the new CONFIG: packets
+  still in flight from the old address were dropped, and a lost reply left the server
+  and the client on different addresses until the next handshake. The new address is
+  now pending and reserved until the client's first packet on the new session; a
+  failed handshake or an unconfirmed session drops it and the old one stays.
+- Tests: the auto pool test covers a lost reply after a pool change (fails before).
+
 ## 3.1.0 — 2026-10-21
 
 - Server: the auto pool is configurable with `auto_pool=<network>/<prefix>` in
