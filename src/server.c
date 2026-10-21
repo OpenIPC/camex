@@ -168,9 +168,16 @@ static int match_ip(uint32_t slot, const void *key)
 {
     const uint32_t ip = *(const uint32_t *)key;
 
-    return slot < server_max_clients && server_clients[slot].active &&
-           (server_clients[slot].ip_be == ip ||
-            server_clients[slot].pending_ip_be == ip);
+    const server_client_t *c;
+
+    if (slot >= server_max_clients || !server_clients[slot].active) {
+        return 0;
+    }
+    c = &server_clients[slot];
+    /* The previous session's address stays taken while that session still
+     * receives (#77): its packets come from that address */
+    return c->ip_be == ip || c->pending_ip_be == ip ||
+           (c->prev.valid && c->prev_ip_be == ip);
 }
 
 static int match_id(uint32_t slot, const void *key)
@@ -220,6 +227,9 @@ static void server_index_rebuild(void)
                             (uint32_t)i) != 0) ||
             (c->pending_ip_be != 0U &&
              slotidx_insert(&idx_ip, slotidx_hash_u32(c->pending_ip_be),
+                            (uint32_t)i) != 0) ||
+            (c->prev.valid && c->prev_ip_be != 0U &&
+             slotidx_insert(&idx_ip, slotidx_hash_u32(c->prev_ip_be),
                             (uint32_t)i) != 0) ||
             (c->client_id[0] != '\0' &&
              slotidx_insert(&idx_id, slotidx_hash_nocase(c->client_id),
@@ -277,6 +287,22 @@ static void server_assign_ip(server_client_t *entry, uint32_t ip_be)
     }
     entry->pending_ip_be = 0U;
     server_set_ip(entry, ip_be);
+}
+
+/* Put an entry's addresses back after a handshake that failed (#77): the
+ * current one and the pending one, both indexed again (an index rebuild
+ * in between may have dropped them) */
+static void server_restore_ip(server_client_t *entry, uint32_t ip_be,
+                              uint32_t pending_ip_be)
+{
+    server_set_ip(entry, ip_be);
+    entry->pending_ip_be = pending_ip_be;
+    if (ip_be != 0U) {
+        server_index_add(&idx_ip, slotidx_hash_u32(ip_be), entry);
+    }
+    if (pending_ip_be != 0U) {
+        server_index_add(&idx_ip, slotidx_hash_u32(pending_ip_be), entry);
+    }
 }
 
 void server_set_id(server_client_t *entry, const char *client_id)
@@ -494,6 +520,7 @@ void server_expire_clients(void)
         }
         if (c->prev.valid && now > c->prev_until) {
             session_wipe(&c->prev);
+            c->prev_ip_be = 0U;   /* its address is free again (#77) */
         }
         /* A handshake the client never confirmed */
         if (c->next.valid &&
@@ -1055,6 +1082,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     size_t i;
     int fresh = 0;
     uint32_t pending_before = 0U;
+    uint32_t ip_before = 0U;
     int first;
 
     net_sockaddr_to_string(from, peer, sizeof(peer));
@@ -1178,6 +1206,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     }
     first = !entry->registered;
     pending_before = entry->pending_ip_be;
+    ip_before = entry->ip_be;
     /* A UDP entry with a working session keeps its address until the first
      * packet on the new one (server_handle_data), so a replayed message 1
      * cannot redirect its traffic; over TCP the connection carries it */
@@ -1281,8 +1310,9 @@ fail:
         crypto_wipe(entry, sizeof(*entry));
         entry->tcp_fd = -1;
     } else {
-        /* An address this handshake made pending is not given (#77) */
-        entry->pending_ip_be = pending_before;
+        /* Addresses this handshake gave or made pending are not kept: the
+         * entry keeps what it had (#77) */
+        server_restore_ip(entry, ip_before, pending_before);
     }
     return -1;
 }

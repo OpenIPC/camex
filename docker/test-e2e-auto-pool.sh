@@ -28,7 +28,8 @@
 # 6. A live client keeps its address until it confirms the new one (#77):
 #    after a pool change a handshake whose RESP the client never gets (one
 #    from v2tool with its ID) leaves its old address working, the new one
-#    stays reserved for it, and its own next handshake moves it.
+#    stays reserved for it, and its own next handshake moves it; the old
+#    address stays taken while the previous session still receives.
 #
 # Usage: ./test-e2e-auto-pool.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
@@ -385,6 +386,29 @@ for _ in $(seq 1 40); do
     sleep 1
 done
 check $moved "with its own next handshake the client moves to 10.83.0.2 and traffic follows"
+
+echo "== 15. the previous session's address stays taken during its grace period (#77)"
+srv_conf prev '[server]\nauto_pool=10.85.0.0/24\n[client PREV77]\nlocal_cidr=10.85.0.50/24\ngateway_ip=10.85.0.1\n' --local-cidr 10.85.0.1/24
+docker run -d --name "$P-prevcli" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    -e CAMEX_REKEY_AFTER=10 \
+    "$IMAGE" --mode client --auto --name PREV77 --server-host "$P-prev" --port 5800 \
+    --server-pubkey "$SERVER_PUBKEY" --psk "$PSK" >/dev/null
+sleep 3
+docker exec "$P-prev" ping -c 2 -W 2 10.85.0.50 >/dev/null 2>&1
+check $? "the client works on its profile address 10.85.0.50"
+# A changed profile address moves the client with its next handshake
+printf '[server]\nauto_pool=10.85.0.0/24\n[client PREV77]\nlocal_cidr=10.85.0.60/24\ngateway_ip=10.85.0.1\n' > "$BUILD_CTX/prev2.conf"
+docker cp "$BUILD_CTX/prev2.conf" "$P-prev:/etc/camex.conf" >/dev/null
+docker kill -s HUP "$P-prev" >/dev/null
+moved=1
+for _ in $(seq 1 25); do
+    docker exec "$P-prev" ping -c 1 -W 1 10.85.0.60 >/dev/null 2>&1 && { moved=0; break; }
+    sleep 1
+done
+check $moved "after the reload the client moves to 10.85.0.60"
+atk "$P-prev" GRAB@10.85.0.50 > "$BUILD_CTX/grab.txt"
+! grep -q " 10.85.0.50/24$" "$BUILD_CTX/grab.txt"
+check $? "within the grace period 10.85.0.50 is not given to another client ($(cut -d' ' -f2 "$BUILD_CTX/grab.txt"))"
 
 if [ "$FAILS" != 0 ]; then
     echo "--- server 1 log (tail) ---"
