@@ -170,7 +170,8 @@ static int match_ip(uint32_t slot, const void *key)
 
     const server_client_t *c;
 
-    if (slot >= server_max_clients || !server_clients[slot].active) {
+    if (ip == 0U || slot >= server_max_clients ||
+        !server_clients[slot].active) {
         return 0;
     }
     c = &server_clients[slot];
@@ -664,6 +665,12 @@ static int server_build_config(server_client_t *entry, const char *client_id,
                 profile_owner_of_ip(given) == NULL) {
                 /* Keep the same IP (a changed pool takes it away) */
                 ip_be = given;
+            } else if (given != entry->ip_be && pool_has(entry->ip_be) &&
+                       entry->ip_be != server_tunnel_ip &&
+                       profile_owner_of_ip(entry->ip_be) == NULL) {
+                /* The pending address is not usable any more, the current
+                 * one still is: keep it (#77) */
+                ip_be = entry->ip_be;
             } else if (server_auto_pool_take(entry, &ip_be) != 0) {
                 char net[16];
 
@@ -1010,6 +1017,16 @@ static server_client_t *server_entry_for(const char *client_id,
             return NULL;
         }
         by_ip = server_find_by_ip(addr.s_addr);
+        /* An address that is another client's pending or previous one
+         * (#77) is reserved: a manual handshake cannot claim it */
+        if (by_ip != NULL && by_ip->ip_be != addr.s_addr) {
+            log_peer(LOG_WARNING,
+                     "Rejected handshake from %s: address %s is reserved "
+                     "for client %s", peer, local_ip,
+                     by_ip->client_id[0] != '\0' ? by_ip->client_id
+                                                  : "(manual)");
+            return NULL;
+        }
         /* The address may be in use by a live session whose address came
          * from [defaults] or the auto pool, which profile_owner_of_ip()
          * cannot see. Do not hand it to a different keyed client. */
@@ -1083,6 +1100,8 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     int fresh = 0;
     uint32_t pending_before = 0U;
     uint32_t ip_before = 0U;
+    session_t next_before;
+    int next_saved = 0;
     int first;
 
     net_sockaddr_to_string(from, peer, sizeof(peer));
@@ -1239,6 +1258,9 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
             goto fail;
         }
     } else {
+        /* A manual client has the address it registered with: nothing an
+         * earlier auto handshake left pending applies (#77) */
+        entry->pending_ip_be = 0U;
         snprintf(reply, sizeof(reply), "%s OK VER=%u\n", CAMEX_CTRL_WORD,
                  (unsigned)CAMEX_PROTO_VER);
     }
@@ -1273,7 +1295,10 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
      * sending on cur, so nothing in flight is lost and a lost RESP does
      * not break the working session. A first session is used at once. */
     if (entry->cur.valid) {
-        session_wipe(&entry->next);
+        /* Kept until the reply is sent: a failed send puts it back (#77) */
+        next_before = entry->next;
+        next_saved = 1;
+        memset(&entry->next, 0, sizeof(entry->next));
         session_init(&entry->next, server_index, client_index, c2, c1, g_now);
     } else {
         session_init(&entry->cur, server_index, client_index, c2, c1, g_now);
@@ -1301,6 +1326,9 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
             log_message(LOG_INFO, "Registered client %s", local_ip);
         }
     }
+    if (next_saved) {
+        session_wipe(&next_before);   /* replaced by the new session */
+    }
     return 0;
 
 fail:
@@ -1310,9 +1338,16 @@ fail:
         crypto_wipe(entry, sizeof(*entry));
         entry->tcp_fd = -1;
     } else {
-        /* Addresses this handshake gave or made pending are not kept: the
-         * entry keeps what it had (#77) */
+        /* Addresses this handshake gave or made pending are not kept, nor
+         * the session it set up: the entry keeps what it had (#77) */
         server_restore_ip(entry, ip_before, pending_before);
+        if (next_saved) {
+            session_wipe(&entry->next);
+            entry->next = next_before;
+        }
+    }
+    if (next_saved) {
+        crypto_wipe(&next_before, sizeof(next_before));
     }
     return -1;
 }

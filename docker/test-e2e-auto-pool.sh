@@ -91,13 +91,18 @@ docker build -q -t "$IMAGE" "$BUILD_CTX" >/dev/null
 docker network create "$NET_NAME" >/dev/null
 set +e   # checks below report failures themselves
 
-atk() {     # atk <server> <id>...: auto-mode handshakes, one socket each;
-            # prints "<id> <LOCAL_CIDR or ->"
+v2() {      # v2 <server> <who>...: handshakes as given (auto:<id>[@<ip>] or
+            # manual:<ip>), one socket each; prints "<who> <result or ->"
     local srv="$1"; shift
     docker run --rm --network "$NET_NAME" -e PACE_MS=6 --ulimit nofile=4096 \
         --entrypoint /usr/local/bin/v2tool "$IMAGE" \
-        "$srv" 5800 "$SERVER_PUBKEY" "$PSK" udp $(printf 'auto:%s ' "$@") |
-        sed 's/^auto://'
+        "$srv" 5800 "$SERVER_PUBKEY" "$PSK" udp "$@"
+}
+
+atk() {     # atk <server> <id>...: auto-mode handshakes, one socket each;
+            # prints "<id> <LOCAL_CIDR or ->"
+    local srv="$1"; shift
+    v2 "$srv" $(printf 'auto:%s ' "$@") | sed 's/^auto://'
 }
 
 echo "== 1. auto pool without a config file: 256 client IDs"
@@ -380,6 +385,12 @@ check $? "the client's old address still carries traffic: it has not confirmed t
 atk "$P-pend" OTHER77@10.83.0.2 > "$BUILD_CTX/other.txt"
 ! grep -q " 10.83.0.2/24$" "$BUILD_CTX/other.txt"
 check $? "the pending 10.83.0.2 is not given to another client ($(cut -d' ' -f2 "$BUILD_CTX/other.txt"))"
+v2 "$P-pend" manual:10.83.0.2 > "$BUILD_CTX/manual.txt"
+grep -q "^manual:10.83.0.2 -$" "$BUILD_CTX/manual.txt" &&
+    docker logs "$P-pend" 2>&1 | grep -q "address 10.83.0.2 is reserved for client REAL77"
+check $? "a manual handshake cannot claim the pending address"
+docker exec "$P-pend" ping -c 2 -W 2 10.82.0.2 >/dev/null 2>&1
+check $? "and the client's old address still works after it"
 moved=1
 for _ in $(seq 1 40); do
     docker exec "$P-pend" ping -c 1 -W 1 10.83.0.2 >/dev/null 2>&1 && { moved=0; break; }
