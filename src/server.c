@@ -1005,8 +1005,7 @@ static void server_adopt_tcp(server_client_t *entry, int fd)
 
 /* The client entry a handshake belongs to (created or reused), or NULL if
  * it must be rejected. *fresh is set when a new slot was taken. */
-static server_client_t *server_entry_for(const uint8_t *key,
-                                         const char *client_id,
+static server_client_t *server_entry_for(const char *client_id,
                                          const char *local_ip,
                                          uint8_t auto_request,
                                          const struct sockaddr_in *from,
@@ -1063,14 +1062,13 @@ static server_client_t *server_entry_for(const uint8_t *key,
             return NULL;
         }
         by_ip = server_find_by_ip(addr.s_addr);
-        /* An address that is another client's pending or previous one
-         * (#77) is reserved: a manual handshake cannot claim it. The
-         * client it is reserved for can, with its own key (an ID alone
-         * proves nothing when clients share the global key). */
-        if (by_ip != NULL && by_ip->ip_be != addr.s_addr &&
-            !(client_id[0] != '\0' &&
-              strcasecmp(by_ip->client_id, client_id) == 0 &&
-              keystore_key_owned_by(key, client_id))) {
+        /* An address that is a client's pending or previous one (#77) is
+         * reserved: a manual handshake cannot claim it, the client it is
+         * reserved for included (taking it at once would move that
+         * client's address before it confirms). Once the offer is
+         * confirmed or expires, at most V2_PREV_SESSION_GRACE later, it
+         * can. */
+        if (by_ip != NULL && by_ip->ip_be != addr.s_addr) {
             log_peer(LOG_WARNING,
                      "Rejected handshake from %s: address %s is reserved "
                      "for client %s", peer, local_ip,
@@ -1154,6 +1152,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     session_t next_before;
     int next_saved = 0;
     int cur_set = 0;
+    uint8_t psk_before[32];
     int first;
 
     net_sockaddr_to_string(from, peer, sizeof(peer));
@@ -1269,13 +1268,14 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         }
     }
 
-    entry = server_entry_for(used_key, client_id, local_ip, auto_request,
-                             from, fd, &fresh);
+    entry = server_entry_for(client_id, local_ip, auto_request, from, fd,
+                             &fresh);
     if (entry == NULL) {
         noise_wipe(&hs);
         return -1;
     }
-    first = !entry->registered;
+    first = !entry->registered;   /* also restored by a failure */
+    memcpy(psk_before, entry->psk_key, sizeof(psk_before));
     pending_before = entry->pending_ip_be;
     ip_before = entry->ip_be;
     /* A UDP entry with a working session keeps its address until the first
@@ -1382,6 +1382,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     if (next_saved) {
         session_wipe(&next_before);   /* replaced by the new session */
     }
+    crypto_wipe(psk_before, sizeof(psk_before));
     return 0;
 
 fail:
@@ -1402,7 +1403,13 @@ fail:
             /* The client never got the keys of that session */
             session_wipe(&entry->cur);
         }
+        /* A pre-auth TCP slot stays pre-auth (its timeout, its log); the
+         * key stays the one its sessions were made with (reloads check
+         * it). The newer timestamp is kept: replays must stay older. */
+        entry->registered = first ? 0U : 1U;
+        memcpy(entry->psk_key, psk_before, sizeof(psk_before));
     }
+    crypto_wipe(psk_before, sizeof(psk_before));
     if (next_saved) {
         crypto_wipe(&next_before, sizeof(next_before));
     }
