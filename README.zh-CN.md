@@ -258,30 +258,33 @@ sudo ./camex \
 
 ### 选项
 
-| 选项                       | 短选项 | 说明                                                                                        |
-|----------------------------|--------|---------------------------------------------------------------------------------------------|
-| `--mode <mode>`            | `-M`   | 运行模式：`client` 或 `server`（必填）                                                      |
-| `--auto`                   | `-a`   | 从服务器获取隧道参数                                                                        |
-| `--name <id>`              | `-n`   | 自动模式下使用的客户端 ID                                                                   |
-| `--local-cidr <cidr>`      | `-l`   | 隧道地址，格式为 `address/prefix`                                                           |
-| `--gateway-ip <addr>`      | `-g`   | 隧道内的客户端网关                                                                          |
-| `--server-host <addr>`     | `-s`   | 客户端模式下的服务器主机名或 IP                                                             |
-| `--port <port>`            | `-p`   | 客户端模式下为服务器端口，服务器模式下为监听端口                                            |
-| `--bind-ip <addr>`         | `-b`   | 服务器绑定地址（默认：0.0.0.0）                                                             |
-| `--config <path>`          | `-f`   | 服务器配置文件路径                                                                          |
-| `--route-cidr <cidr>`      | `-c`   | 在客户端上额外添加的路由；可重复指定                                                        |
-| `--mtu <size>`             | `-t`   | 隧道 MTU，576–9000（默认：1500）                                                            |
-| `--psk <key>`              | `-k`   | 预共享密钥：`hex:<64 位十六进制>`、`base64:<44 个字符>` 或口令（Argon2id 拉伸）。客户端必填 |
-| `--server-pubkey <key>`    |        | 客户端：服务器的公钥（来自 `--genkey`）                                                     |
-| `--server-key-file <path>` |        | 服务器：私钥文件（或 `[server]` 中的 `server_key=`）                                        |
-| `--genkey`                 |        | 输出一对新的服务器密钥（`server_key=`、`public_key=`）后退出                                |
-| `--encrypt`                | `-e`   | 为兼容而保留：协议 v2 始终加密                                                              |
-| `--tun-dev <path>`         | `-T`   | TUN 设备路径（默认：先自动检测 `/dev/net/tun`，再检测 `/dev/camex`）                        |
-| `--pid-file <path>`        | `-P`   | 启动时将 PID 写入文件                                                                       |
-| `--bind-dev <iface>`       | `-d`   | 将套接字绑定到指定网络接口（`SO_BINDTODEVICE`）                                             |
-| `--transport <proto>`      | `-R`   | 传输协议：`udp`（默认）或 `tcp`                                                             |
-| `--version`                | `-v`   | 打印版本号并退出                                                                            |
-| `--help`                   | `-h`   | 打印用法并退出                                                                              |
+| 选项                       | 短选项 | 说明                                                                                                                                          |
+|----------------------------|--------|-----------------------------------------------------------------------------------------------------------------------------------------------|
+| `--mode <mode>`            | `-M`   | 运行模式：`client` 或 `server`（必填）                                                                                                        |
+| `--auto`                   | `-a`   | 从服务器获取隧道参数                                                                                                                          |
+| `--name <id>`              | `-n`   | 自动模式下使用的客户端 ID                                                                                                                     |
+| `--local-cidr <cidr>`      | `-l`   | 隧道地址，格式为 `address/prefix`                                                                                                             |
+| `--gateway-ip <addr>`      | `-g`   | 隧道内的客户端网关                                                                                                                            |
+| `--server-host <addr>`     | `-s`   | 客户端模式下的服务器主机名或 IP                                                                                                               |
+| `--port <port>`            | `-p`   | 客户端模式下为服务器端口，服务器模式下为监听端口                                                                                              |
+| `--bind-ip <addr>`         | `-b`   | 服务器绑定地址（默认：0.0.0.0）                                                                                                               |
+| `--config <path>`          | `-f`   | 服务器配置文件路径                                                                                                                            |
+| `--route-cidr <cidr>`      | `-c`   | 在客户端上额外添加的路由；可重复指定                                                                                                          |
+| `--mtu <size>`             | `-t`   | 隧道 MTU，576–9000（默认：1500）                                                                                                              |
+| `--psk <key>`              | `-k`   | 预共享密钥：`hex:<64 位十六进制>`、`base64:<44 个字符>` 或口令（Argon2id 拉伸）。客户端必填                                                   |
+| `--server-pubkey <key>`    |        | 客户端：服务器的公钥（来自 `--genkey`）                                                                                                       |
+| `--server-key-file <path>` |        | 服务器：私钥文件（或 `[server]` 中的 `server_key=`）                                                                                          |
+| `--genkey`                 |        | 输出一对新的服务器密钥（`server_key=`、`public_key=`）后退出                                                                                  |
+| `--encrypt`                | `-e`   | 为兼容而保留：协议 v2 始终加密                                                                                                                |
+| `--tun-dev <path>`         | `-T`   | TUN 设备路径（默认：先自动检测 `/dev/net/tun`，再检测 `/dev/camex`）                                                                          |
+| `--pid-file <path>`        | `-P`   | 启动时将 PID 写入文件                                                                                                                         |
+| `--status`                 |        | 列出本机所有服务器的已连接客户端后退出（以服务器的用户运行，通常为 root）                                                                     |
+| `--json`                   |        | 与 `--status` 一起使用：以 JSON 输出，便于脚本处理                                                                                            |
+| `--control <path>`         |        | 服务器：`--status` 使用的控制套接字（默认 `/run/camex/camex-<transport>-<port>.sock`，`none` 为关闭）；与 `--status` 一起使用：只查询该服务器 |
+| `--bind-dev <iface>`       | `-d`   | 将套接字绑定到指定网络接口（`SO_BINDTODEVICE`）                                                                                               |
+| `--transport <proto>`      | `-R`   | 传输协议：`udp`（默认）或 `tcp`                                                                                                               |
+| `--version`                | `-v`   | 打印版本号并退出                                                                                                                              |
+| `--help`                   | `-h`   | 打印用法并退出                                                                                                                                |
 
 ## 示例
 
@@ -312,6 +315,46 @@ sudo ./camex --mode server --port 5800 --config /etc/camex/camex.conf
 握手时（密钥更新，最多 10 分钟后，或重新连接）获取变更后的地址、网关、MTU 或
 路由：它会用新设置重新打开隧道并替换路由，无需重启。在客户端通过新会话中的第一个数据包
 确认新地址之前，旧地址仍然有效。
+
+### 已连接的客户端（`--status`）
+
+服务器监听一个本地控制套接字，默认为 `/run/camex/camex-<transport>-<port>.sock`
+（`udp` 或 `tcp`；macOS 上为 `/var/run/camex`），权限为 `0600`：只有服务器的用户
+（通常为 root）可以使用。同一主机上的多个服务器（例如 UDP 和 TCP）各有自己的套接字；
+使用 `--bind-ip` 或 `--bind-dev` 的服务器，其名称中还包含地址或接口
+（`camex-udp-192.0.2.1-5800.sock`）。`[server]` 中的 `control_socket=<path>` 或
+`--control <path>` 可修改路径，`none` 为关闭；重新加载配置时生效，若新路径不可用则保留
+原套接字。Windows 上不可用。
+
+```sh
+sudo camex --status          # 本机所有服务器的客户端
+sudo camex --status --json   # 以 JSON 输出，便于脚本和监控
+sudo camex --status --control /run/camex/camex-udp-5800.sock   # 只查询一个服务器
+```
+
+```
+camex 3.3.0 server, udp port 5800, tunnel 10.200.0.1/24, pool 10.200.0.0/24, up 2h05m, clients 2, slots 2 of 256
+
+ID     MODE    KEY     ADDRESS          PEER                CONNECTED  LAST       HANDSHAKE     HS          RX   RX PKTS          TX   TX PKTS
+CAM-A  auto    global  10.200.0.2       203.0.113.7:50997   2h04m      3s         4m10s         13     1.2 MiB      9120     8.4 MiB     12480
+CAM-B  auto    own     10.200.0.3       198.51.100.4:41022  12m03s     1s         2m02s          2   310.5 KiB      2210     2.0 MiB      3105
+
+Addresses kept for clients that are gone (#81): 1
+CAM-C  10.200.0.4       gone 6m40s
+```
+
+在客户端确认新地址之前，`ADDRESS` 显示为 `旧 -> 新`。`LAST` 是距其最后一个数据包（含 keepalive；首个数据包之前为 `-`）的
+时间，`HANDSHAKE` 是距其最后一次密钥更新的时间，`HS` 是握手次数；`RX` 是从该客户端
+收到的隧道数据，`TX` 是发往它的数据，单位为字节和包数。保留的地址属于已离开的客户端：客户端返回时会拿回自己的地址。
+
+`--json` 输出 `{"servers":[...]}`，每个服务器一个对象：`version`、`pid`、
+`transport`、`port`、`tunnel`、`pool`、`started`（Unix 时间）、`uptime`、
+`slots`（`used` 含尚未握手的 TCP 连接，以及 `max`）、`clients` 和 `leases`。每个客户端包含 `id`（无 ID 的手动
+客户端为 `null`）、`mode`（`auto` 或 `manual`）、`key`（`global` 或 `own`）、
+`address`、`pending` 和 `previous`（或 `null`）、`peer`、`transport`、`registered`
+（首次握手的 Unix 时间）、`connected_s`（当前连接）、`last_packet_s`（首个数据包之前为 `null`）、`last_handshake_s`、`handshakes`、
+`rx_packets`、`rx_bytes`、`tx_packets`、`tx_bytes`；每个保留地址包含 `id`、
+`address`、`gone_s` 和 `previous`（客户端上一会话的地址为 `true`）。
 
 ### 自动地址池与客户端数量
 

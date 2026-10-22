@@ -26,6 +26,7 @@ set(CAMEX_SRCS
     ../../../../../src/config.c
     ../../../../../src/client.c
     ../../../../../src/server.c
+    ../../../../../src/control.c
 )
 
 # Build the shared library

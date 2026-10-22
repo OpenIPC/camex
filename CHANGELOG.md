@@ -4,6 +4,23 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.3.0 — 2026-10-22
+
+- Server: `camex --status` lists the connected clients of every server on the host
+  (#82): ID, mode, key (global or own), tunnel address (and a pending one), peer
+  address, transport, connected and last-packet times, the last key renewal, traffic
+  in both directions, and the addresses kept for clients that are gone (#81).
+  `--status --json` prints the same as JSON for scripts and monitoring; `--control
+  <path>` asks one server. The server answers on a local control socket,
+  `/run/camex/camex-<transport>-<port>.sock` by default (with the address or interface
+  of `--bind-ip` / `--bind-dev` in the name when set), mode `0600` (only its user,
+  normally root); `control_socket=` in `[server]` or `--control` changes it, `none`
+  turns it off, a reload applies a change. Answers end with a marker line, so a cut-off
+  answer is an error; each server has 5 s to answer. Not on Windows.
+- Tests: `test-e2e-status.sh` checks the table, the JSON, the counters, the socket
+  permissions, a UDP and a TCP server on one host, `control_socket=none` and a reload
+  that moves the socket (or keeps it when the new path cannot be had).
+
 ## 3.2.1 — 2026-10-22
 
 - Server: the auto pool never gives one address to two clients (#81). Reported: two

@@ -61,6 +61,15 @@ typedef struct {
     uint8_t psk_key[32];  /* key of the last handshake (for reloads) */
     uint8_t hs_ts[V2_TIMESTAMP_LEN];  /* its timestamp: a live session
                                        * takes only newer ones */
+    time_t registered_at; /* its first accepted handshake (#82) */
+    time_t session_since; /* its current connection: the first handshake
+                           * after a (re)connect; 0 until then */
+    time_t last_hs;       /* its latest accepted handshake */
+    uint32_t handshakes;  /* accepted handshakes */
+    uint64_t rx_packets;  /* authenticated packets from it, keepalives too */
+    uint64_t rx_bytes;    /* their tunnel payload */
+    uint64_t tx_packets;  /* tunnel packets sent to it */
+    uint64_t tx_bytes;
     time_t hs_window;     /* INITs from its address this second, at most */
     uint8_t hs_count;     /* SERVER_KNOWN_PER_SEC as a known source (#78) */
     session_t cur;        /* current session: the server sends on it */
@@ -136,5 +145,10 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
 /* Server socket creation */
 int server_socket_create(const char *bind_ip, int port,
                          const char *bind_dev);
+
+/* The status of the server and its clients for camex --status (#82): a
+ * table (json 0) or one JSON object (json 1), malloc'd and NUL-terminated,
+ * its length in *len; NULL without memory */
+char *server_status(int json, size_t *len);
 
 #endif /* CAMEX_SERVER_H */

@@ -121,6 +121,10 @@ jobs:
         run: ./docker/test-e2e-multi-client.sh
         if: matrix.target == 'x86_64'
 
+      - name: E2E test (camex --status, issue #82)
+        run: ./docker/test-e2e-status.sh
+        if: matrix.target == 'x86_64'
+
       - name: Cache toolchain
         uses: actions/cache@v6
         with:

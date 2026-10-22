@@ -63,6 +63,9 @@ typedef struct {
     int keepalive;       /* keepalive interval in seconds, 0=disabled (default 10) */
     char server_key_file[256]; /* server: file with its base64 private key */
     char server_pubkey[64];    /* client: the server's base64 public key */
+    char control_path[108];    /* control socket (#82): "" default, "none" */
+    uint8_t status_query;      /* --status: ask the server(s), then exit */
+    uint8_t status_json;       /* --json */
 } camex_config_t;
 
 /* Global state shared across modules */
