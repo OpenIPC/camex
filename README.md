@@ -306,9 +306,10 @@ sudo ./camex --mode server --port 5800 --config /etc/camex/camex.conf
 Auto-mode clients get their addresses from the config file. A client whose ID
 has no `[client ID]` block gets `[defaults]`, or, when no address is configured,
 one from the auto pool, `10.200.0.2`–`10.200.0.254` by default (addresses in use
-and those of `[client ID]` blocks are skipped; addresses of expired clients are
-reused). To serve only the IDs listed in the file, set `allow_unknown_clients=no`
-in the `[server]` block.
+and those of `[client ID]` blocks are skipped; a client that is gone keeps its
+address under its ID and gets it back, see
+[Denial of service limits](#denial-of-service-limits)). To serve only the IDs
+listed in the file, set `allow_unknown_clients=no` in the `[server]` block.
 
 After a change to the file, `kill -HUP` the server. A running auto-mode client
 picks up a changed address, gateway, MTU or routes with its next handshake (a
