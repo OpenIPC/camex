@@ -181,6 +181,16 @@ static int match_ip(uint32_t slot, const void *key)
            (c->prev.valid && c->prev_ip_be == ip);
 }
 
+/* Only the current address: its owner wins over a client that has it as
+ * a pending or previous address (#77) */
+static int match_cur_ip(uint32_t slot, const void *key)
+{
+    const uint32_t ip = *(const uint32_t *)key;
+
+    return ip != 0U && slot < server_max_clients &&
+           server_clients[slot].active && server_clients[slot].ip_be == ip;
+}
+
 static int match_id(uint32_t slot, const void *key)
 {
     return slot < server_max_clients && server_clients[slot].active &&
@@ -380,11 +390,22 @@ server_client_t *server_find_by_ip(uint32_t ip_be)
 {
     size_t i;
 
+    /* The client whose current address it is, else one that holds it as
+     * a pending or previous address (#77) */
     if (idx_ok) {
-        long k = slotidx_find(&idx_ip, slotidx_hash_u32(ip_be), match_ip,
+        long k = slotidx_find(&idx_ip, slotidx_hash_u32(ip_be), match_cur_ip,
                               &ip_be);
 
+        if (k < 0) {
+            k = slotidx_find(&idx_ip, slotidx_hash_u32(ip_be), match_ip,
+                             &ip_be);
+        }
         return k >= 0 ? &server_clients[k] : NULL;
+    }
+    for (i = 0; i < server_max_clients; ++i) {
+        if (match_cur_ip((uint32_t)i, &ip_be)) {
+            return &server_clients[i];
+        }
     }
     for (i = 0; i < server_max_clients; ++i) {
         if (match_ip((uint32_t)i, &ip_be)) {
@@ -696,12 +717,19 @@ static int server_build_config(server_client_t *entry, const char *client_id,
                      "%s/%u", ip, (unsigned)server_db.globals.pool_prefix);
             ip_text(pool_gateway(), profile.gateway_ip,
                     sizeof(profile.gateway_ip));
+            uint32_t was_ip_be = entry->ip_be;
+
             /* Store assigned IP in client entry for packet forwarding */
             server_assign_ip(entry, ip_be);
             /* Rekeys repeat the CONFIG: log new assignments only. A live
              * client's new address is only pending until it confirms the
              * new session (#77): server_handle_data() logs the move */
-            if (ip_be != old_ip_be && entry->pending_ip_be == ip_be) {
+            if (ip_be != old_ip_be && ip_be == was_ip_be) {
+                log_message(LOG_INFO,
+                            "Client %s keeps %s: the address it was "
+                            "offered is no longer usable",
+                            client_id, profile.local_cidr);
+            } else if (ip_be != old_ip_be && entry->pending_ip_be == ip_be) {
                 log_message(LOG_INFO,
                             "Offered %s to client %s (it moves there when "
                             "it confirms the new session)",
@@ -977,7 +1005,8 @@ static void server_adopt_tcp(server_client_t *entry, int fd)
 
 /* The client entry a handshake belongs to (created or reused), or NULL if
  * it must be rejected. *fresh is set when a new slot was taken. */
-static server_client_t *server_entry_for(const char *client_id,
+static server_client_t *server_entry_for(const uint8_t *key,
+                                         const char *client_id,
                                          const char *local_ip,
                                          uint8_t auto_request,
                                          const struct sockaddr_in *from,
@@ -1035,8 +1064,13 @@ static server_client_t *server_entry_for(const char *client_id,
         }
         by_ip = server_find_by_ip(addr.s_addr);
         /* An address that is another client's pending or previous one
-         * (#77) is reserved: a manual handshake cannot claim it */
-        if (by_ip != NULL && by_ip->ip_be != addr.s_addr) {
+         * (#77) is reserved: a manual handshake cannot claim it. The
+         * client it is reserved for can, with its own key (an ID alone
+         * proves nothing when clients share the global key). */
+        if (by_ip != NULL && by_ip->ip_be != addr.s_addr &&
+            !(client_id[0] != '\0' &&
+              strcasecmp(by_ip->client_id, client_id) == 0 &&
+              keystore_key_owned_by(key, client_id))) {
             log_peer(LOG_WARNING,
                      "Rejected handshake from %s: address %s is reserved "
                      "for client %s", peer, local_ip,
@@ -1119,6 +1153,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     uint32_t ip_before = 0U;
     session_t next_before;
     int next_saved = 0;
+    int cur_set = 0;
     int first;
 
     net_sockaddr_to_string(from, peer, sizeof(peer));
@@ -1234,8 +1269,8 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         }
     }
 
-    entry = server_entry_for(client_id, local_ip, auto_request, from, fd,
-                             &fresh);
+    entry = server_entry_for(used_key, client_id, local_ip, auto_request,
+                             from, fd, &fresh);
     if (entry == NULL) {
         noise_wipe(&hs);
         return -1;
@@ -1319,6 +1354,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         session_init(&entry->next, server_index, client_index, c2, c1, g_now);
     } else {
         session_init(&entry->cur, server_index, client_index, c2, c1, g_now);
+        cur_set = 1;
     }
     crypto_wipe(c1, sizeof(c1));
     crypto_wipe(c2, sizeof(c2));
@@ -1361,6 +1397,10 @@ fail:
         if (next_saved) {
             session_wipe(&entry->next);
             entry->next = next_before;
+        }
+        if (cur_set) {
+            /* The client never got the keys of that session */
+            session_wipe(&entry->cur);
         }
     }
     if (next_saved) {
