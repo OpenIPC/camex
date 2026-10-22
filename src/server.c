@@ -253,7 +253,10 @@ static void server_index_add(slotidx_t *x, uint32_t h, const server_client_t *c)
     if (!idx_ok) {
         return;
     }
-    if (slotidx_crowded(x, server_max_clients)) {
+    /* The address index holds up to three keys a client: current,
+     * pending and previous (#77) */
+    if (slotidx_crowded(x, x == &idx_ip ? server_max_clients * 3U
+                                         : server_max_clients)) {
         server_index_rebuild();   /* takes the new key from the table */
         return;
     }
@@ -527,7 +530,14 @@ void server_expire_clients(void)
         if (c->next.valid &&
             difftime(now, c->next.created) > (double)V2_PREV_SESSION_GRACE) {
             session_wipe(&c->next);
-            c->pending_ip_be = 0U;   /* the old address stays (#77) */
+            if (c->pending_ip_be != 0U) {
+                char ip[16];
+
+                ip_text(ntohl(c->pending_ip_be), ip, sizeof(ip));
+                log_message(LOG_INFO, "Client %s did not confirm %s: it "
+                            "keeps its address", c->client_id, ip);
+                c->pending_ip_be = 0U;   /* the old address stays (#77) */
+            }
         }
         /* Pre-auth: counted from the accept, so frames that arrive without
          * a handshake cannot keep an unregistered connection open. */
@@ -688,8 +698,15 @@ static int server_build_config(server_client_t *entry, const char *client_id,
                     sizeof(profile.gateway_ip));
             /* Store assigned IP in client entry for packet forwarding */
             server_assign_ip(entry, ip_be);
-            /* Rekeys repeat the CONFIG: log new assignments only */
-            if (ip_be != old_ip_be) {
+            /* Rekeys repeat the CONFIG: log new assignments only. A live
+             * client's new address is only pending until it confirms the
+             * new session (#77): server_handle_data() logs the move */
+            if (ip_be != old_ip_be && entry->pending_ip_be == ip_be) {
+                log_message(LOG_INFO,
+                            "Offered %s to client %s (it moves there when "
+                            "it confirms the new session)",
+                            profile.local_cidr, client_id);
+            } else if (ip_be != old_ip_be) {
                 log_message(LOG_INFO,
                             "Auto-assigned %s to client %s (no config file)",
                             profile.local_cidr, client_id);
@@ -1405,8 +1422,13 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
         s = &entry->cur;
         /* The client has its new CONFIG: its new address counts now */
         if (entry->pending_ip_be != 0U) {
+            char ip[16];
+
             server_set_ip(entry, entry->pending_ip_be);
             entry->pending_ip_be = 0U;
+            ip_text(ntohl(entry->ip_be), ip, sizeof(ip));
+            log_message(LOG_INFO, "Client %s moved to %s",
+                        entry->client_id, ip);
         }
     }
 

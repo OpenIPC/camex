@@ -15,6 +15,9 @@ release, rebuilt from every push to `master`; this file is the change history.
   failed handshake or an unconfirmed session drops it and the old one stays.
   The previous session's address stays taken while that session still receives, and
   a manual handshake cannot claim another client's pending or previous address.
+  The log says `Offered … (it moves there when it confirms the new session)` instead
+  of `Auto-assigned …` for such an address, then `Client … moved to …` or `Client …
+  did not confirm …: it keeps its address`.
 - Tests: the auto pool test covers a lost reply after a pool change (fails before), the
   previous session's address and a manual handshake for a pending address.
 

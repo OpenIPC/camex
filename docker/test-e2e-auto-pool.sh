@@ -380,6 +380,9 @@ sleep 1
 atk "$P-pend" REAL77 > "$BUILD_CTX/pend.txt"
 grep -q "^REAL77 10.83.0.2/24$" "$BUILD_CTX/pend.txt"
 check $? "that handshake is offered 10.83.0.2 ($(cut -d' ' -f2 "$BUILD_CTX/pend.txt"))"
+docker logs "$P-pend" 2>&1 | grep -q "Offered 10.83.0.2/24 to client REAL77 (it moves there" &&
+    ! docker logs "$P-pend" 2>&1 | grep -q "Auto-assigned 10.83.0.2/24 to client REAL77"
+check $? "the server logs the offer, not an assignment"
 docker exec "$P-pend" ping -c 3 -W 2 10.82.0.2 >/dev/null 2>&1
 check $? "the client's old address still carries traffic: it has not confirmed the new one"
 atk "$P-pend" OTHER77@10.83.0.2 > "$BUILD_CTX/other.txt"
@@ -397,6 +400,8 @@ for _ in $(seq 1 40); do
     sleep 1
 done
 check $moved "with its own next handshake the client moves to 10.83.0.2 and traffic follows"
+docker logs "$P-pend" 2>&1 | grep -q "Client REAL77 moved to 10.83.0.2"
+check $? "the server logs the move"
 
 echo "== 15. the previous session's address stays taken during its grace period (#77)"
 srv_conf prev '[server]\nauto_pool=10.85.0.0/24\n[client PREV77]\nlocal_cidr=10.85.0.50/24\ngateway_ip=10.85.0.1\n' --local-cidr 10.85.0.1/24
