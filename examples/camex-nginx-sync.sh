@@ -119,18 +119,25 @@ sync_locked() {
         return 1
     fi
     replaced=1
-    if ! "$NGINX_BIN" -t >/dev/null 2>&1; then
-        log "nginx rejected the new map; the previous one is back"
-    elif ! "$NGINX_BIN" -s reload; then
+    if ! check=$("$NGINX_BIN" -t 2>&1); then
+        log "nginx rejected the new map; the previous one is back:"
+        printf '%s\n' "$check" >&2
+    elif ! { replaced=; "$NGINX_BIN" -s reload; }; then
+        # (replaced cleared first: once nginx was told to reload, an
+        # interrupted run keeps the new map and the next run settles it)
         log "nginx did not reload (is it running? start it, e.g. systemctl" \
             "start nginx); the map is kept and the next run reloads again"
         replaced=
         rm -f "$prev" "$APPLIED"
         return 1
     else
-        replaced=
         rm -f "$prev"
-        cp -p "$MAP" "$APPLIED" 2>/dev/null
+        # Through a temporary file: the marker is the whole map or absent
+        if ! { cp -p "$MAP" "$APPLIED.tmp.$$" && mv "$APPLIED.tmp.$$" "$APPLIED"; }; then
+            rm -f "$APPLIED.tmp.$$" "$APPLIED"
+            log "nginx reloaded, but $APPLIED cannot be written: the next run reloads again"
+            return 1
+        fi
         clients=$(grep -c '^    "' "$MAP")
         log "map updated: $clients clients, nginx reloaded"
         return 0
