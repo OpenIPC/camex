@@ -90,7 +90,7 @@ status > "$BUILD_CTX/s1.txt"
 check $? "camex --status answers"
 cat "$BUILD_CTX/s1.txt" | sed 's/^/      /'
 grep -q "udp port 5800, tunnel 10.200.0.1/24, pool 10.200.0.0/24" "$BUILD_CTX/s1.txt" &&
-    grep -q "clients 2 of" "$BUILD_CTX/s1.txt"
+    grep -q "clients 2, slots 2 of" "$BUILD_CTX/s1.txt"
 check $? "the header names the server and the client count"
 grep -q " HS " "$BUILD_CTX/s1.txt" && grep -q "RX PKTS" "$BUILD_CTX/s1.txt" &&
     grep -Eq "^CAM-A +auto +global +10\.200\.0\.[0-9]+ " "$BUILD_CTX/s1.txt" &&

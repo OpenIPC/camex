@@ -2438,7 +2438,7 @@ char *server_status(int json, size_t *len)
 {
     status_buf_t b = { NULL, 0U, 0U, 0 };
     char pool[24], ip[16], peer[64];
-    size_t i, used = 0U, leased = 0U;
+    size_t i, used = 0U, slots_used = 0U, leased = 0U;
     double up = server_started != 0 ? difftime(g_now, server_started) : 0.0;
     const char *transport = current_config.transport == CAMEX_TRANSPORT_TCP
                                 ? "tcp" : "udp";
@@ -2457,7 +2457,11 @@ char *server_status(int json, size_t *len)
         const server_client_t *c = &server_clients[i];
         int w;
 
-        if (!c->active || !c->registered) {
+        if (!c->active) {
+            continue;
+        }
+        slots_used++;   /* TCP connections before their handshake too */
+        if (!c->registered) {
             continue;
         }
         used++;
@@ -2478,18 +2482,19 @@ char *server_status(int json, size_t *len)
         sb_json_str(&b, current_config.local_cidr);
         sb_printf(&b, ",\"pool\":\"%s\",\"started\":%ld,\"uptime\":%.0f,"
                   "\"slots\":{\"used\":%u,\"max\":%u},\"clients\":[", pool,
-                  (long)server_started, up, (unsigned)used,
+                  (long)server_started, up, (unsigned)slots_used,
                   (unsigned)server_max_clients);
     } else {
         char d[32];
 
         status_dur(d, sizeof(d), up);
         sb_printf(&b, "camex %s server, %s port %d, tunnel %s, pool %s, up "
-                  "%s, clients %u of %u\n", CAMEX_VERSION, transport,
-                  current_config.port,
+                  "%s, clients %u, slots %u of %u\n", CAMEX_VERSION,
+                  transport, current_config.port,
                   current_config.local_cidr[0] != '\0'
                       ? current_config.local_cidr : "-",
-                  pool, d, (unsigned)used, (unsigned)server_max_clients);
+                  pool, d, (unsigned)used, (unsigned)slots_used,
+                  (unsigned)server_max_clients);
         if (used > 0U) {
             sb_printf(&b, "\n%-*s  %-6s  %-6s  %-*s  %-*s  %-9s  %-9s  "
                       "%-9s  %5s  %10s  %8s  %10s  %8s\n", id_w, "ID",

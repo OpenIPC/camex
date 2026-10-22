@@ -337,7 +337,7 @@ sudo camex --status --control /run/camex/camex-udp-5800.sock   # one server
 ```
 
 ```
-camex 3.3.0 server, udp port 5800, tunnel 10.200.0.1/24, pool 10.200.0.0/24, up 2h05m, clients 2 of 256
+camex 3.3.0 server, udp port 5800, tunnel 10.200.0.1/24, pool 10.200.0.0/24, up 2h05m, clients 2, slots 2 of 256
 
 ID     MODE    KEY     ADDRESS          PEER                CONNECTED  LAST       HANDSHAKE     HS          RX   RX PKTS          TX   TX PKTS
 CAM-A  auto    global  10.200.0.2       203.0.113.7:50997   2h04m      3s         4m10s         13     1.2 MiB      9120     8.4 MiB     12480
@@ -357,7 +357,8 @@ back when it returns.
 
 `--json` prints `{"servers":[...]}`, one object per server: `version`, `pid`,
 `transport`, `port`, `tunnel`, `pool`, `started` (Unix time), `uptime`,
-`slots` (`used`, `max`), `clients` and `leases`. Each client has `id` (`null`
+`slots` (`used`, TCP connections before their handshake included, and `max`),
+`clients` and `leases`. Each client has `id` (`null`
 for a manual client without one), `mode` (`auto` or `manual`), `key` (`global`
 or `own`), `address`, `pending` and `previous` (or `null`), `peer`,
 `transport`, `registered` (Unix time), `connected_s`, `last_packet_s` (`null`

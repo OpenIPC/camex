@@ -331,7 +331,7 @@ sudo camex --status --control /run/camex/camex-udp-5800.sock   # 只查询一个
 ```
 
 ```
-camex 3.3.0 server, udp port 5800, tunnel 10.200.0.1/24, pool 10.200.0.0/24, up 2h05m, clients 2 of 256
+camex 3.3.0 server, udp port 5800, tunnel 10.200.0.1/24, pool 10.200.0.0/24, up 2h05m, clients 2, slots 2 of 256
 
 ID     MODE    KEY     ADDRESS          PEER                CONNECTED  LAST       HANDSHAKE     HS          RX   RX PKTS          TX   TX PKTS
 CAM-A  auto    global  10.200.0.2       203.0.113.7:50997   2h04m      3s         4m10s         13     1.2 MiB      9120     8.4 MiB     12480
@@ -347,7 +347,7 @@ CAM-C  10.200.0.4       gone 6m40s
 
 `--json` 输出 `{"servers":[...]}`，每个服务器一个对象：`version`、`pid`、
 `transport`、`port`、`tunnel`、`pool`、`started`（Unix 时间）、`uptime`、
-`slots`（`used`、`max`）、`clients` 和 `leases`。每个客户端包含 `id`（无 ID 的手动
+`slots`（`used` 含尚未握手的 TCP 连接，以及 `max`）、`clients` 和 `leases`。每个客户端包含 `id`（无 ID 的手动
 客户端为 `null`）、`mode`（`auto` 或 `manual`）、`key`（`global` 或 `own`）、
 `address`、`pending` 和 `previous`（或 `null`）、`peer`、`transport`、`registered`
 （Unix 时间）、`connected_s`、`last_packet_s`（首个数据包之前为 `null`）、`last_handshake_s`、`handshakes`、
