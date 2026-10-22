@@ -976,9 +976,15 @@ static server_share_t *server_share_of(uint32_t key, uint8_t is_net)
     uint32_t p;
 
     if (!server_share_key_ready) {
-        /* Without randomness the placement is only predictable */
-        (void)get_random_bytes(server_share_key, sizeof(server_share_key));
-        server_share_key_ready = 1;
+        /* Without randomness the placement is only predictable: the key
+         * stays as it is and the next INIT tries again */
+        uint8_t fresh[sizeof(server_share_key)];
+
+        if (get_random_bytes(fresh, sizeof(fresh)) == 0) {
+            memcpy(server_share_key, fresh, sizeof(fresh));
+            server_share_key_ready = 1;
+        }
+        crypto_wipe(fresh, sizeof(fresh));
     }
     msg[0] = (uint8_t)(key >> 24);
     msg[1] = (uint8_t)(key >> 16);
