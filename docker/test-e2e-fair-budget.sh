@@ -29,8 +29,7 @@ CAMEX_BINARY="${CAMEX_BINARY:-$REPO_DIR/camex}"
 IMAGE="camex:e2e-fair"
 P="camex-fair-$$"
 NET_NAME="$P-net"
-SUBNET="${FAIR_SUBNET:-10.231}"     # a /16 of its own: sources in several /24s
-SRV_IP="$SUBNET.0.2"
+SUBNET=""                          # a /16 of its own: sources in several /24s
 BUILD_CTX="$(mktemp -d)"
 KEYS=3000
 FAILS=0
@@ -77,7 +76,12 @@ key() { printf 'hex:%064x' "$1"; }
     printf '[client LIVE]\npsk=%s\n' "$(key 90003)"
 } > "$BUILD_CTX/camex.conf"
 docker build -q -t "$IMAGE" "$BUILD_CTX" >/dev/null
-docker network create --subnet "$SUBNET.0.0/16" "$NET_NAME" >/dev/null
+# The first free one of a few /16s (another test run may hold one)
+for s in ${FAIR_SUBNET:-10.231 10.232 10.233 10.234 10.235 10.236 10.237 10.238}; do
+    docker network create --subnet "$s.0.0/16" "$NET_NAME" >/dev/null 2>&1 && { SUBNET=$s; break; }
+done
+[ -n "$SUBNET" ] || { echo "no free /16 for the test network"; exit 1; }
+SRV_IP="$SUBNET.0.2"
 set +e   # checks below report failures themselves
 
 docker run -d --name "$P-srv" --network "$NET_NAME" --ip "$SRV_IP" \
