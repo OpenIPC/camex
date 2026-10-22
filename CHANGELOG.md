@@ -9,10 +9,11 @@ release, rebuilt from every push to `master`; this file is the change history.
 - `camex --status --format nginx-map [--domain …] [--upstream-port …] [--default …]`
   prints an nginx `map` of the live clients: `<client ID>.<domain>` → `<tunnel
   address>:<port>`, sorted, lower case; IDs that are not host name labels are left
-  out with a warning; no output and exit code 1 when a server does not answer (#84).
+  out with a warning, host keys are quoted; no output and exit code 1 when a running
+  server does not answer, a socket left by a server that is gone is skipped (#84).
   The server answers a new control command, `CLIENTS`.
 - `examples/camex-nginx-sync.sh` writes the map when it changed, checks and reloads
-  nginx and puts the old map back if nginx rejects it; `camex-nginx-sync.service` and
+  nginx and puts the old map back if nginx rejects it, one run at a time; `camex-nginx-sync.service` and
   `.timer` run it every 10 seconds. `examples/nginx-camex.conf`: a server block that
   opens each client's web UI by name, with WebSocket, no buffering and an offline page.
 - `--format table|json` as another way to write `--json`.

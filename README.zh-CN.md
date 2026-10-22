@@ -377,16 +377,16 @@ sudo camex --status --format nginx-map --domain cam.example.lan
 ```
 # camex --status --format nginx-map: generated, do not edit
 map $host $camex_upstream {
-    cam-a.cam.example.lan 10.200.0.2:80;
-    cam-b.cam.example.lan 10.200.0.3:80;
+    "cam-a.cam.example.lan" 10.200.0.2:80;
+    "cam-b.cam.example.lan" 10.200.0.3:80;
 }
 ```
 
 - 主机名为小写的客户端 ID 加上 `--domain`；不是有效主机名标签（字母、数字和 `-`，
   最多 63 个）的 ID 会被跳过并给出警告。`--upstream-port` 设置客户端的 Web 端口
   （80），`--default <host:port>` 设置没有在线客户端的名称的目标。输出经过排序，
-  状态不变时文件内容相同；若某个服务器没有应答，则不输出任何内容且退出码为 1，
-  同步脚本会保留原来的 map。
+  状态不变时文件内容相同；若某个正在运行的服务器没有应答，则不输出任何内容且退出码
+  为 1，同步脚本会保留原来的 map（已停止的服务器遗留的套接字会被跳过）。
 - `examples/nginx-camex.conf` 是 server 块：`proxy_pass` 到 map 中的目标、
   WebSocket、不缓冲、较短的连接超时，以及没有在线客户端的名称的“离线”页面。
   `examples/camex-nginx-sync.sh`（POSIX sh）可运行一次或使用 `--loop <秒>`；

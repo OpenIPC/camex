@@ -14,6 +14,7 @@
 # 3. A client with an ID that is no host name is left out, with a warning.
 # 4. A client that goes away is gone from the map after the next sync, and
 #    its name gets the offline page.
+# 5. A socket left behind by a killed server does not stop the sync.
 #
 # Usage: ./test-e2e-nginx-map.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
@@ -122,8 +123,8 @@ sleep 2
 out=$(sync)
 echo "$out" | sed 's/^/      /'
 docker exec "$P-srv" cat /etc/nginx/camex-map.conf | sed 's/^/      /'
-docker exec "$P-srv" grep -Eq "^    cam-a\.$DOMAIN 10\.200\.0\.[0-9]+:80;$" /etc/nginx/camex-map.conf &&
-    docker exec "$P-srv" grep -Eq "^    cam-b\.$DOMAIN 10\.200\.0\.[0-9]+:80;$" /etc/nginx/camex-map.conf
+docker exec "$P-srv" grep -Eq "^    \"cam-a\.$DOMAIN\" 10\.200\.0\.[0-9]+:80;$" /etc/nginx/camex-map.conf &&
+    docker exec "$P-srv" grep -Eq "^    \"cam-b\.$DOMAIN\" 10\.200\.0\.[0-9]+:80;$" /etc/nginx/camex-map.conf
 check $? "the map has both clients"
 docker exec "$P-srv" nginx -t >/dev/null 2>&1
 check $? "nginx -t accepts the configuration"
@@ -162,6 +163,18 @@ check $? "its name gets the offline page"
 a=$(get cam-a.$DOMAIN)
 [ "$a" = "I am CAM-A" ]
 check $? "the other one still works (${a:-no answer})"
+
+echo "== 5. a socket left behind by a server that is gone"
+# A second server killed hard leaves its socket in /run/camex
+docker exec -d "$P-srv" camex --mode server --port 5899 --local-cidr 10.201.0.1/24 \
+    $SERVER_KEY_ARGS --psk "$PSK"
+sleep 1
+docker exec "$P-srv" sh -c 'pkill -9 -f "^camex --mode server --port 5899"; sleep 1; test -S /run/camex/camex-udp-5899.sock'
+check $? "the killed server's socket is still there"
+out=$(sync)
+echo "$out" | grep -q "camex-udp-5899.sock: no server listens there, skipped" &&
+    [ "$(get cam-a.$DOMAIN)" = "I am CAM-A" ]
+check $? "the sync skips it and the map still follows the live server"
 
 if [ "$FAILS" -ne 0 ]; then
     echo "FAIL: $FAILS check(s) failed"

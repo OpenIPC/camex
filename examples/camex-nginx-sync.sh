@@ -36,8 +36,40 @@ log() {
     echo "camex-nginx-sync: $*" >&2
 }
 
+# One sync at a time: a second one waits, so a rollback never undoes
+# another run's map. mkdir is atomic; a lock older than 5 minutes is
+# taken as left behind by a run that was killed.
+LOCK="$MAP.lock"
+lock() {
+    tries=0
+    until mkdir "$LOCK" 2>/dev/null; do
+        if [ -n "$(find "$LOCK" -maxdepth 0 -mmin +5 2>/dev/null)" ]; then
+            rmdir "$LOCK" 2>/dev/null
+            continue
+        fi
+        tries=$((tries + 1))
+        if [ "$tries" -ge 60 ]; then
+            log "another sync holds $LOCK; giving up"
+            return 1
+        fi
+        sleep 1
+    done
+}
+unlock() {
+    rmdir "$LOCK" 2>/dev/null
+}
+
 sync_once() {
+    lock || return 1
+    sync_locked
+    rc=$?
+    unlock
+    return $rc
+}
+
+sync_locked() {
     tmp="$MAP.tmp.$$"
+    prev="$MAP.prev.$$"
     set -- --status --format nginx-map --upstream-port "$UPSTREAM_PORT"
     [ -n "$DOMAIN" ] && set -- "$@" --domain "$DOMAIN"
     [ -n "$DEFAULT" ] && set -- "$@" --default "$DEFAULT"
@@ -51,26 +83,41 @@ sync_once() {
         rm -f "$tmp"
         return 0
     fi
-    [ -f "$MAP" ] && cp -p "$MAP" "$MAP.prev"
-    mv "$tmp" "$MAP"
+    # This run's own backup: the rollback puts back exactly what it replaced
+    if [ -f "$MAP" ] && ! cp -p "$MAP" "$prev"; then
+        rm -f "$tmp" "$prev"
+        log "cannot back up $MAP; left as it is"
+        return 1
+    fi
+    if ! mv "$tmp" "$MAP"; then
+        rm -f "$tmp" "$prev"
+        log "cannot write $MAP; left as it is"
+        return 1
+    fi
     if "$NGINX_BIN" -t >/dev/null 2>&1 && "$NGINX_BIN" -s reload; then
-        log "map updated: $(grep -c ':[0-9]*;$' "$MAP") clients, nginx reloaded"
+        rm -f "$prev"
+        clients=$(grep -c '^    "' "$MAP")
+        log "map updated: $clients clients, nginx reloaded"
         return 0
     fi
-    log "nginx rejected the new map; the previous one is back"
-    if [ -f "$MAP.prev" ]; then
-        mv "$MAP.prev" "$MAP"
+    if [ -f "$prev" ]; then
+        mv "$prev" "$MAP" || log "cannot put back $MAP from $prev"
+        log "nginx rejected the new map; the previous one is back"
     else
-        rm -f "$MAP"
+        log "nginx rejected the new map; there was no previous one"
     fi
     return 1
 }
 
 if [ "${1-}" = "--loop" ]; then
-    interval=${2:-10}
+    interval=${2-10}
+    case "$interval" in
+        ''|*[!0-9]*|0) log "--loop needs a whole number of seconds above 0"
+                       exit 2 ;;
+    esac
     while :; do
         sync_once
-        sleep "$interval"
+        sleep "$interval" || exit 1
     done
 fi
 sync_once

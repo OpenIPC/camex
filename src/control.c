@@ -510,7 +510,8 @@ static int control_ask(const char *path, const char *cmd, char **buf,
                     : (err == ECONNREFUSED || err == ENOENT)
                           ? " (is the server running?)" : "");
         close(fd);
-        return -1;
+        /* -2: nobody listens there (a server that is gone) */
+        return (err == ECONNREFUSED || err == ENOENT) ? -2 : -1;
     }
 #ifdef MSG_NOSIGNAL
     if (send(fd, cmd, strlen(cmd), MSG_NOSIGNAL) != (ssize_t)strlen(cmd)) {
@@ -707,14 +708,24 @@ int control_nginx_map(const char *path, const char *domain, int port,
             return 1;
         }
     }
-    /* Every server must answer: a map without one server's clients would
-     * send their names to the offline page */
+    /* Every running server must answer: a map without one server's
+     * clients would send their names to the offline page */
     for (i = 0; i < n; ++i) {
         char *buf = NULL;
         size_t len = 0U;
         char *grown;
 
-        if (control_ask(paths[i], "CLIENTS\n", &buf, &len) != 0) {
+        int rc = control_ask(paths[i], "CLIENTS\n", &buf, &len);
+
+        /* A socket left behind by a server that is gone (found in the
+         * directory, not named with --control) has no clients: skip it */
+        if (rc == -2 && listed != NULL) {
+            fprintf(stderr, "camex: %s: no server listens there, skipped\n",
+                    paths[i]);
+            free(buf);
+            continue;
+        }
+        if (rc != 0) {
             free(buf);
             free(all);
             free(listed);

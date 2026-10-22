@@ -2730,8 +2730,20 @@ char *server_clients_list(size_t *len)
     for (i = 0U; i < server_max_clients; ++i) {
         const server_client_t *c = &server_clients[i];
 
+        const char *q;
+
         if (!c->active || !c->registered || c->client_id[0] == '\0' ||
             c->ip_be == 0U) {
+            continue;
+        }
+        /* One record a line, two fields: an ID with a blank or a control
+         * byte would read as another record */
+        for (q = c->client_id; *q != '\0'; ++q) {
+            if ((unsigned char)*q <= 0x20U || (unsigned char)*q >= 0x7fU) {
+                break;
+            }
+        }
+        if (*q != '\0') {
             continue;
         }
         ip_text(ntohl(c->ip_be), ip, sizeof(ip));

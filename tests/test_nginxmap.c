@@ -63,9 +63,9 @@ int main(void)
             "cam.example.lan", 8080, NULL, &n, warn, sizeof(warn));
     CHECK(m != NULL && n == 3U, "three clients");
     CHECK(m != NULL && strcmp(m + strlen(head),
-                              "    cam-a.cam.example.lan 10.200.0.2:8080;\n"
-                              "    cam-b.cam.example.lan 10.200.0.3:8080;\n"
-                              "    cam-c.cam.example.lan 10.200.0.4:8080;\n"
+                              "    \"cam-a.cam.example.lan\" 10.200.0.2:8080;\n"
+                              "    \"cam-b.cam.example.lan\" 10.200.0.3:8080;\n"
+                              "    \"cam-c.cam.example.lan\" 10.200.0.4:8080;\n"
                               "}\n") == 0,
           "sorted, lower case, with domain and port");
     free(m);
@@ -87,7 +87,7 @@ int main(void)
     memset(warn, 0, sizeof(warn));
     m = fmt("good 10.0.0.1\nbad_id 10.0.0.2\n-dash 10.0.0.3\n"
             "dot.ted 10.0.0.4\n", "d.lan", 80, NULL, &n, warn, sizeof(warn));
-    CHECK(m != NULL && n == 1U && strstr(m, "good.d.lan 10.0.0.1:80;") &&
+    CHECK(m != NULL && n == 1U && strstr(m, "\"good.d.lan\" 10.0.0.1:80;") &&
               strstr(m, "bad_id") == NULL && strstr(m, "dash") == NULL &&
               strstr(m, "dot") == NULL,
           "invalid IDs are left out");
@@ -97,20 +97,53 @@ int main(void)
 
     /* The same ID twice (two servers): the lower address, a warning */
     memset(warn, 0, sizeof(warn));
-    m = fmt("cam 10.0.0.9\nCAM 10.0.0.5\n", "d.lan", 80, NULL, &n, warn,
+    m = fmt("cam 10.0.0.9\nCAM 10.0.0.10\n", "d.lan", 80, NULL, &n, warn,
             sizeof(warn));
-    CHECK(m != NULL && n == 1U && strstr(m, "cam.d.lan 10.0.0.5:80;") &&
-              strstr(m, "10.0.0.9") == NULL,
-          "a duplicate keeps the lower address");
+    CHECK(m != NULL && n == 1U && strstr(m, "\"cam.d.lan\" 10.0.0.9:80;") &&
+              strstr(m, "10.0.0.10") == NULL,
+          "a duplicate keeps the numerically lower address");
     CHECK(strstr(warn, "listed twice") != NULL, "a duplicate is reported");
     free(m);
 
     /* Without a domain the key is the ID alone; junk lines are skipped */
     m = fmt("cam1 10.0.0.1\n\nnot-an-address x\n", "", 80, NULL, &n, warn,
             sizeof(warn));
-    CHECK(m != NULL && n == 1U && strstr(m, "    cam1 10.0.0.1:80;\n"),
+    CHECK(m != NULL && n == 1U && strstr(m, "    \"cam1\" 10.0.0.1:80;\n"),
           "no domain, junk skipped");
     free(m);
+
+    /* A record with more than two fields is not used */
+    m = fmt("victim 1.2.3.4 10.0.0.7\nok 10.0.0.8\n", "d.lan", 80, NULL, &n,
+            warn, sizeof(warn));
+    CHECK(m != NULL && n == 1U && strstr(m, "victim") == NULL &&
+              strstr(m, "1.2.3.4") == NULL,
+          "a record with extra fields is ignored");
+    free(m);
+
+    /* An ID that is an nginx map keyword stays a quoted host */
+    m = fmt("default 10.0.0.3\n", "", 80, "127.0.0.1:8099", &n, warn,
+            sizeof(warn));
+    CHECK(m != NULL && n == 1U &&
+              strstr(m, "    default 127.0.0.1:8099;\n") != NULL &&
+              strstr(m, "    \"default\" 10.0.0.3:80;\n") != NULL,
+          "an ID named default is a quoted key, the fallback stays one");
+    free(m);
+
+    /* A host longer than 253 characters is left out */
+    {
+        char dom[260];
+
+        snprintf(dom, sizeof(dom), "%.62s.%.62s.%.62s.%.62s",
+                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                 "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                 "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
+        memset(warn, 0, sizeof(warn));
+        m = fmt("cam 10.0.0.1\n", dom, 80, NULL, &n, warn, sizeof(warn));
+        CHECK(m != NULL && n == 0U && strstr(warn, "longer than a host"),
+              "a too long host is left out with a warning");
+        free(m);
+    }
 
     /* Bad parameters */
     CHECK(fmt("", "bad..domain", 80, NULL, &n, warn, sizeof(warn)) == NULL,
@@ -119,6 +152,16 @@ int main(void)
           "bad port refused");
     CHECK(fmt("", "d.lan", 80, "x;y", &n, warn, sizeof(warn)) == NULL,
           "a default with ; refused");
+    CHECK(fmt("", "d.lan", 80, ":80", &n, warn, sizeof(warn)) == NULL,
+          "a default without a host refused");
+    CHECK(fmt("", "d.lan", 80, "foo:bar", &n, warn, sizeof(warn)) == NULL,
+          "a default without a port refused");
+    CHECK(fmt("", "d.lan", 80, "host:70000", &n, warn, sizeof(warn)) == NULL,
+          "a default port above 65535 refused");
+    m = fmt("", "d.lan", 80, "offline.example.lan:8099", &n, warn,
+            sizeof(warn));
+    CHECK(m != NULL, "a host name default accepted");
+    free(m);
 
     if (failures != 0) {
         printf("test_nginxmap: %d FAILED\n", failures);

@@ -391,8 +391,8 @@ sudo camex --status --format nginx-map --domain cam.example.lan
 ```
 # camex --status --format nginx-map: generated, do not edit
 map $host $camex_upstream {
-    cam-a.cam.example.lan 10.200.0.2:80;
-    cam-b.cam.example.lan 10.200.0.3:80;
+    "cam-a.cam.example.lan" 10.200.0.2:80;
+    "cam-b.cam.example.lan" 10.200.0.3:80;
 }
 ```
 
@@ -400,9 +400,9 @@ map $host $camex_upstream {
   valid host name label (letters, digits and `-`, up to 63) is left out with a
   warning. `--upstream-port` sets the clients' web port (80), `--default
   <host:port>` a target for names with no live client. The output is sorted, so
-  an unchanged state gives an identical file; when a server does not answer,
-  nothing is printed and the exit code is 1, and the sync script keeps the old
-  map.
+  an unchanged state gives an identical file; when a running server does not
+  answer, nothing is printed and the exit code is 1, and the sync script keeps
+  the old map (a socket left behind by a server that is gone is skipped).
 - `examples/nginx-camex.conf` is the server block: `proxy_pass` to the map's
   target, WebSocket, no buffering, a short connect timeout and an "offline" page
   for names with no live client. `examples/camex-nginx-sync.sh` (POSIX sh) runs
