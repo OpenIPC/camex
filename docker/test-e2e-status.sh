@@ -67,7 +67,7 @@ client() {  # client <name> <server port> [camex args...]
     docker run -d --name "$P-$name" --network "$NET_NAME" --cap-add NET_ADMIN \
         --cap-add MKNOD "$IMAGE" --mode client --auto --name "$name" \
         --server-host "$P-srv" --port "$port" --server-pubkey "$SERVER_PUBKEY" \
-        --psk "$PSK" "$@" >/dev/null
+        --psk "$PSK" --keepalive 2 "$@" >/dev/null
 }
 
 status() {  # status [args...]: camex --status in the server container
@@ -122,7 +122,7 @@ docker exec -d "$P-srv" camex --mode server --transport tcp --port 5801 \
 sleep 1
 docker run -d --name "$P-CAM-T" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" --mode client --auto --name CAM-T --server-host "$P-srv" --port 5801 \
-    --transport tcp --server-pubkey "$SERVER_PUBKEY" --psk "$PSK" >/dev/null
+    --transport tcp --server-pubkey "$SERVER_PUBKEY" --psk "$PSK" --keepalive 2 >/dev/null
 sleep 4
 status > "$BUILD_CTX/s3.txt"
 grep -q "^== /run/camex/camex-tcp-5801.sock" "$BUILD_CTX/s3.txt" &&
