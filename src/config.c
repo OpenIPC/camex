@@ -491,6 +491,20 @@ static int config_db_parse_file(const char *path, char *line,
                                 val);
                     rc = -1;
                 }
+            } else if (strcmp(content, "client_isolation") == 0) {
+                if (strcasecmp(val, "yes") == 0 ||
+                    strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0) {
+                    g->client_isolation = 1U;
+                } else if (strcasecmp(val, "no") == 0 ||
+                           strcasecmp(val, "false") == 0 ||
+                           strcmp(val, "0") == 0) {
+                    g->client_isolation = 0U;
+                } else {
+                    log_message(LOG_ERR,
+                                "Invalid value for client_isolation: %s",
+                                val);
+                    rc = -1;
+                }
             } else if (strcmp(content, "server_key") == 0) {
                 rc = copy_option(g->server_key, sizeof(g->server_key), val,
                                  "server key");

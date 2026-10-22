@@ -109,13 +109,14 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         { "status", no_argument, NULL, 'Q' },
         { "json", no_argument, NULL, 'J' },
         { "control", required_argument, NULL, 'C' },
+        { "client-isolation", no_argument, NULL, 'I' },
         { NULL, 0, NULL, 0 }
     };
     int opt;
     int option_index = 0;
 
     opterr = 0;
-    while ((opt = getopt_long(argc, argv, "M:b:an:f:l:g:p:s:c:t:k:evhP:d:T:R:K:W:GS:Y:QJC:",
+    while ((opt = getopt_long(argc, argv, "M:b:an:f:l:g:p:s:c:t:k:evhP:d:T:R:K:W:GS:Y:QJC:I",
                              long_options, &option_index)) != -1) {
         switch (opt) {
         case 'M':
@@ -294,6 +295,9 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
             break;
         case 'Q':
             config->status_query = 1U;
+            break;
+        case 'I':
+            config->client_isolation = 1U;
             break;
         case 'J':
             config->status_json = 1U;
@@ -490,6 +494,8 @@ void print_usage(const char *progname)
            " specific network interface\n");
     printf("  -T, --tun-dev <path> TUN device path"
            " (default: auto-detect)\n");
+    printf("      --client-isolation  Drop client-to-client packets"
+           " (or client_isolation=yes in [server])\n");
     printf("      --control <path> Control socket for --status"
            " (default: %s/camex-<udp|tcp>-<port>.sock;"
            " none = off)\n\n", CAMEX_CONTROL_DIR);

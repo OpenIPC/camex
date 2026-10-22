@@ -56,6 +56,7 @@ typedef struct {
     uint8_t encrypt;
     uint8_t encrypt_set;
     uint8_t deny_unknown_clients;  /* allow_unknown_clients = no (#15) */
+    uint8_t client_isolation;      /* client_isolation = yes (#83) */
     char server_key[64];           /* base64 private key (server_key=) */
     uint32_t pool_net;             /* auto pool (#75), host byte order */
     uint8_t pool_prefix;           /* 8..30; default 10.200.0.0/24 */

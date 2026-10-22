@@ -426,6 +426,16 @@ static void server_lease_add(const char *client_id, uint32_t ip_be,
     }
 }
 
+/* client_isolation=yes in [server] (reloaded with the file) or
+ * --client-isolation (#83) */
+static uint64_t server_isolation_drops = 0U;
+
+static int server_client_isolation(void)
+{
+    return current_config.client_isolation ||
+           server_db.globals.client_isolation;
+}
+
 /* Seconds after the start in which the auto pool hands out only the
  * address a client asks for (its previous one): the leases did not
  * survive the restart, and clients come back within a few seconds
@@ -2218,6 +2228,24 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
                  peer, entry->client_id, claimed);
         return -1;
     }
+    /* client_isolation (#83): a packet for another client never reaches
+     * the tunnel interface, so its firewall cannot stop it; drop it here.
+     * Traffic to and from the server is not touched. */
+    if (server_client_isolation()) {
+        const server_client_t *to = server_find_by_ip(dst_ip_be);
+
+        if (to != NULL && to != entry) {
+            entry->isolation_drops++;
+            server_isolation_drops++;
+            log_peer(LOG_INFO, "Dropped packet from client %s to client %s "
+                     "(client_isolation)",
+                     entry->client_id[0] != '\0' ? entry->client_id
+                                                  : "(manual)",
+                     to->client_id[0] != '\0' ? to->client_id
+                                               : "(manual)");
+            return 0;
+        }
+    }
     return server_forward_packet(plain, plain_len, src_ip_be, dst_ip_be);
 }
 
@@ -2516,9 +2544,12 @@ char *server_status(int json, size_t *len)
                   current_config.port);
         sb_json_str(&b, current_config.local_cidr);
         sb_printf(&b, ",\"pool\":\"%s\",\"started\":%ld,\"uptime\":%.0f,"
-                  "\"slots\":{\"used\":%u,\"max\":%u},\"clients\":[", pool,
-                  (long)server_started, up, (unsigned)slots_used,
-                  (unsigned)server_max_clients);
+                  "\"slots\":{\"used\":%u,\"max\":%u},"
+                  "\"client_isolation\":%s,\"isolation_drops\":%llu,"
+                  "\"clients\":[", pool, (long)server_started, up,
+                  (unsigned)slots_used, (unsigned)server_max_clients,
+                  server_client_isolation() ? "true" : "false",
+                  (unsigned long long)server_isolation_drops);
     } else {
         char d[32];
 
@@ -2530,6 +2561,11 @@ char *server_status(int json, size_t *len)
                       ? current_config.local_cidr : "-",
                   pool, d, (unsigned)used, (unsigned)slots_used,
                   (unsigned)server_max_clients);
+        if (server_client_isolation()) {
+            sb_printf(&b, "client isolation on: %llu client-to-client "
+                      "packets dropped\n",
+                      (unsigned long long)server_isolation_drops);
+        }
         if (used > 0U) {
             sb_printf(&b, "\n%-*s  %-6s  %-6s  %-*s  %-*s  %-9s  %-9s  "
                       "%-9s  %5s  %10s  %8s  %10s  %8s\n", id_w, "ID",
@@ -2596,12 +2632,14 @@ char *server_status(int json, size_t *len)
             }
             sb_printf(&b, ",\"last_handshake_s\":%.0f,\"handshakes\":%u,"
                       "\"rx_packets\":%llu,\"rx_bytes\":%llu,"
-                      "\"tx_packets\":%llu,\"tx_bytes\":%llu}", hs,
+                      "\"tx_packets\":%llu,\"tx_bytes\":%llu,"
+                      "\"isolation_drops\":%llu}", hs,
                       (unsigned)c->handshakes,
                       (unsigned long long)c->rx_packets,
                       (unsigned long long)c->rx_bytes,
                       (unsigned long long)c->tx_packets,
-                      (unsigned long long)c->tx_bytes);
+                      (unsigned long long)c->tx_bytes,
+                      (unsigned long long)c->isolation_drops);
         } else {
             char addr[40], d1[32], d2[32], d3[32], rx[24], tx[24];
             char idbuf[CAMEX_CLIENT_ID_LEN];

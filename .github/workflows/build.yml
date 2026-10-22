@@ -125,6 +125,10 @@ jobs:
         run: ./docker/test-e2e-status.sh
         if: matrix.target == 'x86_64'
 
+      - name: E2E test (client isolation, issue #83)
+        run: ./docker/test-e2e-isolation.sh
+        if: matrix.target == 'x86_64'
+
       - name: Cache toolchain
         uses: actions/cache@v6
         with:

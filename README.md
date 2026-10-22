@@ -282,6 +282,7 @@ sudo ./camex \
 | `--status`                 |       | Print the connected clients of every server on this host and exit (as the server's user, normally root)                                         |
 | `--json`                   |       | With `--status`: the same as JSON, for scripts                                                                                                  |
 | `--control <path>`         |       | Server: control socket for `--status` (default `/run/camex/camex-<transport>-<port>.sock`, `none` = off); with `--status`: ask only that server |
+| `--client-isolation`       |       | Server: drop packets from one client to another (or `client_isolation=yes` in `[server]`), see [Security Model](#security-model)                |
 | `--bind-dev <iface>`       | `-d`  | Bind socket to a specific network interface (`SO_BINDTODEVICE`)                                                                                 |
 | `--transport <proto>`      | `-R`  | Transport protocol: `udp` (default) or `tcp`                                                                                                    |
 | `--version`                | `-v`  | Print version and exit                                                                                                                          |
@@ -359,6 +360,7 @@ back when it returns.
 
 `--json` prints `{"servers":[...]}`, one object per server: `version`, `pid`,
 `transport`, `port`, `tunnel`, `pool`, `started` (Unix time), `uptime`,
+`client_isolation`, `isolation_drops` (#83),
 `slots` (`used`, TCP connections before their handshake included, and `max`),
 `clients` and `leases`. Each client has `id` (`null`
 for a manual client without one), `mode` (`auto` or `manual`), `key` (`global`
@@ -367,7 +369,7 @@ or `own`), `address`, `pending` and `previous` (or `null`), `peer`,
 current connection), `last_packet_s` (`null`
 before the first data packet),
 `last_handshake_s`, `handshakes`, `rx_packets`, `rx_bytes`, `tx_packets`,
-`tx_bytes`; each lease `id`, `address`, `gone_s` and `previous` (`true` for
+`tx_bytes`, `isolation_drops`; each lease `id`, `address`, `gone_s` and `previous` (`true` for
 the address of the client's previous session).
 
 ### Auto pool and number of clients
@@ -459,9 +461,14 @@ protects before exposing it to an untrusted network.
 - There is **no unencrypted mode**; for an open tunnel without encryption see
   OpenIPC VTesse.
 - **Inside the tunnel** traffic is not filtered: any client can reach the server
-  and other clients on the tunnel network. Restrict that with a firewall on the
-  server's tunnel interface (`tun0` or similar with `/dev/net/tun`, `camex`
-  with the kernel module; the server logs its name at startup).
+  and other clients on the tunnel network. A firewall on the server's tunnel
+  interface (`tun0` or similar with `/dev/net/tun`, `camex` with the kernel
+  module; the server logs its name at startup) sees only traffic between the
+  clients and the server's own network. A packet from one client to another is
+  delivered inside camex and never reaches that interface, so no firewall rule
+  stops it: set `client_isolation=yes` in `[server]` (or `--client-isolation`)
+  to drop such packets (#83). It applies on reload; `camex --status` counts the
+  dropped packets.
 
 ### Denial of service limits
 
@@ -509,8 +516,9 @@ protects before exposing it to an untrusted network.
 - Give each camera its own `psk=` in a `[client ID]` block, and set
   `allow_unknown_clients=no` when all auto-mode cameras are listed.
 - Run the server with only the capabilities it needs (`CAP_NET_ADMIN`; with the
-  kernel module also file access to `/dev/camex`, see below), and firewall the
-  tunnel interface.
+  kernel module also file access to `/dev/camex`, see below), firewall the
+  tunnel interface, and set `client_isolation=yes` unless clients must reach each
+  other.
 
 ### Kernel module permissions
 

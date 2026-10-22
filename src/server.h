@@ -70,6 +70,8 @@ typedef struct {
     uint64_t rx_bytes;    /* their tunnel payload */
     uint64_t tx_packets;  /* tunnel packets sent to it */
     uint64_t tx_bytes;
+    uint64_t isolation_drops;  /* its packets to other clients dropped
+                                * by client_isolation (#83) */
     time_t hs_window;     /* INITs from its address this second, at most */
     uint8_t hs_count;     /* SERVER_KNOWN_PER_SEC as a known source (#78) */
     session_t cur;        /* current session: the server sends on it */

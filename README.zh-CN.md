@@ -281,6 +281,7 @@ sudo ./camex \
 | `--status`                 |        | 列出本机所有服务器的已连接客户端后退出（以服务器的用户运行，通常为 root）                                                                     |
 | `--json`                   |        | 与 `--status` 一起使用：以 JSON 输出，便于脚本处理                                                                                            |
 | `--control <path>`         |        | 服务器：`--status` 使用的控制套接字（默认 `/run/camex/camex-<transport>-<port>.sock`，`none` 为关闭）；与 `--status` 一起使用：只查询该服务器 |
+| `--client-isolation`       |        | 服务器：丢弃客户端之间的数据包（或在 `[server]` 中设置 `client_isolation=yes`），见[安全模型](#安全模型)                                      |
 | `--bind-dev <iface>`       | `-d`   | 将套接字绑定到指定网络接口（`SO_BINDTODEVICE`）                                                                                               |
 | `--transport <proto>`      | `-R`   | 传输协议：`udp`（默认）或 `tcp`                                                                                                               |
 | `--version`                | `-v`   | 打印版本号并退出                                                                                                                              |
@@ -349,11 +350,12 @@ CAM-C  10.200.0.4       gone 6m40s
 
 `--json` 输出 `{"servers":[...]}`，每个服务器一个对象：`version`、`pid`、
 `transport`、`port`、`tunnel`、`pool`、`started`（Unix 时间）、`uptime`、
+`client_isolation`、`isolation_drops`（#83）、
 `slots`（`used` 含尚未握手的 TCP 连接，以及 `max`）、`clients` 和 `leases`。每个客户端包含 `id`（无 ID 的手动
 客户端为 `null`）、`mode`（`auto` 或 `manual`）、`key`（`global` 或 `own`）、
 `address`、`pending` 和 `previous`（或 `null`）、`peer`、`transport`、`registered`
 （首次握手的 Unix 时间）、`connected_s`（当前连接）、`last_packet_s`（首个数据包之前为 `null`）、`last_handshake_s`、`handshakes`、
-`rx_packets`、`rx_bytes`、`tx_packets`、`tx_bytes`；每个保留地址包含 `id`、
+`rx_packets`、`rx_bytes`、`tx_packets`、`tx_bytes`、`isolation_drops`；每个保留地址包含 `id`、
 `address`、`gone_s` 和 `previous`（客户端上一会话的地址为 `true`）。
 
 ### 自动地址池与客户端数量
@@ -430,8 +432,12 @@ camex 是面向摄像机的小型隧道，而不是通用 VPN。在把它暴露�
   计数器）是可见的。
 - **没有不加密的模式**；如需不加密的开放隧道，请使用 OpenIPC VTesse。
 - **隧道内部**的流量不做过滤：任何客户端都可以访问服务器和隧道网络中的其他
-  客户端。请在服务器的隧道接口上用防火墙加以限制（使用 `/dev/net/tun` 时为
-  `tun0` 等，使用内核模块时为 `camex`；服务器启动时会在日志中输出接口名）。
+  客户端。服务器隧道接口上的防火墙（使用 `/dev/net/tun` 时为 `tun0` 等，使用内核
+  模块时为 `camex`；服务器启动时会在日志中输出接口名）只能看到客户端与服务器自身
+  网络之间的流量。客户端之间的数据包在 camex 内部转发，不会经过该接口，因此防火墙
+  规则无法阻止：请在 `[server]` 中设置 `client_isolation=yes`（或使用
+  `--client-isolation`）丢弃此类数据包（#83）。重新加载配置时生效；
+  `camex --status` 会统计被丢弃的数据包。
 
 ### 拒绝服务方面的限制
 
@@ -471,7 +477,8 @@ camex 是面向摄像机的小型隧道，而不是通用 VPN。在把它暴露�
 - 在 `[client ID]` 块中为每台摄像机设置自己的 `psk=`，并在所有自动模式摄像机都
   已列出时设置 `allow_unknown_clients=no`。
 - 只以所需的权限运行服务器（`CAP_NET_ADMIN`；使用内核模块时还需要对
-  `/dev/camex` 的文件访问权限，见下文），并用防火墙保护隧道接口。
+  `/dev/camex` 的文件访问权限，见下文），用防火墙保护隧道接口；若客户端之间无需互相访问，
+  请设置 `client_isolation=yes`。
 
 ### 内核模块权限
 
