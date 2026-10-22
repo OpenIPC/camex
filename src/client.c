@@ -266,8 +266,10 @@ int client_wait_for_config(void)
 {
     uint8_t buffer[V2_RESP_HDR + NOISE_MSG2_OVERHEAD + CAMEX_CONTROL_MAX];
     fd_set readset;
+    fd_set writeset;
     struct timeval tv;
     int ready;
+    int maxfd;
     unsigned int waited;
     time_t wait_start;
 
@@ -286,11 +288,18 @@ int client_wait_for_config(void)
         }
 
         FD_ZERO(&readset);
+        FD_ZERO(&writeset);
         FD_SET(net_fd, &readset);
+        /* A TCP INIT the socket could not take at once is sent here, as
+         * in the main loop (a handshake after a reconnect included) */
+        maxfd = net_tcp_pending_fdset(&writeset, net_fd);
         tv.tv_sec = 1;
         tv.tv_usec = 0;
 
-        ready = select(net_fd + 1, &readset, NULL, NULL, &tv);
+        ready = select(maxfd + 1, &readset, &writeset, NULL, &tv);
+        if (ready > 0) {
+            net_tcp_flush_writable(&writeset);
+        }
         if (ready < 0) {
             if (errno == EINTR) {
                 continue;
