@@ -24,6 +24,8 @@ release, rebuilt from every push to `master`; this file is the change history.
   - a manual client with the global key took over a live auto client's entry and
     address. It is now refused; only the same manual client (same ID, same key) takes
     its entry over.
+- This holds within one server: two servers (a UDP and a TCP one, say) do not know
+  each other's clients and need different `auto_pool=` networks (README).
 - Tests: `test-e2e-multi-client.sh` runs real auto clients through restarts, expiry,
   a full pool, a reload, a manual claim and slot eviction (9 checks fail on 3.1.1).
 

@@ -443,7 +443,9 @@ protects before exposing it to an untrusted network.
     ends that client's session (it comes back with another address), and the
     profile's client is refused while another client still has the address;
   - a manual client cannot claim a live client's address (only the same manual
-    client, with the same ID and key, can take its entry over).
+    client, with the same ID and key, can take its entry over);
+  - this holds within one server: two servers (say a UDP and a TCP one) do not
+    know each other's clients, so give each its own `auto_pool=` network.
 - `allow_unknown_clients=no` serves only auto-mode IDs listed in the config file
   (manual clients are bound by their key and address, see [Notes](#notes)).
 

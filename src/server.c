@@ -134,6 +134,7 @@ static uint32_t server_tunnel_ip = 0U;
  * slot; when they are all taken the oldest one goes.
  */
 #define SERVER_LEASE_MIN (V2_REKEY_AFTER_TIME + CAMEX_CLIENT_TIMEOUT)
+#define SERVER_LEASE_MAX (1U << 20)   /* the table grows up to this */
 
 typedef struct {
     char id[CAMEX_CLIENT_ID_LEN];
@@ -353,6 +354,35 @@ static void server_lease_add(const char *client_id, uint32_t ip_be)
         }
         if (l == NULL || server_leases[i].since < l->since) {
             l = &server_leases[i];   /* the oldest, if none is free */
+        }
+    }
+    /* All taken and the oldest is still young: grow the table, up to the
+     * pool's size, rather than give a young lease up (#81) */
+    if (l->ip_be != 0U &&
+        difftime(g_now, l->since) < (double)SERVER_LEASE_MIN) {
+        size_t limit = pool_size() > SERVER_LEASE_MAX ? SERVER_LEASE_MAX
+                                                      : pool_size();
+        size_t cap = server_lease_cap * 2U > limit ? limit
+                                                   : server_lease_cap * 2U;
+        server_lease_t *grown = cap > server_lease_cap
+                                    ? realloc(server_leases,
+                                              cap * sizeof(*grown))
+                                    : NULL;
+
+        if (grown != NULL) {
+            memset(grown + server_lease_cap, 0,
+                   (cap - server_lease_cap) * sizeof(*grown));
+            l = grown + server_lease_cap;
+            server_leases = grown;
+            server_lease_cap = cap;
+            lease_idx_ok = 0;   /* rebuilt below for the new size */
+        } else {
+            char ip[16];
+
+            ip_text(ntohl(l->ip_be), ip, sizeof(ip));
+            log_message(LOG_WARNING, "Lease table full: the address %s of "
+                        "client %s (gone for %.0f s) is no longer kept",
+                        ip, l->id, difftime(g_now, l->since));
         }
     }
     snprintf(l->id, sizeof(l->id), "%s", client_id);
@@ -850,8 +880,8 @@ static int server_auto_pool_take(const server_client_t *entry,
         log_message(LOG_NOTICE, "Auto pool full: %s of client %s (gone for "
                     "%.0f s) goes to client %s", ip, oldest->id,
                     difftime(g_now, oldest->since), entry->client_id);
+        /* The lease goes when the handshake succeeds */
         *ip_be = oldest->ip_be;
-        server_lease_drop(oldest);
         return 0;
     }
     pool_full_at = g_now;
@@ -903,7 +933,10 @@ void server_revalidate_profile_addresses(void)
         if (c->pending_ip_be != 0U &&
             (owner = profile_owner_of_ip(c->pending_ip_be)) != NULL &&
             strcasecmp(owner, c->client_id) != 0) {
-            c->pending_ip_be = 0U;   /* the offer is withdrawn */
+            /* The offer is withdrawn, and the unconfirmed session whose
+             * CONFIG carried it ends: the client must not confirm it */
+            c->pending_ip_be = 0U;
+            session_wipe(&c->next);
         }
         owner = profile_owner_of_ip(c->ip_be);
         if (owner == NULL || strcasecmp(owner, c->client_id) == 0 ||
@@ -1002,12 +1035,10 @@ static int server_build_config(server_client_t *entry, const char *client_id,
                     sizeof(profile.gateway_ip));
             uint32_t was_ip_be = entry->ip_be;
 
-            /* Store assigned IP in client entry for packet forwarding */
+            /* Store assigned IP in client entry for packet forwarding;
+             * leases go once the reply is out (server_handle_init()), so
+             * a failed handshake keeps them (#81) */
             server_assign_ip(entry, ip_be);
-            /* The client has an address: no lease is kept for it, nor for
-             * the address under another ID (#81) */
-            server_lease_drop(server_lease_by_id(client_id));
-            server_lease_drop(server_lease_by_ip(ip_be));
             /* Rekeys repeat the CONFIG: log new assignments only. A live
              * client's new address is only pending until it confirms the
              * new session (#77): server_handle_data() logs the move */
@@ -1935,6 +1966,13 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     } else if (net_send_payload(net_fd, from, resp,
                                 V2_RESP_HDR + resp_len) < 0) {
         goto fail;
+    }
+    /* The client has its address: no lease is kept for its ID, nor for
+     * its addresses under another ID (#81) */
+    if (auto_request) {
+        server_lease_drop(server_lease_by_id(client_id));
+        server_lease_drop(server_lease_by_ip(entry->ip_be));
+        server_lease_drop(server_lease_by_ip(entry->pending_ip_be));
     }
     if (first) {
         if (auto_request) {
