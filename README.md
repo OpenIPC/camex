@@ -421,8 +421,12 @@ protects before exposing it to an untrusted network.
   of each, one address at most 1/8 and one `/24` at most 1/4 (at least enough
   to try every key once). A live client rekeying from its address keeps the
   rest for up to 4 handshakes a second, and its own key is tried first (after
-  the global key), so a flood from other addresses does not stop it. Cameras behind one NAT address therefore (re)connect at up to
-  25 a second, for example after a power cut; the others retry.
+  the global key), so a flood from other addresses does not stop it. Cameras
+  behind one NAT address therefore (re)connect at up to 25 a second, for example
+  after a power cut, when they use the global key; with per-client keys a new
+  handshake may try every key, so one address gets about max(51200/8, number of
+  keys) key trials a second: with thousands of keys only a few clients a second.
+  The others retry.
 - Log messages that a peer can trigger (dropped packets, rejected
   registrations) are rate-limited; the number suppressed is logged.
 - The auto pool hands out only client addresses of its network (by default

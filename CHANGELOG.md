@@ -17,8 +17,9 @@ release, rebuilt from every push to `master`; this file is the change history.
   other keys, count as from an unknown source. Sources are placed in the per-second
   table by a keyed hash. The key
   trial budget is four times the keystore when that is above 51200 (was twice).
-  Cameras behind one NAT address now (re)connect at up to 25 a second; the others
-  retry.
+  Cameras behind one NAT address now (re)connect at up to 25 a second with the global
+  key; with per-client keys one address gets about max(51200/8, number of keys) key
+  trials a second, so with thousands of keys only a few a second. The others retry.
 - Tests: `test-e2e-fair-budget.sh` floods bogus handshakes from one address and from
   eight `/24`s; other clients register and a live client keeps rekeying (fails before).
 
