@@ -97,8 +97,12 @@ client() {  # client <name> <ip> [env...]: an auto-mode client with its key
 }
 
 flood() {   # flood <name> <ip>: bogus INITs (valid mac1, no key opens them;
-            # a hex: key, so the tool runs no Argon2id per batch)
-    docker run -d --name "$P-$1" --network "$NET_NAME" --ip "$2" -e NOWAIT=1 \
+            # a hex: key, so the tool runs no Argon2id per batch). 50 a second
+            # from each: twice an address's share, and eight of them over the
+            # unknown sources' share, without filling the server's socket
+            # buffer (a slow CI host then drops any packet, the live client's
+            # too, which no budget can help)
+    docker run -d --name "$P-$1" --network "$NET_NAME" --ip "$2" -e NOWAIT=1 -e PACE_MS=20 \
         --entrypoint /bin/sh "$IMAGE" -c \
         "while :; do /usr/local/bin/v2tool $SRV_IP 5800 $SERVER_PUBKEY $(key 99999) udp \
             \$(seq -f auto:F%g 1 100) >/dev/null; done" >/dev/null
@@ -136,7 +140,7 @@ for n in $(seq 1 8); do
 done
 sleep 3
 before=$(docker logs "$P-LIVE" 2>&1 | grep -c "Session keys renewed")
-sleep 20
+sleep 30
 after=$(docker logs "$P-LIVE" 2>&1 | grep -c "Session keys renewed")
 [ "$after" -ge $((before + 2)) ]
 check $? "the live client renews its keys during the flood ($before -> $after)"
