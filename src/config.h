@@ -129,6 +129,8 @@ int config_ks_has_owner(const char *client_id);
 int config_ks_key_owned_by(const uint8_t *key, const char *client_id);
 int config_ks_contains(const uint8_t *key);
 int config_ks_is_global(const uint8_t *key);
+/* Index of the first usable keystore entry with this key, or -1 */
+long config_ks_find(const uint8_t *key);
 
 /* Find client by ID in server DB */
 camex_server_profile_t *config_db_find_client(const char *client_id);

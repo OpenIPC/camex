@@ -355,7 +355,7 @@ as `hex:` or `base64:` keys: each passphrase costs an Argon2id run (8 MiB, tens
 of milliseconds) when the server starts, and on reloads beyond the 260 keys it
 caches. A handshake tries the keys in turn (the global key first, always), at
 most 51200 tries of per-client keys a second for all handshakes together, or
-twice their number when there are more: per-client keys suit tens or hundreds
+four times their number when there are more: per-client keys suit tens or hundreds
 of clients; for thousands give them the global key (they are still told apart
 by their ID) and per-client keys only where needed.
 
@@ -416,7 +416,17 @@ protects before exposing it to an untrusted network.
   source address, 32 in total) and closed after 10 s. A handshake carries a
   MAC keyed with the server's public key: packets from anyone who does not know
   it are dropped after one hash. The server processes at most 200 handshakes
-  per second.
+  per second. Since every client knows that key, the handshake and key-trial
+  budgets are shared out by source: unknown sources together get at most 3/4
+  of each, one address at most 1/8 and one `/24` at most 1/4 (at least enough
+  to try every key once). A live client rekeying from its address keeps the
+  rest for up to 4 handshakes a second, and its own key is tried first (after
+  the global key), so a flood from other addresses does not stop it. Cameras
+  behind one NAT address therefore (re)connect at up to 25 a second, for example
+  after a power cut, when they use the global key; with per-client keys a new
+  handshake may try every key, so one address gets about max(51200/8, number of
+  keys) key trials a second: with thousands of keys only a few clients a second.
+  The others retry.
 - Log messages that a peer can trigger (dropped packets, rejected
   registrations) are rate-limited; the number suppressed is logged.
 - The auto pool hands out only client addresses of its network (by default

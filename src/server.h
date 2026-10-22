@@ -28,10 +28,11 @@
 #define SERVER_HANDSHAKES_PER_SEC 200U
 
 /* Keys tried per second, all handshakes together (#75): each handshake
- * tries the keystore in turn (the global key first, not counted) until one
- * opens it. The bound is the old worst case, 200 handshakes with 256 keys
- * each, or twice the keystore when it is larger, so that every key can
- * be reached. */
+ * tries the keystore in turn (the global key first, not counted; a live
+ * client's own key before the others, #78) until one opens it. The bound
+ * is the old worst case, 200 handshakes with 256 keys each, or four times
+ * the keystore when it is larger, so that every key can be reached. Both
+ * budgets are shared out by source (#78, server_handshake_budget()). */
 #define SERVER_KEY_TRIALS_PER_SEC (SERVER_HANDSHAKES_PER_SEC * 256U)
 
 /* Per-server-client state */
@@ -55,6 +56,8 @@ typedef struct {
     uint8_t psk_key[32];  /* key of the last handshake (for reloads) */
     uint8_t hs_ts[V2_TIMESTAMP_LEN];  /* its timestamp: a live session
                                        * takes only newer ones */
+    time_t hs_window;     /* INITs from its address this second, at most */
+    uint8_t hs_count;     /* SERVER_KNOWN_PER_SEC as a known source (#78) */
     session_t cur;        /* current session: the server sends on it */
     session_t next;       /* from the latest handshake: receives only, and
                            * becomes cur with the client's first packet on
