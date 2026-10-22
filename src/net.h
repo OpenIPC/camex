@@ -76,6 +76,10 @@ int net_tcp_accept(int listen_fd, struct sockaddr_in *peer);
 
 /* TCP framing: send 2-byte big-endian length prefix + payload */
 int net_tcp_send_frame(int fd, const uint8_t *data, size_t len);
+/* The same; *accepted (if not NULL) is 1 when the frame was sent or
+ * queued and will go out, 0 when it was dropped (#82: traffic counters) */
+int net_tcp_send_frame_ex(int fd, const uint8_t *data, size_t len,
+                          int *accepted);
 
 /*
  * Persistent partial-read state for TCP frame reception.

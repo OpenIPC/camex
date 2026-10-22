@@ -466,10 +466,20 @@ int net_client_send(const uint8_t *data, size_t len)
 
 int net_tcp_send_frame(int fd, const uint8_t *data, size_t len)
 {
+    return net_tcp_send_frame_ex(fd, data, len, NULL);
+}
+
+int net_tcp_send_frame_ex(int fd, const uint8_t *data, size_t len,
+                          int *accepted)
+{
     uint8_t header[2];
     uint16_t net_len;
     size_t frame_size;
     tcp_send_pending_t *slot;
+
+    if (accepted != NULL) {
+        *accepted = 0;
+    }
 
     if (fd < 0 || data == NULL || len > (TCP_SEND_BUF_SIZE - 2U)) {
         return -1;
@@ -498,6 +508,9 @@ int net_tcp_send_frame(int fd, const uint8_t *data, size_t len)
     frame_size = 2 + len;
     slot->len = frame_size;
     slot->offset = 0;
+    if (accepted != NULL) {
+        *accepted = 1;   /* sent now or queued: it will go out */
+    }
 
     /* Try to send immediately; flush will handle EAGAIN mid-write */
     return tcp_send_flush_pending(fd);

@@ -11,6 +11,7 @@
 #    --json has both; --control asks one.
 # 4. A client that is gone shows as a kept address (lease, #81).
 # 5. control_socket=none: no socket.
+# 6. A reload that changes control_socket= moves the socket.
 #
 # Usage: ./test-e2e-status.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
@@ -91,7 +92,8 @@ cat "$BUILD_CTX/s1.txt" | sed 's/^/      /'
 grep -q "udp port 5800, tunnel 10.200.0.1/24, pool 10.200.0.0/24" "$BUILD_CTX/s1.txt" &&
     grep -q "clients 2 of" "$BUILD_CTX/s1.txt"
 check $? "the header names the server and the client count"
-grep -Eq "^CAM-A +auto +global +10\.200\.0\.[0-9]+ " "$BUILD_CTX/s1.txt" &&
+grep -q " HS " "$BUILD_CTX/s1.txt" && grep -q "RX PKTS" "$BUILD_CTX/s1.txt" &&
+    grep -Eq "^CAM-A +auto +global +10\.200\.0\.[0-9]+ " "$BUILD_CTX/s1.txt" &&
     grep -Eq "^CAM-B +auto +global +10\.200\.0\.[0-9]+ " "$BUILD_CTX/s1.txt"
 check $? "the table lists both clients with their addresses"
 a_ip=$(json_get "[c['address'] for c in d['servers'][0]['clients'] if c['id']=='CAM-A'][0]")
@@ -152,6 +154,23 @@ docker exec -d "$P-srv" camex --mode server --port 5802 --local-cidr 10.202.0.1/
 sleep 1
 ! docker exec "$P-srv" test -e /run/camex/camex-udp-5802.sock
 check $? "no socket for that server"
+
+echo "== 6. a reload moves the socket"
+printf '[server]\n' > "$BUILD_CTX/mv.conf"
+docker cp "$BUILD_CTX/mv.conf" "$P-srv:/etc/mv.conf" >/dev/null
+docker exec -d "$P-srv" camex --mode server --port 5803 --local-cidr 10.203.0.1/24 \
+    $SERVER_KEY_ARGS --psk "$PSK" --config /etc/mv.conf --pid-file /run/mv.pid
+sleep 1
+docker exec "$P-srv" test -S /run/camex/camex-udp-5803.sock
+check $? "the server listens on its default socket"
+printf '[server]\ncontrol_socket=/run/camex/moved.sock\n' > "$BUILD_CTX/mv.conf"
+docker cp "$BUILD_CTX/mv.conf" "$P-srv:/etc/mv.conf" >/dev/null
+docker exec "$P-srv" sh -c 'kill -HUP $(cat /run/mv.pid)'
+sleep 2
+docker exec "$P-srv" test -S /run/camex/moved.sock &&
+    ! docker exec "$P-srv" test -e /run/camex/camex-udp-5803.sock &&
+    status --control /run/camex/moved.sock | grep -q "udp port 5803"
+check $? "after the reload it answers on the new path only"
 
 if [ "$FAILS" -ne 0 ]; then
     echo "FAIL: $FAILS check(s) failed"

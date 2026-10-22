@@ -333,24 +333,24 @@ sudo camex --status --control /run/camex/camex-udp-5800.sock   # 只查询一个
 ```
 camex 3.3.0 server, udp port 5800, tunnel 10.200.0.1/24, pool 10.200.0.0/24, up 2h05m, clients 2 of 256
 
-ID     MODE    KEY     ADDRESS          PEER                CONNECTED  LAST       HANDSHAKE          RX          TX
-CAM-A  auto    global  10.200.0.2       203.0.113.7:50997   2h04m      3s         4m10s         1.2 MiB     8.4 MiB
-CAM-B  auto    own     10.200.0.3       198.51.100.4:41022  12m03s     1s         2m02s       310.5 KiB     2.0 MiB
+ID     MODE    KEY     ADDRESS          PEER                CONNECTED  LAST       HANDSHAKE     HS          RX   RX PKTS          TX   TX PKTS
+CAM-A  auto    global  10.200.0.2       203.0.113.7:50997   2h04m      3s         4m10s         13     1.2 MiB      9120     8.4 MiB     12480
+CAM-B  auto    own     10.200.0.3       198.51.100.4:41022  12m03s     1s         2m02s          2   310.5 KiB      2210     2.0 MiB      3105
 
 Addresses kept for clients that are gone (#81): 1
 CAM-C  10.200.0.4       gone 6m40s
 ```
 
-在客户端确认新地址之前，`ADDRESS` 显示为 `旧 -> 新`。`LAST` 是距其最后一个数据包的
-时间，`HANDSHAKE` 是距其最后一次密钥更新的时间；`RX` 是从该客户端收到的隧道数据，
-`TX` 是发往它的数据。保留的地址属于已离开的客户端：客户端返回时会拿回自己的地址。
+在客户端确认新地址之前，`ADDRESS` 显示为 `旧 -> 新`。`LAST` 是距其最后一个数据包（含 keepalive；首个数据包之前为 `-`）的
+时间，`HANDSHAKE` 是距其最后一次密钥更新的时间，`HS` 是握手次数；`RX` 是从该客户端
+收到的隧道数据，`TX` 是发往它的数据，单位为字节和包数。保留的地址属于已离开的客户端：客户端返回时会拿回自己的地址。
 
 `--json` 输出 `{"servers":[...]}`，每个服务器一个对象：`version`、`pid`、
 `transport`、`port`、`tunnel`、`pool`、`started`（Unix 时间）、`uptime`、
 `slots`（`used`、`max`）、`clients` 和 `leases`。每个客户端包含 `id`（无 ID 的手动
 客户端为 `null`）、`mode`（`auto` 或 `manual`）、`key`（`global` 或 `own`）、
 `address`、`pending` 和 `previous`（或 `null`）、`peer`、`transport`、`registered`
-（Unix 时间）、`connected_s`、`last_packet_s`、`last_handshake_s`、`handshakes`、
+（Unix 时间）、`connected_s`、`last_packet_s`（首个数据包之前为 `null`）、`last_handshake_s`、`handshakes`、
 `rx_packets`、`rx_bytes`、`tx_packets`、`tx_bytes`；每个保留地址包含 `id`、
 `address`、`gone_s` 和 `previous`（客户端上一会话的地址为 `true`）。
 

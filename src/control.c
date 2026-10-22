@@ -55,6 +55,7 @@ typedef struct {
 
 static int control_fd = -1;
 static char control_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
+static char control_spec[sizeof(control_path)];   /* as asked: "", "none" */
 static control_conn_t control_conns[CONTROL_CONNS] = {
     { -1, "", 0U, NULL, 0U, 0U, 0 }, { -1, "", 0U, NULL, 0U, 0U, 0 },
     { -1, "", 0U, NULL, 0U, 0U, 0 }, { -1, "", 0U, NULL, 0U, 0U, 0 }
@@ -68,14 +69,13 @@ static int set_nonblock(int fd)
 }
 
 /* A socket at path that nobody listens on (a server that did not stop
- * cleanly) */
-static int stale_socket(const char *path)
+ * cleanly); its inode in *st */
+static int stale_socket(const char *path, struct stat *st)
 {
     struct sockaddr_un sa;
-    struct stat st;
     int fd, rc;
 
-    if (lstat(path, &st) != 0 || !S_ISSOCK(st.st_mode)) {
+    if (lstat(path, st) != 0 || !S_ISSOCK(st->st_mode)) {
         return 0;
     }
     fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -98,6 +98,8 @@ int control_open(const char *path, int transport, int port)
     mode_t old_mask;
     int fd;
 
+    snprintf(control_spec, sizeof(control_spec), "%s",
+             path != NULL ? path : "");
     if (path != NULL && strcmp(path, "none") == 0) {
         return 0;
     }
@@ -126,8 +128,16 @@ int control_open(const char *path, int transport, int port)
             return -1;
         }
     }
-    if (stale_socket(control_path)) {
-        unlink(control_path);
+    {
+        struct stat stale, now;
+
+        /* Only the stale socket that was checked: another server that
+         * bound the path in between keeps its own */
+        if (stale_socket(control_path, &stale) &&
+            lstat(control_path, &now) == 0 && now.st_ino == stale.st_ino &&
+            now.st_dev == stale.st_dev) {
+            unlink(control_path);
+        }
     }
 
     fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -154,6 +164,16 @@ int control_open(const char *path, int transport, int port)
         return -1;
     }
     umask(old_mask);
+    /* select() watches only descriptors below FD_SETSIZE */
+    if (fd >= FD_SETSIZE) {
+        log_message(LOG_WARNING, "Control socket %s: descriptor %d is above "
+                    "FD_SETSIZE (camex --status will not reach this server)",
+                    control_path, fd);
+        close(fd);
+        unlink(control_path);
+        control_path[0] = '\0';
+        return -1;
+    }
     if (listen(fd, CONTROL_CONNS) != 0 || set_nonblock(fd) != 0) {
         log_message(LOG_WARNING, "Control socket %s: %s", control_path,
                     strerror(errno));
@@ -191,6 +211,15 @@ void control_close(void)
         unlink(control_path);
     }
     control_path[0] = '\0';
+}
+
+int control_reopen(const char *path, int transport, int port)
+{
+    if (strcmp(control_spec, path != NULL ? path : "") == 0) {
+        return 0;   /* unchanged: the listener stays */
+    }
+    control_close();
+    return control_open(path, transport, port);
 }
 
 int control_fdset(fd_set *readset, fd_set *writeset, int maxfd)
@@ -356,6 +385,14 @@ static int control_ask(const char *path, const char *cmd, FILE *out,
         fprintf(stderr, "camex: socket: %s\n", strerror(errno));
         return -1;
     }
+    /* A server that does not answer (stopped, stuck) must not hold up the
+     * others */
+    {
+        struct timeval tv = { 5, 0 };
+
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    }
     memset(&sa, 0, sizeof(sa));
     sa.sun_family = AF_UNIX;
     snprintf(sa.sun_path, sizeof(sa.sun_path), "%s", path);
@@ -391,23 +428,46 @@ static int control_ask(const char *path, const char *cmd, FILE *out,
             (*buf)[*buf_len] = '\0';
         }
     }
+    if (n < 0) {
+        fprintf(stderr, "camex: %s: %s\n", path,
+                (errno == EAGAIN || errno == EWOULDBLOCK)
+                    ? "no answer (timeout)" : strerror(errno));
+    }
     close(fd);
     return n < 0 ? -1 : 0;
 }
 
-/* The socket paths in CAMEX_CONTROL_DIR, sorted; count, or -1 */
-static int control_list(char paths[][108], int max)
+typedef char control_path_t[108];
+
+/* The socket paths in CAMEX_CONTROL_DIR, sorted, in *out (malloc'd);
+ * count, or -1 */
+static int control_list(control_path_t **out)
 {
     DIR *d = opendir(CAMEX_CONTROL_DIR);
     struct dirent *e;
-    int n = 0, i, j;
+    control_path_t *paths = NULL;
+    int n = 0, cap = 0, i, j;
 
+    *out = NULL;
     if (d == NULL) {
         return -1;
     }
-    while ((e = readdir(d)) != NULL && n < max) {
+    while ((e = readdir(d)) != NULL) {
         size_t len = strlen(e->d_name);
         struct stat st;
+
+        if (n == cap) {
+            control_path_t *grown;
+
+            cap = cap == 0 ? 16 : cap * 2;
+            grown = realloc(paths, (size_t)cap * sizeof(*paths));
+            if (grown == NULL) {
+                free(paths);
+                closedir(d);
+                return -1;
+            }
+            paths = grown;
+        }
 
         if (len < 6U || strcmp(e->d_name + len - 5U, ".sock") != 0 ||
             sizeof(CAMEX_CONTROL_DIR) + len + 1U > 108U) {
@@ -421,6 +481,7 @@ static int control_list(char paths[][108], int max)
         }
     }
     closedir(d);
+    *out = paths;
     for (i = 1; i < n; ++i) {
         for (j = i; j > 0 && strcmp(paths[j - 1], paths[j]) > 0; --j) {
             char t[108];
@@ -436,15 +497,19 @@ static int control_list(char paths[][108], int max)
 int control_status(const char *path, int json)
 {
     const char *cmd = json ? "STATUS JSON\n" : "STATUS\n";
-    char paths[32][108];
+    control_path_t one;
+    control_path_t *paths = &one;
+    control_path_t *listed = NULL;
     int n, i, ok = 0;
 
     if (path != NULL && path[0] != '\0') {
         n = 1;
-        snprintf(paths[0], sizeof(paths[0]), "%s", path);
+        snprintf(one, sizeof(one), "%s", path);
     } else {
-        n = control_list(paths, 32);
+        n = control_list(&listed);
+        paths = listed;
         if (n <= 0) {
+            free(listed);
             fprintf(stderr, "camex: no server control socket in %s (is a "
                     "server running? --control <path> for another one)\n",
                     CAMEX_CONTROL_DIR);
@@ -483,6 +548,7 @@ int control_status(const char *path, int json)
         fputs("]}\n", stdout);
     }
     fflush(stdout);
+    free(listed);
     return ok == n ? 0 : 1;
 }
 

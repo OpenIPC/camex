@@ -2226,8 +2226,21 @@ int server_forward_packet(const uint8_t *packet, size_t len,
     if (out_len == 0U) {
         return -1;
     }
+    if (dst->tcp_fd >= 0) {
+        int accepted = 0;
+
+        /* 1 is returned for a frame that was dropped (an older one still
+         * flushing) and for one that was queued: only the queued one
+         * counts as sent */
+        rc = net_tcp_send_frame_ex(dst->tcp_fd, out, out_len, &accepted);
+        if (accepted) {
+            dst->tx_packets++;
+            dst->tx_bytes += len;
+        }
+        return rc;
+    }
     rc = server_send(dst, out, out_len);
-    if (rc == 0) {   /* 1: the TCP connection is still flushing (dropped) */
+    if (rc == 0) {
         dst->tx_packets++;
         dst->tx_bytes += len;
     }
@@ -2456,9 +2469,7 @@ char *server_status(int json, size_t *len)
         w = c->pending_ip_be != 0U ? 32 : 15;
         addr_w = w > addr_w ? w : addr_w;
     }
-    for (i = 0U; i < server_lease_cap; ++i) {
-        leased += server_leases[i].ip_be != 0U ? 1U : 0U;
-    }
+    leased = server_lease_used;   /* no scan of the table (#82) */
 
     if (json) {
         sb_printf(&b, "{\"version\":\"%s\",\"pid\":%ld,\"transport\":\"%s\","
@@ -2481,9 +2492,10 @@ char *server_status(int json, size_t *len)
                   pool, d, (unsigned)used, (unsigned)server_max_clients);
         if (used > 0U) {
             sb_printf(&b, "\n%-*s  %-6s  %-6s  %-*s  %-*s  %-9s  %-9s  "
-                      "%-9s  %10s  %10s\n", id_w, "ID", "MODE", "KEY",
-                      addr_w, "ADDRESS", peer_w, "PEER", "CONNECTED",
-                      "LAST", "HANDSHAKE", "RX", "TX");
+                      "%-9s  %5s  %10s  %8s  %10s  %8s\n", id_w, "ID",
+                      "MODE", "KEY", addr_w, "ADDRESS", peer_w, "PEER",
+                      "CONNECTED", "LAST", "HANDSHAKE", "HS", "RX", "RX PKTS",
+                      "TX", "TX PKTS");
         }
     }
 
@@ -2493,7 +2505,9 @@ char *server_status(int json, size_t *len)
         char pend[16] = "", prev[16] = "";
         double since = c->registered_at != 0
                            ? difftime(g_now, c->registered_at) : 0.0;
-        double last = difftime(g_now, c->last_seen);
+        /* Authenticated data (keepalives too); a handshake is not one */
+        double last = c->last_data != 0 ? difftime(g_now, c->last_data)
+                                        : -1.0;
         double hs = c->last_hs != 0 ? difftime(g_now, c->last_hs) : 0.0;
 
         if (!c->active || !c->registered) {
@@ -2531,12 +2545,17 @@ char *server_status(int json, size_t *len)
             }
             sb_printf(&b, ",\"peer\":\"%s\",\"transport\":\"%s\","
                       "\"registered\":%ld,\"connected_s\":%.0f,"
-                      "\"last_packet_s\":%.0f,\"last_handshake_s\":%.0f,"
-                      "\"handshakes\":%u,\"rx_packets\":%llu,"
-                      "\"rx_bytes\":%llu,\"tx_packets\":%llu,"
-                      "\"tx_bytes\":%llu}", peer,
+                      "\"last_packet_s\":", peer,
                       c->tcp_fd >= 0 ? "tcp" : "udp",
-                      (long)c->registered_at, since, last, hs,
+                      (long)c->registered_at, since);
+            if (last < 0.0) {
+                sb_printf(&b, "null");
+            } else {
+                sb_printf(&b, "%.0f", last);
+            }
+            sb_printf(&b, ",\"last_handshake_s\":%.0f,\"handshakes\":%u,"
+                      "\"rx_packets\":%llu,\"rx_bytes\":%llu,"
+                      "\"tx_packets\":%llu,\"tx_bytes\":%llu}", hs,
                       (unsigned)c->handshakes,
                       (unsigned long long)c->rx_packets,
                       (unsigned long long)c->rx_bytes,
@@ -2551,15 +2570,22 @@ char *server_status(int json, size_t *len)
                 snprintf(addr, sizeof(addr), "%s", ip);
             }
             status_dur(d1, sizeof(d1), since);
-            status_dur(d2, sizeof(d2), last);
+            if (last < 0.0) {
+                snprintf(d2, sizeof(d2), "-");
+            } else {
+                status_dur(d2, sizeof(d2), last);
+            }
             status_dur(d3, sizeof(d3), hs);
             status_bytes(rx, sizeof(rx), c->rx_bytes);
             status_bytes(tx, sizeof(tx), c->tx_bytes);
             sb_printf(&b, "%-*s  %-6s  %-6s  %-*s  %-*s  %-9s  %-9s  %-9s  "
-                      "%10s  %10s\n", id_w,
+                      "%5u  %10s  %8llu  %10s  %8llu\n", id_w,
                       c->client_id[0] != '\0' ? c->client_id : "-",
                       c->auto_client ? "auto" : "manual", status_key(c),
-                      addr_w, addr, peer_w, peer, d1, d2, d3, rx, tx);
+                      addr_w, addr, peer_w, peer, d1, d2, d3,
+                      (unsigned)c->handshakes, rx,
+                      (unsigned long long)c->rx_packets, tx,
+                      (unsigned long long)c->tx_packets);
         }
         used++;
     }
@@ -2568,7 +2594,9 @@ char *server_status(int json, size_t *len)
         size_t n = 0U;
 
         sb_printf(&b, "],\"leases\":[");
-        for (i = 0U; i < server_lease_cap; ++i) {
+        /* Up to the last lease: the table may be much larger than the
+         * leases in it */
+        for (i = 0U; i < server_lease_cap && n < leased; ++i) {
             const server_lease_t *l = &server_leases[i];
 
             if (l->ip_be == 0U) {
@@ -2586,7 +2614,7 @@ char *server_status(int json, size_t *len)
     } else if (leased > 0U) {
         sb_printf(&b, "\nAddresses kept for clients that are gone (#81): "
                   "%u\n", (unsigned)leased);
-        for (i = 0U; i < server_lease_cap; ++i) {
+        for (i = 0U, used = 0U; i < server_lease_cap && used < leased; ++i) {
             const server_lease_t *l = &server_leases[i];
             char d[32];
 
@@ -2597,6 +2625,7 @@ char *server_status(int json, size_t *len)
             status_dur(d, sizeof(d), difftime(g_now, l->since));
             sb_printf(&b, "%-*s  %-15s  gone %s%s\n", id_w, l->id, ip, d,
                       l->prev ? " (its previous address)" : "");
+            used++;
         }
     }
     if (b.err) {

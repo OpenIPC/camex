@@ -42,6 +42,10 @@ void control_default_path(char *buf, size_t size, int transport, int port);
  * "none" = off). 0, or -1 (logged): the server runs on without it. */
 int control_open(const char *path, int transport, int port);
 
+/* Server, after a config reload: listen on path if it differs from the
+ * one asked for before (control_socket= changed); same return values */
+int control_reopen(const char *path, int transport, int port);
+
 /* Server: stop listening and remove the socket */
 void control_close(void);
 

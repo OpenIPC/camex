@@ -341,17 +341,18 @@ sudo camex --status --control /run/camex/camex-udp-5800.sock   # один сер
 ```
 camex 3.3.0 server, udp port 5800, tunnel 10.200.0.1/24, pool 10.200.0.0/24, up 2h05m, clients 2 of 256
 
-ID     MODE    KEY     ADDRESS          PEER                CONNECTED  LAST       HANDSHAKE          RX          TX
-CAM-A  auto    global  10.200.0.2       203.0.113.7:50997   2h04m      3s         4m10s         1.2 MiB     8.4 MiB
-CAM-B  auto    own     10.200.0.3       198.51.100.4:41022  12m03s     1s         2m02s       310.5 KiB     2.0 MiB
+ID     MODE    KEY     ADDRESS          PEER                CONNECTED  LAST       HANDSHAKE     HS          RX   RX PKTS          TX   TX PKTS
+CAM-A  auto    global  10.200.0.2       203.0.113.7:50997   2h04m      3s         4m10s         13     1.2 MiB      9120     8.4 MiB     12480
+CAM-B  auto    own     10.200.0.3       198.51.100.4:41022  12m03s     1s         2m02s          2   310.5 KiB      2210     2.0 MiB      3105
 
 Addresses kept for clients that are gone (#81): 1
 CAM-C  10.200.0.4       gone 6m40s
 ```
 
 `ADDRESS` показывает `старый -> новый`, пока клиент не подтвердил новый адрес.
-`LAST` — время с последнего пакета клиента, `HANDSHAKE` — с последнего
-обновления ключей; `RX` — данные туннеля от клиента, `TX` — к нему. Сохранённые
+`LAST` — время с последнего пакета данных клиента (включая keepalive; `-` до
+первого), `HANDSHAKE` — с последнего обновления ключей, `HS` — число рукопожатий;
+`RX` — данные туннеля от клиента, `TX` — к нему, в байтах и пакетах. Сохранённые
 адреса принадлежат ушедшим клиентам: вернувшись, клиент получает свой адрес.
 
 `--json` печатает `{"servers":[...]}`, по объекту на сервер: `version`, `pid`,
@@ -359,7 +360,8 @@ CAM-C  10.200.0.4       gone 6m40s
 `slots` (`used`, `max`), `clients` и `leases`. У клиента — `id` (`null` у ручного
 клиента без ID), `mode` (`auto` или `manual`), `key` (`global` или `own`),
 `address`, `pending` и `previous` (или `null`), `peer`, `transport`,
-`registered` (время Unix), `connected_s`, `last_packet_s`, `last_handshake_s`,
+`registered` (время Unix), `connected_s`, `last_packet_s` (`null` до первого
+пакета данных), `last_handshake_s`,
 `handshakes`, `rx_packets`, `rx_bytes`, `tx_packets`, `tx_bytes`; у сохранённого
 адреса — `id`, `address`, `gone_s` и `previous` (`true` у адреса прошлой
 сессии клиента).

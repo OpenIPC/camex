@@ -94,6 +94,7 @@ typedef int socklen_t;
  * on reloads. Otherwise a reload sets, replaces or removes the global key
  * from psk= (#16 L3), also on a server started without one. */
 static uint8_t global_psk_from_cli = 0U;
+static uint8_t control_from_cli = 0U;   /* --control given (#82) */
 
 /* Global state */
 camex_config_t current_config;
@@ -517,6 +518,7 @@ int camex_init(camex_config_t *config)
                 snprintf(current_config.bind_dev,
                          sizeof(current_config.bind_dev), "%s", g->bind_dev);
             }
+            control_from_cli = current_config.control_path[0] != '\0';
             if (current_config.control_path[0] == '\0' &&
                 g->control_socket[0] != '\0') {
                 snprintf(current_config.control_path,
@@ -1273,6 +1275,20 @@ void camex_run(void)
                         server_revalidate_keys();
                         server_revalidate_unknown_clients();
                         server_revalidate_profile_addresses();
+#ifndef _WIN32
+                        /* A changed control_socket= (#82); --control on
+                         * the command line stays */
+                        if (!control_from_cli) {
+                            snprintf(current_config.control_path,
+                                     sizeof(current_config.control_path),
+                                     "%s",
+                                     server_db.globals.control_socket);
+                            (void)control_reopen(
+                                current_config.control_path,
+                                current_config.transport,
+                                current_config.port);
+                        }
+#endif
                     }
                 }
                 if (restore) {

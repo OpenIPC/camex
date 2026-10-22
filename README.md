@@ -339,17 +339,19 @@ sudo camex --status --control /run/camex/camex-udp-5800.sock   # one server
 ```
 camex 3.3.0 server, udp port 5800, tunnel 10.200.0.1/24, pool 10.200.0.0/24, up 2h05m, clients 2 of 256
 
-ID     MODE    KEY     ADDRESS          PEER                CONNECTED  LAST       HANDSHAKE          RX          TX
-CAM-A  auto    global  10.200.0.2       203.0.113.7:50997   2h04m      3s         4m10s         1.2 MiB     8.4 MiB
-CAM-B  auto    own     10.200.0.3       198.51.100.4:41022  12m03s     1s         2m02s       310.5 KiB     2.0 MiB
+ID     MODE    KEY     ADDRESS          PEER                CONNECTED  LAST       HANDSHAKE     HS          RX   RX PKTS          TX   TX PKTS
+CAM-A  auto    global  10.200.0.2       203.0.113.7:50997   2h04m      3s         4m10s         13     1.2 MiB      9120     8.4 MiB     12480
+CAM-B  auto    own     10.200.0.3       198.51.100.4:41022  12m03s     1s         2m02s          2   310.5 KiB      2210     2.0 MiB      3105
 
 Addresses kept for clients that are gone (#81): 1
 CAM-C  10.200.0.4       gone 6m40s
 ```
 
 `ADDRESS` shows `old -> new` while a client has not confirmed a new address
-yet. `LAST` is the time since its last packet, `HANDSHAKE` since its last key
-renewal; `RX` is the tunnel data received from it, `TX` the data sent to it.
+yet. `LAST` is the time since its last data packet (keepalives included; `-`
+before the first), `HANDSHAKE` since its last key renewal, `HS` the number of
+handshakes; `RX` is the tunnel data received from it, `TX` the data sent to it,
+in bytes and packets.
 The kept addresses are those of clients that are gone; each gets its address
 back when it returns.
 
@@ -358,7 +360,8 @@ back when it returns.
 `slots` (`used`, `max`), `clients` and `leases`. Each client has `id` (`null`
 for a manual client without one), `mode` (`auto` or `manual`), `key` (`global`
 or `own`), `address`, `pending` and `previous` (or `null`), `peer`,
-`transport`, `registered` (Unix time), `connected_s`, `last_packet_s`,
+`transport`, `registered` (Unix time), `connected_s`, `last_packet_s` (`null`
+before the first data packet),
 `last_handshake_s`, `handshakes`, `rx_packets`, `rx_bytes`, `tx_packets`,
 `tx_bytes`; each lease `id`, `address`, `gone_s` and `previous` (`true` for
 the address of the client's previous session).
