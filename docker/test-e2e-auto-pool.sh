@@ -422,6 +422,9 @@ for _ in $(seq 1 25); do
     sleep 1
 done
 check $moved "after the reload the client moves to 10.85.0.60"
+docker logs "$P-prev" 2>&1 | grep -q "Offered 10.85.0.60/24 to client PREV77 (it moves there" &&
+    docker logs "$P-prev" 2>&1 | grep -q "Client PREV77 moved to 10.85.0.60"
+check $? "the server logs the offer of the changed profile address and the move"
 atk "$P-prev" GRAB@10.85.0.50 > "$BUILD_CTX/grab.txt"
 ! grep -q " 10.85.0.50/24$" "$BUILD_CTX/grab.txt"
 check $? "within the grace period 10.85.0.50 is not given to another client ($(cut -d' ' -f2 "$BUILD_CTX/grab.txt"))"

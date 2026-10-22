@@ -659,6 +659,8 @@ static int server_build_config(server_client_t *entry, const char *client_id,
     uint32_t old_ip_be = entry == NULL ? 0U
                          : entry->pending_ip_be != 0U ? entry->pending_ip_be
                                                       : entry->ip_be;
+    /* An offer this handshake may withdraw (#77) */
+    uint32_t offered_ip_be = entry == NULL ? 0U : entry->pending_ip_be;
 
     if (config_db_lookup_profile(client_id, &profile) != 0) {
         log_message(LOG_ERR, "Missing config for client %s",
@@ -724,7 +726,8 @@ static int server_build_config(server_client_t *entry, const char *client_id,
             /* Rekeys repeat the CONFIG: log new assignments only. A live
              * client's new address is only pending until it confirms the
              * new session (#77): server_handle_data() logs the move */
-            if (ip_be != old_ip_be && ip_be == was_ip_be) {
+            if (offered_ip_be != 0U && ip_be != offered_ip_be &&
+                ip_be == was_ip_be) {
                 log_message(LOG_INFO,
                             "Client %s keeps %s: the address it was "
                             "offered is no longer usable",
@@ -1300,7 +1303,16 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
             if (parse_local_cidr(profile.local_cidr, ip, sizeof(ip),
                                  mask, sizeof(mask)) == 0 &&
                 inet_pton(AF_INET, ip, &a) == 1) {
+                uint32_t offered = entry->pending_ip_be;
+
                 server_assign_ip(entry, a.s_addr);
+                /* A live client's changed profile address (#77) */
+                if (entry->pending_ip_be == a.s_addr && offered != a.s_addr) {
+                    log_message(LOG_INFO,
+                                "Offered %s to client %s (it moves there "
+                                "when it confirms the new session)",
+                                profile.local_cidr, client_id);
+                }
             }
         }
         if (server_build_config(entry, client_id, local_ip, reply,
