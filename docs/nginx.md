@@ -192,16 +192,17 @@ route other traffic.
 
    The script writes `camex --status --format nginx-map` to the map only when
    it changed, runs `nginx -t` and reloads nginx, and puts the previous map back
-   if nginx rejects the new one. When the server does not answer it leaves the
-   map as it is.
+   if nginx rejects the new one; runs never overlap. When a running server does
+   not answer it leaves the map as it is (a socket left behind by a server that
+   is gone is skipped).
 
 The map looks like this:
 
 ```
 # camex --status --format nginx-map: generated, do not edit
 map $host $camex_upstream {
-    001a2b3c4d5e.cam.example.lan 10.200.0.2:80;
-    001a2b3c4d5f.cam.example.lan 10.200.0.3:80;
+    "001a2b3c4d5e.cam.example.lan" 10.200.0.2:80;
+    "001a2b3c4d5f.cam.example.lan" 10.200.0.3:80;
 }
 ```
 
