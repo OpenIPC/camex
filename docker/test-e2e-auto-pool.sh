@@ -25,6 +25,11 @@
 #    server; a reload moves clients to a new pool; TCP slots stay below
 #    FD_SETSIZE; a pool outside the server's tunnel network is reported;
 #    slots above the memory lock limit run unlocked with a warning.
+# 6. A live client keeps its address until it confirms the new one (#77):
+#    after a pool change a handshake whose RESP the client never gets (one
+#    from v2tool with its ID) leaves its old address working, the new one
+#    stays reserved for it, and its own next handshake moves it; the old
+#    address stays taken while the previous session still receives.
 #
 # Usage: ./test-e2e-auto-pool.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
@@ -65,7 +70,7 @@ gen_server_key "$BUILD_CTX" "$CAMEX_BINARY" || { echo "cannot create a server ke
 cat > "$BUILD_CTX/Dockerfile" <<'EOF'
 FROM ubuntu:24.04
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
-        python3-minimal iputils-ping >/dev/null && rm -rf /var/lib/apt/lists/*
+        python3-minimal iputils-ping iproute2 >/dev/null && rm -rf /var/lib/apt/lists/*
 COPY camex /usr/local/bin/camex
 COPY server.key /etc/camex/server.key
 COPY v2tool /usr/local/bin/v2tool
@@ -86,13 +91,18 @@ docker build -q -t "$IMAGE" "$BUILD_CTX" >/dev/null
 docker network create "$NET_NAME" >/dev/null
 set +e   # checks below report failures themselves
 
-atk() {     # atk <server> <id>...: auto-mode handshakes, one socket each;
-            # prints "<id> <LOCAL_CIDR or ->"
+v2() {      # v2 <server> <who>...: handshakes as given (auto:<id>[@<ip>] or
+            # manual:<ip>), one socket each; prints "<who> <result or ->"
     local srv="$1"; shift
     docker run --rm --network "$NET_NAME" -e PACE_MS=6 --ulimit nofile=4096 \
         --entrypoint /usr/local/bin/v2tool "$IMAGE" \
-        "$srv" 5800 "$SERVER_PUBKEY" "$PSK" udp $(printf 'auto:%s ' "$@") |
-        sed 's/^auto://'
+        "$srv" 5800 "$SERVER_PUBKEY" "$PSK" udp "$@"
+}
+
+atk() {     # atk <server> <id>...: auto-mode handshakes, one socket each;
+            # prints "<id> <LOCAL_CIDR or ->"
+    local srv="$1"; shift
+    v2 "$srv" $(printf 'auto:%s ' "$@") | sed 's/^auto://'
 }
 
 echo "== 1. auto pool without a config file: 256 client IDs"
@@ -343,6 +353,82 @@ check $? "the server says the profiles do not fit the memory lock limit"
 atk "$P-prof" PROF11999 > "$BUILD_CTX/prof.txt"
 grep -q "^PROF11999 10.63.159.201/16$" "$BUILD_CTX/prof.txt"
 check $? "and serves a client listed near the end ($(cut -d' ' -f2 "$BUILD_CTX/prof.txt"))"
+
+echo "== 14. a live client keeps its address until it confirms the new one (#77)"
+# The server network covers both pools, so it can reach either address
+srv_conf pend '[server]\nauto_pool=10.82.0.0/24\n' --local-cidr 10.82.0.1/15
+docker run -d --name "$P-pcli" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    -e CAMEX_REKEY_AFTER=20 \
+    "$IMAGE" --mode client --auto --name REAL77 --server-host "$P-pend" --port 5800 \
+    --server-pubkey "$SERVER_PUBKEY" --psk "$PSK" >/dev/null
+got=1
+for _ in $(seq 1 15); do
+    docker logs "$P-pend" 2>&1 | grep -q "Auto-assigned 10.82.0.2/24 to client REAL77" && { got=0; break; }
+    sleep 1
+done
+check $got "the client gets 10.82.0.2"
+sleep 1
+docker exec "$P-pend" ping -c 2 -W 2 10.82.0.2 >/dev/null 2>&1
+check $? "traffic to 10.82.0.2 works"
+printf '[server]\nauto_pool=10.83.0.0/24\n' > "$BUILD_CTX/pend2.conf"
+docker cp "$BUILD_CTX/pend2.conf" "$P-pend:/etc/camex.conf" >/dev/null
+docker kill -s HUP "$P-pend" >/dev/null
+# The new pool's gateway on the server, so the client can answer there
+docker exec "$P-pend" ip addr add 10.83.0.1/24 dev tun0
+sleep 1
+# A handshake with its ID whose RESP goes elsewhere (as if it were lost)
+atk "$P-pend" REAL77 > "$BUILD_CTX/pend.txt"
+grep -q "^REAL77 10.83.0.2/24$" "$BUILD_CTX/pend.txt"
+check $? "that handshake is offered 10.83.0.2 ($(cut -d' ' -f2 "$BUILD_CTX/pend.txt"))"
+docker logs "$P-pend" 2>&1 | grep -q "Offered 10.83.0.2/24 to client REAL77 (it moves there" &&
+    ! docker logs "$P-pend" 2>&1 | grep -q "Auto-assigned 10.83.0.2/24 to client REAL77"
+check $? "the server logs the offer, not an assignment"
+docker exec "$P-pend" ping -c 3 -W 2 10.82.0.2 >/dev/null 2>&1
+check $? "the client's old address still carries traffic: it has not confirmed the new one"
+atk "$P-pend" OTHER77@10.83.0.2 > "$BUILD_CTX/other.txt"
+# A result line first: an empty output would pass the negated check
+grep -q "^OTHER77@10.83.0.2 " "$BUILD_CTX/other.txt" && ! grep -q " 10.83.0.2/24$" "$BUILD_CTX/other.txt"
+check $? "the pending 10.83.0.2 is not given to another client ($(cut -d' ' -f2 "$BUILD_CTX/other.txt"))"
+v2 "$P-pend" manual:10.83.0.2 > "$BUILD_CTX/manual.txt"
+grep -q "^manual:10.83.0.2 -$" "$BUILD_CTX/manual.txt" &&
+    docker logs "$P-pend" 2>&1 | grep -q "address 10.83.0.2 is reserved for client REAL77"
+check $? "a manual handshake cannot claim the pending address"
+docker exec "$P-pend" ping -c 2 -W 2 10.82.0.2 >/dev/null 2>&1
+check $? "and the client's old address still works after it"
+moved=1
+for _ in $(seq 1 40); do
+    docker exec "$P-pend" ping -c 1 -W 1 10.83.0.2 >/dev/null 2>&1 && { moved=0; break; }
+    sleep 1
+done
+check $moved "with its own next handshake the client moves to 10.83.0.2 and traffic follows"
+docker logs "$P-pend" 2>&1 | grep -q "Client REAL77 moved to 10.83.0.2"
+check $? "the server logs the move"
+
+echo "== 15. the previous session's address stays taken during its grace period (#77)"
+srv_conf prev '[server]\nauto_pool=10.85.0.0/24\n[client PREV77]\nlocal_cidr=10.85.0.50/24\ngateway_ip=10.85.0.1\n' --local-cidr 10.85.0.1/24
+docker run -d --name "$P-prevcli" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    -e CAMEX_REKEY_AFTER=10 \
+    "$IMAGE" --mode client --auto --name PREV77 --server-host "$P-prev" --port 5800 \
+    --server-pubkey "$SERVER_PUBKEY" --psk "$PSK" >/dev/null
+sleep 3
+docker exec "$P-prev" ping -c 2 -W 2 10.85.0.50 >/dev/null 2>&1
+check $? "the client works on its profile address 10.85.0.50"
+# A changed profile address moves the client with its next handshake
+printf '[server]\nauto_pool=10.85.0.0/24\n[client PREV77]\nlocal_cidr=10.85.0.60/24\ngateway_ip=10.85.0.1\n' > "$BUILD_CTX/prev2.conf"
+docker cp "$BUILD_CTX/prev2.conf" "$P-prev:/etc/camex.conf" >/dev/null
+docker kill -s HUP "$P-prev" >/dev/null
+moved=1
+for _ in $(seq 1 25); do
+    docker exec "$P-prev" ping -c 1 -W 1 10.85.0.60 >/dev/null 2>&1 && { moved=0; break; }
+    sleep 1
+done
+check $moved "after the reload the client moves to 10.85.0.60"
+docker logs "$P-prev" 2>&1 | grep -q "Offered 10.85.0.60/24 to client PREV77 (it moves there" &&
+    docker logs "$P-prev" 2>&1 | grep -q "Client PREV77 moved to 10.85.0.60"
+check $? "the server logs the offer of the changed profile address and the move"
+atk "$P-prev" GRAB@10.85.0.50 > "$BUILD_CTX/grab.txt"
+grep -q "^GRAB@10.85.0.50 " "$BUILD_CTX/grab.txt" && ! grep -q " 10.85.0.50/24$" "$BUILD_CTX/grab.txt"
+check $? "within the grace period 10.85.0.50 is not given to another client ($(cut -d' ' -f2 "$BUILD_CTX/grab.txt"))"
 
 if [ "$FAILS" != 0 ]; then
     echo "--- server 1 log (tail) ---"

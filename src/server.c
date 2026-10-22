@@ -162,10 +162,33 @@ void server_check_pool(const char *server_cidr)
     }
 }
 
+/* A pending address (#77) is the client's too: forwarding and the pool
+ * see it as taken */
 static int match_ip(uint32_t slot, const void *key)
 {
-    return slot < server_max_clients && server_clients[slot].active &&
-           server_clients[slot].ip_be == *(const uint32_t *)key;
+    const uint32_t ip = *(const uint32_t *)key;
+
+    const server_client_t *c;
+
+    if (ip == 0U || slot >= server_max_clients ||
+        !server_clients[slot].active) {
+        return 0;
+    }
+    c = &server_clients[slot];
+    /* The previous session's address stays taken while that session still
+     * receives (#77): its packets come from that address */
+    return c->ip_be == ip || c->pending_ip_be == ip ||
+           (c->prev.valid && c->prev_ip_be == ip);
+}
+
+/* Only the current address: its owner wins over a client that has it as
+ * a pending or previous address (#77) */
+static int match_cur_ip(uint32_t slot, const void *key)
+{
+    const uint32_t ip = *(const uint32_t *)key;
+
+    return ip != 0U && slot < server_max_clients &&
+           server_clients[slot].active && server_clients[slot].ip_be == ip;
 }
 
 static int match_id(uint32_t slot, const void *key)
@@ -213,6 +236,12 @@ static void server_index_rebuild(void)
         if ((c->ip_be != 0U &&
              slotidx_insert(&idx_ip, slotidx_hash_u32(c->ip_be),
                             (uint32_t)i) != 0) ||
+            (c->pending_ip_be != 0U &&
+             slotidx_insert(&idx_ip, slotidx_hash_u32(c->pending_ip_be),
+                            (uint32_t)i) != 0) ||
+            (c->prev.valid && c->prev_ip_be != 0U &&
+             slotidx_insert(&idx_ip, slotidx_hash_u32(c->prev_ip_be),
+                            (uint32_t)i) != 0) ||
             (c->client_id[0] != '\0' &&
              slotidx_insert(&idx_id, slotidx_hash_nocase(c->client_id),
                             (uint32_t)i) != 0) ||
@@ -234,7 +263,10 @@ static void server_index_add(slotidx_t *x, uint32_t h, const server_client_t *c)
     if (!idx_ok) {
         return;
     }
-    if (slotidx_crowded(x, server_max_clients)) {
+    /* The address index holds up to three keys a client: current,
+     * pending and previous (#77) */
+    if (slotidx_crowded(x, x == &idx_ip ? server_max_clients * 3U
+                                         : server_max_clients)) {
         server_index_rebuild();   /* takes the new key from the table */
         return;
     }
@@ -251,6 +283,39 @@ void server_set_ip(server_client_t *entry, uint32_t ip_be)
     entry->ip_be = ip_be;
     if (ip_be != 0U) {
         server_index_add(&idx_ip, slotidx_hash_u32(ip_be), entry);
+    }
+}
+
+/* The address an auto client gets at a handshake (#77). A client with a
+ * working session keeps its address until it confirms the new session
+ * (its first packet on it, server_handle_data()): until then the new one
+ * is pending, reserved for it. Otherwise it is taken at once. */
+static void server_assign_ip(server_client_t *entry, uint32_t ip_be)
+{
+    if (entry->cur.valid && entry->ip_be != 0U && ip_be != entry->ip_be) {
+        if (entry->pending_ip_be != ip_be) {
+            entry->pending_ip_be = ip_be;
+            server_index_add(&idx_ip, slotidx_hash_u32(ip_be), entry);
+        }
+        return;
+    }
+    entry->pending_ip_be = 0U;
+    server_set_ip(entry, ip_be);
+}
+
+/* Put an entry's addresses back after a handshake that failed (#77): the
+ * current one and the pending one, both indexed again (an index rebuild
+ * in between may have dropped them) */
+static void server_restore_ip(server_client_t *entry, uint32_t ip_be,
+                              uint32_t pending_ip_be)
+{
+    server_set_ip(entry, ip_be);
+    entry->pending_ip_be = pending_ip_be;
+    if (ip_be != 0U) {
+        server_index_add(&idx_ip, slotidx_hash_u32(ip_be), entry);
+    }
+    if (pending_ip_be != 0U) {
+        server_index_add(&idx_ip, slotidx_hash_u32(pending_ip_be), entry);
     }
 }
 
@@ -325,14 +390,25 @@ server_client_t *server_find_by_ip(uint32_t ip_be)
 {
     size_t i;
 
+    /* The client whose current address it is, else one that holds it as
+     * a pending or previous address (#77) */
     if (idx_ok) {
-        long k = slotidx_find(&idx_ip, slotidx_hash_u32(ip_be), match_ip,
+        long k = slotidx_find(&idx_ip, slotidx_hash_u32(ip_be), match_cur_ip,
                               &ip_be);
 
+        if (k < 0) {
+            k = slotidx_find(&idx_ip, slotidx_hash_u32(ip_be), match_ip,
+                             &ip_be);
+        }
         return k >= 0 ? &server_clients[k] : NULL;
     }
     for (i = 0; i < server_max_clients; ++i) {
-        if (server_clients[i].active && server_clients[i].ip_be == ip_be) {
+        if (match_cur_ip((uint32_t)i, &ip_be)) {
+            return &server_clients[i];
+        }
+    }
+    for (i = 0; i < server_max_clients; ++i) {
+        if (match_ip((uint32_t)i, &ip_be)) {
             return &server_clients[i];
         }
     }
@@ -469,11 +545,20 @@ void server_expire_clients(void)
         }
         if (c->prev.valid && now > c->prev_until) {
             session_wipe(&c->prev);
+            c->prev_ip_be = 0U;   /* its address is free again (#77) */
         }
         /* A handshake the client never confirmed */
         if (c->next.valid &&
             difftime(now, c->next.created) > (double)V2_PREV_SESSION_GRACE) {
             session_wipe(&c->next);
+            if (c->pending_ip_be != 0U) {
+                char ip[16];
+
+                ip_text(ntohl(c->pending_ip_be), ip, sizeof(ip));
+                log_message(LOG_INFO, "Client %s did not confirm %s: it "
+                            "keeps its address", c->client_id, ip);
+                c->pending_ip_be = 0U;   /* the old address stays (#77) */
+            }
         }
         /* Pre-auth: counted from the accept, so frames that arrive without
          * a handshake cannot keep an unregistered connection open. */
@@ -571,7 +656,11 @@ static int server_build_config(server_client_t *entry, const char *client_id,
                                char *message, size_t message_size)
 {
     camex_profile_t profile;
-    uint32_t old_ip_be = entry != NULL ? entry->ip_be : 0U;
+    uint32_t old_ip_be = entry == NULL ? 0U
+                         : entry->pending_ip_be != 0U ? entry->pending_ip_be
+                                                      : entry->ip_be;
+    /* An offer this handshake may withdraw (#77) */
+    uint32_t offered_ip_be = entry == NULL ? 0U : entry->pending_ip_be;
 
     if (config_db_lookup_profile(client_id, &profile) != 0) {
         log_message(LOG_ERR, "Missing config for client %s",
@@ -600,9 +689,20 @@ static int server_build_config(server_client_t *entry, const char *client_id,
                     server_set_ip(entry, h.s_addr);
                 }
             }
-            if (pool_has(entry->ip_be) && entry->ip_be != server_tunnel_ip &&
-                profile_owner_of_ip(entry->ip_be) == NULL) {
+            /* The address the client was last given: a pending one when
+             * it has not confirmed it yet (#77) */
+            uint32_t given = entry->pending_ip_be != 0U ? entry->pending_ip_be
+                                                        : entry->ip_be;
+
+            if (pool_has(given) && given != server_tunnel_ip &&
+                profile_owner_of_ip(given) == NULL) {
                 /* Keep the same IP (a changed pool takes it away) */
+                ip_be = given;
+            } else if (given != entry->ip_be && pool_has(entry->ip_be) &&
+                       entry->ip_be != server_tunnel_ip &&
+                       profile_owner_of_ip(entry->ip_be) == NULL) {
+                /* The pending address is not usable any more, the current
+                 * one still is: keep it (#77) */
                 ip_be = entry->ip_be;
             } else if (server_auto_pool_take(entry, &ip_be) != 0) {
                 char net[16];
@@ -619,10 +719,25 @@ static int server_build_config(server_client_t *entry, const char *client_id,
                      "%s/%u", ip, (unsigned)server_db.globals.pool_prefix);
             ip_text(pool_gateway(), profile.gateway_ip,
                     sizeof(profile.gateway_ip));
+            uint32_t was_ip_be = entry->ip_be;
+
             /* Store assigned IP in client entry for packet forwarding */
-            server_set_ip(entry, ip_be);
-            /* Rekeys repeat the CONFIG: log new assignments only */
-            if (entry->ip_be != old_ip_be) {
+            server_assign_ip(entry, ip_be);
+            /* Rekeys repeat the CONFIG: log new assignments only. A live
+             * client's new address is only pending until it confirms the
+             * new session (#77): server_handle_data() logs the move */
+            if (offered_ip_be != 0U && ip_be != offered_ip_be &&
+                ip_be == was_ip_be) {
+                log_message(LOG_INFO,
+                            "Client %s keeps %s: the address it was "
+                            "offered is no longer usable",
+                            client_id, profile.local_cidr);
+            } else if (ip_be != old_ip_be && entry->pending_ip_be == ip_be) {
+                log_message(LOG_INFO,
+                            "Offered %s to client %s (it moves there when "
+                            "it confirms the new session)",
+                            profile.local_cidr, client_id);
+            } else if (ip_be != old_ip_be) {
                 log_message(LOG_INFO,
                             "Auto-assigned %s to client %s (no config file)",
                             profile.local_cidr, client_id);
@@ -950,6 +1065,20 @@ static server_client_t *server_entry_for(const char *client_id,
             return NULL;
         }
         by_ip = server_find_by_ip(addr.s_addr);
+        /* An address that is a client's pending or previous one (#77) is
+         * reserved: a manual handshake cannot claim it, the client it is
+         * reserved for included (taking it at once would move that
+         * client's address before it confirms). Once the offer is
+         * confirmed or expires, at most V2_PREV_SESSION_GRACE later, it
+         * can. */
+        if (by_ip != NULL && by_ip->ip_be != addr.s_addr) {
+            log_peer(LOG_WARNING,
+                     "Rejected handshake from %s: address %s is reserved "
+                     "for client %s", peer, local_ip,
+                     by_ip->client_id[0] != '\0' ? by_ip->client_id
+                                                  : "(manual)");
+            return NULL;
+        }
         /* The address may be in use by a live session whose address came
          * from [defaults] or the auto pool, which profile_owner_of_ip()
          * cannot see. Do not hand it to a different keyed client. */
@@ -1021,6 +1150,12 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     size_t resp_len;
     size_t i;
     int fresh = 0;
+    uint32_t pending_before = 0U;
+    uint32_t ip_before = 0U;
+    session_t next_before;
+    int next_saved = 0;
+    int cur_set = 0;
+    uint8_t psk_before[32];
     int first;
 
     net_sockaddr_to_string(from, peer, sizeof(peer));
@@ -1142,7 +1277,10 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         noise_wipe(&hs);
         return -1;
     }
-    first = !entry->registered;
+    first = !entry->registered;   /* also restored by a failure */
+    memcpy(psk_before, entry->psk_key, sizeof(psk_before));
+    pending_before = entry->pending_ip_be;
+    ip_before = entry->ip_be;
     /* A UDP entry with a working session keeps its address until the first
      * packet on the new one (server_handle_data), so a replayed message 1
      * cannot redirect its traffic; over TCP the connection carries it */
@@ -1165,7 +1303,16 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
             if (parse_local_cidr(profile.local_cidr, ip, sizeof(ip),
                                  mask, sizeof(mask)) == 0 &&
                 inet_pton(AF_INET, ip, &a) == 1) {
-                server_set_ip(entry, a.s_addr);
+                uint32_t offered = entry->pending_ip_be;
+
+                server_assign_ip(entry, a.s_addr);
+                /* A live client's changed profile address (#77) */
+                if (entry->pending_ip_be == a.s_addr && offered != a.s_addr) {
+                    log_message(LOG_INFO,
+                                "Offered %s to client %s (it moves there "
+                                "when it confirms the new session)",
+                                profile.local_cidr, client_id);
+                }
             }
         }
         if (server_build_config(entry, client_id, local_ip, reply,
@@ -1175,6 +1322,9 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
             goto fail;
         }
     } else {
+        /* A manual client has the address it registered with: nothing an
+         * earlier auto handshake left pending applies (#77) */
+        entry->pending_ip_be = 0U;
         snprintf(reply, sizeof(reply), "%s OK VER=%u\n", CAMEX_CTRL_WORD,
                  (unsigned)CAMEX_PROTO_VER);
     }
@@ -1209,10 +1359,14 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
      * sending on cur, so nothing in flight is lost and a lost RESP does
      * not break the working session. A first session is used at once. */
     if (entry->cur.valid) {
-        session_wipe(&entry->next);
+        /* Kept until the reply is sent: a failed send puts it back (#77) */
+        next_before = entry->next;
+        next_saved = 1;
+        memset(&entry->next, 0, sizeof(entry->next));
         session_init(&entry->next, server_index, client_index, c2, c1, g_now);
     } else {
         session_init(&entry->cur, server_index, client_index, c2, c1, g_now);
+        cur_set = 1;
     }
     crypto_wipe(c1, sizeof(c1));
     crypto_wipe(c2, sizeof(c2));
@@ -1237,6 +1391,10 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
             log_message(LOG_INFO, "Registered client %s", local_ip);
         }
     }
+    if (next_saved) {
+        session_wipe(&next_before);   /* replaced by the new session */
+    }
+    crypto_wipe(psk_before, sizeof(psk_before));
     return 0;
 
 fail:
@@ -1245,6 +1403,27 @@ fail:
     if (fresh) {
         crypto_wipe(entry, sizeof(*entry));
         entry->tcp_fd = -1;
+    } else {
+        /* Addresses this handshake gave or made pending are not kept, nor
+         * the session it set up: the entry keeps what it had (#77) */
+        server_restore_ip(entry, ip_before, pending_before);
+        if (next_saved) {
+            session_wipe(&entry->next);
+            entry->next = next_before;
+        }
+        if (cur_set) {
+            /* The client never got the keys of that session */
+            session_wipe(&entry->cur);
+        }
+        /* A pre-auth TCP slot stays pre-auth (its timeout, its log); the
+         * key stays the one its sessions were made with (reloads check
+         * it). The newer timestamp is kept: replays must stay older. */
+        entry->registered = first ? 0U : 1U;
+        memcpy(entry->psk_key, psk_before, sizeof(psk_before));
+    }
+    crypto_wipe(psk_before, sizeof(psk_before));
+    if (next_saved) {
+        crypto_wipe(&next_before, sizeof(next_before));
     }
     return -1;
 }
@@ -1258,6 +1437,7 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
     uint32_t idx = v2_data_receiver(buffer);
     uint32_t src_ip_be = 0;
     uint32_t dst_ip_be = 0;
+    uint32_t own_ip_be;
     server_client_t *entry = NULL;
     session_t *s = NULL;
     char peer[64];
@@ -1295,9 +1475,20 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
         session_wipe(&entry->prev);
         entry->prev = entry->cur;
         entry->prev_until = g_now + V2_PREV_SESSION_GRACE;
+        entry->prev_ip_be = entry->ip_be;
         entry->cur = entry->next;
         session_wipe(&entry->next);
         s = &entry->cur;
+        /* The client has its new CONFIG: its new address counts now */
+        if (entry->pending_ip_be != 0U) {
+            char ip[16];
+
+            server_set_ip(entry, entry->pending_ip_be);
+            entry->pending_ip_be = 0U;
+            ip_text(ntohl(entry->ip_be), ip, sizeof(ip));
+            log_message(LOG_INFO, "Client %s moved to %s",
+                        entry->client_id, ip);
+        }
     }
 
     /* Authenticated: the client may have moved (NAT rebinding, roaming) */
@@ -1321,8 +1512,11 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
     if (ipv4_parse_endpoints(plain, plain_len, &src_ip_be, &dst_ip_be) != 0) {
         return 0;
     }
-    /* A client may only send from its own tunnel address (#6). */
-    if (entry->ip_be == 0U || src_ip_be != entry->ip_be) {
+    /* A client may only send from its own tunnel address (#6): the one of
+     * the session the packet came on (#77) */
+    own_ip_be = (s == &entry->prev && entry->prev_ip_be != 0U)
+                    ? entry->prev_ip_be : entry->ip_be;
+    if (own_ip_be == 0U || src_ip_be != own_ip_be) {
         char claimed[INET_ADDRSTRLEN];
         struct in_addr a;
 

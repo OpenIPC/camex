@@ -313,7 +313,9 @@ in the `[server]` block.
 After a change to the file, `kill -HUP` the server. A running auto-mode client
 picks up a changed address, gateway, MTU or routes with its next handshake (a
 key renewal, at most 10 minutes later, or a reconnect): it reopens its tunnel
-with the new settings and replaces its routes, without a restart.
+with the new settings and replaces its routes, without a restart. Its old
+address keeps working until the client confirms the new one with its first
+packet on the new session.
 
 ### Auto pool and number of clients
 

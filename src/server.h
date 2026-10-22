@@ -37,7 +37,11 @@
 /* Per-server-client state */
 typedef struct {
     struct sockaddr_in addr;
-    uint32_t ip_be;
+    uint32_t ip_be;       /* tunnel address of the current session */
+    uint32_t pending_ip_be;  /* new address sent in a CONFIG, taken when
+                              * the client confirms the new session
+                              * (#77); reserved meanwhile; 0 = none */
+    uint32_t prev_ip_be;  /* address of the previous session (#77) */
     time_t last_seen;
     time_t last_data;     /* last authenticated DATA (not a handshake) */
     char client_id[CAMEX_CLIENT_ID_LEN];
