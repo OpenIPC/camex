@@ -9,6 +9,7 @@
 #include "camex.h"
 #include "client.h"
 #include "server.h"
+#include "control.h"
 #include "config.h"
 #include "crypto.h"
 #include "keys.h"
@@ -515,6 +516,12 @@ int camex_init(camex_config_t *config)
                 g->bind_dev[0] != '\0') {
                 snprintf(current_config.bind_dev,
                          sizeof(current_config.bind_dev), "%s", g->bind_dev);
+            }
+            if (current_config.control_path[0] == '\0' &&
+                g->control_socket[0] != '\0') {
+                snprintf(current_config.control_path,
+                         sizeof(current_config.control_path), "%s",
+                         g->control_socket);
             }
             if (current_config.pid_file[0] == '\0' &&
                 g->pid_file[0] != '\0') {
@@ -1116,6 +1123,11 @@ void camex_run(void)
     int ready;
 
     if (server_mode) {
+#ifndef _WIN32
+        /* camex --status (#82); the server runs on without it */
+        (void)control_open(current_config.control_path,
+                           current_config.transport, current_config.port);
+#endif
         log_message(LOG_INFO, "Server started. Press Ctrl+C to stop.");
         while (running) {
             size_t si;
@@ -1155,6 +1167,9 @@ void camex_run(void)
 
             /* Monitor TCP socket writability for pending sends */
             maxfd = net_tcp_pending_fdset(&writeset, maxfd);
+#ifndef _WIN32
+            maxfd = control_fdset(&readset, &writeset, maxfd);
+#endif
 
             tv.tv_sec = 1;
             tv.tv_usec = 0;
@@ -1185,6 +1200,9 @@ void camex_run(void)
                 if (packet_fd() >= 0 && FD_ISSET(packet_fd(), &readset)) {
                     handle_tun_packet();
                 }
+#ifndef _WIN32
+                control_handle(&readset, &writeset);
+#endif
             } else if (ready < 0 && errno != EINTR) {
                 print_errno_message(LOG_ERR, "select");
             }
@@ -1357,6 +1375,9 @@ void camex_stop(void)
     size_t i;
 
     running = 0;
+#ifndef _WIN32
+    control_close();
+#endif
 
     if (client_mode && current_config.gateway_ip[0] != '\0' &&
         packet_host_routes()) {

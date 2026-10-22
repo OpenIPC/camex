@@ -19,6 +19,7 @@
 #include "packet.h"
 #include "tun.h"
 #include "version.h"
+#include "control.h"
 
 #include <errno.h>
 #include <getopt.h>
@@ -105,13 +106,16 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         { "genkey", no_argument, NULL, 'G' },
         { "server-key-file", required_argument, NULL, 'S' },
         { "server-pubkey", required_argument, NULL, 'Y' },
+        { "status", no_argument, NULL, 'Q' },
+        { "json", no_argument, NULL, 'J' },
+        { "control", required_argument, NULL, 'C' },
         { NULL, 0, NULL, 0 }
     };
     int opt;
     int option_index = 0;
 
     opterr = 0;
-    while ((opt = getopt_long(argc, argv, "M:b:an:f:l:g:p:s:c:t:k:evhP:d:T:R:K:W:GS:Y:",
+    while ((opt = getopt_long(argc, argv, "M:b:an:f:l:g:p:s:c:t:k:evhP:d:T:R:K:W:GS:Y:QJC:",
                              long_options, &option_index)) != -1) {
         switch (opt) {
         case 'M':
@@ -286,6 +290,19 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
                     return -1;
                 }
                 config->server_timeout = (int)val;
+            }
+            break;
+        case 'Q':
+            config->status_query = 1U;
+            break;
+        case 'J':
+            config->status_json = 1U;
+            break;
+        case 'C':
+            if (copy_option(config->control_path,
+                            sizeof(config->control_path), optarg,
+                            "control socket") != 0) {
+                return -1;
             }
             break;
         case '?':
@@ -472,7 +489,16 @@ void print_usage(const char *progname)
     printf("  -d, --bind-dev <iface>  Bind socket to a"
            " specific network interface\n");
     printf("  -T, --tun-dev <path> TUN device path"
-           " (default: auto-detect)\n\n");
+           " (default: auto-detect)\n");
+    printf("      --control <path> Control socket for --status"
+           " (default: %s/camex-<udp|tcp>-<port>.sock;"
+           " none = off)\n\n", CAMEX_CONTROL_DIR);
+
+    printf("Status of a running server (on its host):\n");
+    printf("      --status         List the connected clients of every"
+           " server on this host\n");
+    printf("      --json           The same as JSON, for scripts\n");
+    printf("      --control <path> Ask only the server at this socket\n\n");
 
     printf("Common options:\n");
     printf("  -t, --mtu <size>     Tunnel MTU, 576-9000 (default: 1500)\n");
@@ -564,6 +590,15 @@ int main(int argc, char *argv[])
     }
 
     parse_result = parse_arguments(argc, argv, &config);
+    if (parse_result == 0 && config.status_query) {
+        /* camex --status (#82): ask the running server(s), nothing else */
+        int rc = control_status(config.control_path, config.status_json);
+
+#ifndef _WIN32
+        closelog();
+#endif
+        return rc;
+    }
     if (parse_result != 0) {
         if (parse_result > 0) {
 #ifndef _WIN32

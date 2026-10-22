@@ -259,30 +259,33 @@ sudo ./camex \
 
 ### Options
 
-| Option                     | Short | Description                                                                                                                |
-|----------------------------|-------|----------------------------------------------------------------------------------------------------------------------------|
-| `--mode <mode>`            | `-M`  | Operation mode: `client` or `server` (required)                                                                            |
-| `--auto`                   | `-a`  | Fetch tunnel parameters from the server                                                                                    |
-| `--name <id>`              | `-n`  | Client ID (auto mode; optional in manual mode)                                                                             |
-| `--local-cidr <cidr>`      | `-l`  | Tunnel address in `address/prefix` form                                                                                    |
-| `--gateway-ip <addr>`      | `-g`  | Client gateway inside the tunnel                                                                                           |
-| `--server-host <addr>`     | `-s`  | Server hostname or IP for client mode                                                                                      |
-| `--port <port>`            | `-p`  | Server port for client or listen port for server                                                                           |
-| `--bind-ip <addr>`         | `-b`  | Server bind address (default: 0.0.0.0)                                                                                     |
-| `--config <path>`          | `-f`  | Server config file path                                                                                                    |
-| `--route-cidr <cidr>`      | `-c`  | Extra route to install on the client; repeatable                                                                           |
-| `--mtu <size>`             | `-t`  | Tunnel MTU, 576–9000 (default: 1500)                                                                                       |
-| `--psk <key>`              | `-k`  | Pre-shared key: `hex:<64 hex digits>`, `base64:<44 chars>`, or a passphrase (stretched with Argon2id). Required on clients |
-| `--server-pubkey <key>`    |       | Client: the server's public key (from `--genkey`)                                                                          |
-| `--server-key-file <path>` |       | Server: file with its private key (or `server_key=` in `[server]`)                                                         |
-| `--genkey`                 |       | Print a new server key pair (`server_key=`, `public_key=`) and exit                                                        |
-| `--encrypt`                | `-e`  | Accepted for compatibility; protocol v2 is always encrypted                                                                |
-| `--tun-dev <path>`         | `-T`  | TUN device path (default: auto-detect `/dev/net/tun` then `/dev/camex`)                                                    |
-| `--pid-file <path>`        | `-P`  | Write PID to file on startup                                                                                               |
-| `--bind-dev <iface>`       | `-d`  | Bind socket to a specific network interface (`SO_BINDTODEVICE`)                                                            |
-| `--transport <proto>`      | `-R`  | Transport protocol: `udp` (default) or `tcp`                                                                               |
-| `--version`                | `-v`  | Print version and exit                                                                                                     |
-| `--help`                   | `-h`  | Print usage and exit                                                                                                       |
+| Option                     | Short | Description                                                                                                                                     |
+|----------------------------|-------|-------------------------------------------------------------------------------------------------------------------------------------------------|
+| `--mode <mode>`            | `-M`  | Operation mode: `client` or `server` (required)                                                                                                 |
+| `--auto`                   | `-a`  | Fetch tunnel parameters from the server                                                                                                         |
+| `--name <id>`              | `-n`  | Client ID (auto mode; optional in manual mode)                                                                                                  |
+| `--local-cidr <cidr>`      | `-l`  | Tunnel address in `address/prefix` form                                                                                                         |
+| `--gateway-ip <addr>`      | `-g`  | Client gateway inside the tunnel                                                                                                                |
+| `--server-host <addr>`     | `-s`  | Server hostname or IP for client mode                                                                                                           |
+| `--port <port>`            | `-p`  | Server port for client or listen port for server                                                                                                |
+| `--bind-ip <addr>`         | `-b`  | Server bind address (default: 0.0.0.0)                                                                                                          |
+| `--config <path>`          | `-f`  | Server config file path                                                                                                                         |
+| `--route-cidr <cidr>`      | `-c`  | Extra route to install on the client; repeatable                                                                                                |
+| `--mtu <size>`             | `-t`  | Tunnel MTU, 576–9000 (default: 1500)                                                                                                            |
+| `--psk <key>`              | `-k`  | Pre-shared key: `hex:<64 hex digits>`, `base64:<44 chars>`, or a passphrase (stretched with Argon2id). Required on clients                      |
+| `--server-pubkey <key>`    |       | Client: the server's public key (from `--genkey`)                                                                                               |
+| `--server-key-file <path>` |       | Server: file with its private key (or `server_key=` in `[server]`)                                                                              |
+| `--genkey`                 |       | Print a new server key pair (`server_key=`, `public_key=`) and exit                                                                             |
+| `--encrypt`                | `-e`  | Accepted for compatibility; protocol v2 is always encrypted                                                                                     |
+| `--tun-dev <path>`         | `-T`  | TUN device path (default: auto-detect `/dev/net/tun` then `/dev/camex`)                                                                         |
+| `--pid-file <path>`        | `-P`  | Write PID to file on startup                                                                                                                    |
+| `--status`                 |       | Print the connected clients of every server on this host and exit (as the server's user, normally root)                                         |
+| `--json`                   |       | With `--status`: the same as JSON, for scripts                                                                                                  |
+| `--control <path>`         |       | Server: control socket for `--status` (default `/run/camex/camex-<transport>-<port>.sock`, `none` = off); with `--status`: ask only that server |
+| `--bind-dev <iface>`       | `-d`  | Bind socket to a specific network interface (`SO_BINDTODEVICE`)                                                                                 |
+| `--transport <proto>`      | `-R`  | Transport protocol: `udp` (default) or `tcp`                                                                                                    |
+| `--version`                | `-v`  | Print version and exit                                                                                                                          |
+| `--help`                   | `-h`  | Print usage and exit                                                                                                                            |
 
 ## Examples
 
@@ -317,6 +320,48 @@ key renewal, at most 10 minutes later, or a reconnect): it reopens its tunnel
 with the new settings and replaces its routes, without a restart. Its old
 address keeps working until the client confirms the new one with its first
 packet on the new session.
+
+### Connected clients (`--status`)
+
+The server listens on a local control socket, by default
+`/run/camex/camex-<transport>-<port>.sock` (`udp` or `tcp`; `/var/run/camex` on
+macOS), mode `0600`: only the server's user, normally root, can use it. Several
+servers on one host (say UDP and TCP) each have their own. `control_socket=<path>`
+in `[server]` or `--control <path>` changes it, `none` turns it off. Not on
+Windows.
+
+```sh
+sudo camex --status          # the clients of every server on this host
+sudo camex --status --json   # the same as JSON, for scripts and monitoring
+sudo camex --status --control /run/camex/camex-udp-5800.sock   # one server
+```
+
+```
+camex 3.3.0 server, udp port 5800, tunnel 10.200.0.1/24, pool 10.200.0.0/24, up 2h05m, clients 2 of 256
+
+ID     MODE    KEY     ADDRESS          PEER                CONNECTED  LAST       HANDSHAKE          RX          TX
+CAM-A  auto    global  10.200.0.2       203.0.113.7:50997   2h04m      3s         4m10s         1.2 MiB     8.4 MiB
+CAM-B  auto    own     10.200.0.3       198.51.100.4:41022  12m03s     1s         2m02s       310.5 KiB     2.0 MiB
+
+Addresses kept for clients that are gone (#81): 1
+CAM-C  10.200.0.4       gone 6m40s
+```
+
+`ADDRESS` shows `old -> new` while a client has not confirmed a new address
+yet. `LAST` is the time since its last packet, `HANDSHAKE` since its last key
+renewal; `RX` is the tunnel data received from it, `TX` the data sent to it.
+The kept addresses are those of clients that are gone; each gets its address
+back when it returns.
+
+`--json` prints `{"servers":[...]}`, one object per server: `version`, `pid`,
+`transport`, `port`, `tunnel`, `pool`, `started` (Unix time), `uptime`,
+`slots` (`used`, `max`), `clients` and `leases`. Each client has `id` (`null`
+for a manual client without one), `mode` (`auto` or `manual`), `key` (`global`
+or `own`), `address`, `pending` and `previous` (or `null`), `peer`,
+`transport`, `registered` (Unix time), `connected_s`, `last_packet_s`,
+`last_handshake_s`, `handshakes`, `rx_packets`, `rx_bytes`, `tx_packets`,
+`tx_bytes`; each lease `id`, `address`, `gone_s` and `previous` (`true` for
+the address of the client's previous session).
 
 ### Auto pool and number of clients
 
