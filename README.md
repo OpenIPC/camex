@@ -412,6 +412,10 @@ map $host $camex_upstream {
 - Settings of the script: `DOMAIN`, `UPSTREAM_PORT`, `DEFAULT`, `CONTROL`, `MAP`
   (`/etc/nginx/camex-map.conf`), `CAMEX`, `NGINX_BIN`.
 
+The whole setup — the server and nginx on one host, one pre-shared key or one
+key per camera, the cameras, an `nftables` firewall, DNS, TLS and the checks —
+is in [docs/nginx.md](docs/nginx.md).
+
 ### Auto pool and number of clients
 
 Two `[server]` keys size the server for its network:

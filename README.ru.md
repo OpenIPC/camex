@@ -414,6 +414,10 @@ map $host $camex_upstream {
 - Настройки скрипта: `DOMAIN`, `UPSTREAM_PORT`, `DEFAULT`, `CONTROL`, `MAP`
   (`/etc/nginx/camex-map.conf`), `CAMEX`, `NGINX_BIN`.
 
+Развёртывание целиком — сервер и nginx на одной машине, один общий ключ или
+свой ключ у каждой камеры, камеры, межсетевой экран `nftables`, DNS, TLS и
+проверки — описано в [docs/nginx.md](docs/nginx.md) (на английском).
+
 ### Авто-пул и число клиентов
 
 Два ключа в `[server]` задают размер сервера под его сеть:

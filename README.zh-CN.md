@@ -395,6 +395,10 @@ map $host $camex_upstream {
 - 脚本的设置：`DOMAIN`、`UPSTREAM_PORT`、`DEFAULT`、`CONTROL`、`MAP`
   （`/etc/nginx/camex-map.conf`）、`CAMEX`、`NGINX_BIN`。
 
+完整的部署方案——服务器与 nginx 位于同一主机、全体共用一个预共享密钥或每台摄像机
+各用自己的密钥、摄像机端、`nftables` 防火墙、DNS、TLS 以及检查方法——见
+[docs/nginx.md](docs/nginx.md)（英文）。
+
 ### 自动地址池与客户端数量
 
 `[server]` 中的两个键用于按网络规模配置服务器：
