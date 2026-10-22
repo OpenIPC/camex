@@ -1,0 +1,12 @@
+# camex-nginx-sync.timer — run camex-nginx-sync.service every 10 seconds (#84)
+
+[Unit]
+Description=Update the nginx map of camex clients every 10 seconds
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=10s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

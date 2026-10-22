@@ -27,6 +27,7 @@ set(CAMEX_SRCS
     ../../../../../src/client.c
     ../../../../../src/server.c
     ../../../../../src/control.c
+    ../../../../../src/nginxmap.c
 )
 
 # Build the shared library

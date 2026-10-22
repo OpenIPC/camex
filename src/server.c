@@ -2717,3 +2717,30 @@ char *server_status(int json, size_t *len)
     *len = b.len;
     return b.p;
 }
+
+/* The live clients as "<client ID> <tunnel address>" lines, for the nginx
+ * map (#84): clients with an ID and an address only */
+char *server_clients_list(size_t *len)
+{
+    status_buf_t b = { NULL, 0U, 0U, 0 };
+    size_t i;
+    char ip[16];
+
+    sb_printf(&b, "%s", "");
+    for (i = 0U; i < server_max_clients; ++i) {
+        const server_client_t *c = &server_clients[i];
+
+        if (!c->active || !c->registered || c->client_id[0] == '\0' ||
+            c->ip_be == 0U) {
+            continue;
+        }
+        ip_text(ntohl(c->ip_be), ip, sizeof(ip));
+        sb_printf(&b, "%s %s\n", c->client_id, ip);
+    }
+    if (b.err || b.p == NULL) {
+        free(b.p);
+        return NULL;
+    }
+    *len = b.len;
+    return b.p;
+}

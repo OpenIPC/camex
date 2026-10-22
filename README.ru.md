@@ -283,6 +283,10 @@ sudo ./camex \
 | `--status`                 |        | Показать подключённых клиентов всех серверов на этой машине и выйти (от пользователя сервера, обычно root)                                                       |
 | `--json`                   |        | Вместе с `--status`: то же в JSON, для скриптов                                                                                                                  |
 | `--control <path>`         |        | Сервер: управляющий сокет для `--status` (по умолчанию `/run/camex/camex-<transport>-<port>.sock`, `none` — выключен); с `--status`: спросить только этот сервер |
+| `--format <fmt>`           |        | С `--status`: `table` (по умолчанию), `json` (как `--json`) или `nginx-map`, см. [nginx перед клиентами](#nginx-перед-клиентами)                                 |
+| `--domain <name>`          |        | С `--format nginx-map`: домен после ID клиента                                                                                                                   |
+| `--upstream-port <port>`   |        | С `--format nginx-map`: веб-порт клиентов (по умолчанию 80)                                                                                                      |
+| `--default <host:port>`    |        | С `--format nginx-map`: куда идут имена без живого клиента (по умолчанию никуда — страница nginx «не в сети»)                                                    |
 | `--client-isolation`       |        | Сервер: отбрасывать пакеты от одного клиента другому (или `client_isolation=yes` в `[server]`), см. [Модель безопасности](#модель-безопасности)                  |
 | `--bind-dev <iface>`       | `-d`   | Привязать сокет к конкретному сетевому интерфейсу (`SO_BINDTODEVICE`)                                                                                            |
 | `--transport <proto>`      | `-R`   | Транспортный протокол: `udp` (по умолчанию) или `tcp`                                                                                                            |
@@ -372,6 +376,42 @@ CAM-C  10.200.0.4       gone 6m40s
 `handshakes`, `rx_packets`, `rx_bytes`, `tx_packets`, `tx_bytes`, `isolation_drops`; у сохранённого
 адреса — `id`, `address`, `gone_s` и `previous` (`true` у адреса прошлой
 сессии клиента).
+
+### nginx перед клиентами
+
+nginx на машине сервера может открывать веб-интерфейс каждого клиента по имени,
+`http://<ID клиента>.cam.example.lan/` → `http://<его адрес в туннеле>:80/`, без
+списка адресов, который надо вести вручную: `camex --status --format nginx-map`
+печатает `map` nginx с живыми клиентами, а `examples/camex-nginx-sync.sh` пишет
+её в файл, который подключает nginx, и перезагружает nginx, когда она изменилась.
+
+```sh
+sudo camex --status --format nginx-map --domain cam.example.lan
+```
+
+```
+# camex --status --format nginx-map: generated, do not edit
+map $host $camex_upstream {
+    cam-a.cam.example.lan 10.200.0.2:80;
+    cam-b.cam.example.lan 10.200.0.3:80;
+}
+```
+
+- Имя хоста — ID клиента в нижнем регистре плюс `--domain`; ID, который не
+  годится как метка имени хоста (буквы, цифры и `-`, до 63), пропускается с
+  предупреждением. `--upstream-port` задаёт веб-порт клиентов (80), `--default
+  <host:port>` — куда отправлять имена без живого клиента. Вывод отсортирован,
+  так что при неизменном состоянии файл получается тем же; если какой-то сервер
+  не ответил, ничего не печатается и код выхода 1, а скрипт оставляет прежнюю
+  карту.
+- `examples/nginx-camex.conf` — блок `server`: `proxy_pass` на адрес из карты,
+  WebSocket, без буферизации, короткий тайм-аут соединения и страница «не в
+  сети» для имён без живого клиента. `examples/camex-nginx-sync.sh` (POSIX sh)
+  работает один раз или с `--loop <секунды>`; `camex-nginx-sync.service` и
+  `.timer` запускают его каждые 10 секунд. Адреса стабильны (#81), поэтому карта
+  меняется, только когда клиенты приходят и уходят.
+- Настройки скрипта: `DOMAIN`, `UPSTREAM_PORT`, `DEFAULT`, `CONTROL`, `MAP`
+  (`/etc/nginx/camex-map.conf`), `CAMEX`, `NGINX_BIN`.
 
 ### Авто-пул и число клиентов
 

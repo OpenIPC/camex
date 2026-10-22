@@ -67,6 +67,10 @@ typedef struct {
     uint8_t status_query;      /* --status: ask the server(s), then exit */
     uint8_t status_json;       /* --json */
     uint8_t client_isolation;  /* --client-isolation (#83) */
+    uint8_t status_nginx_map;  /* --format nginx-map (#84) */
+    char map_domain[254];      /* --domain */
+    int map_port;              /* --upstream-port (default 80) */
+    char map_default[130];     /* --default */
 } camex_config_t;
 
 /* Global state shared across modules */

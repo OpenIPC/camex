@@ -110,13 +110,17 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         { "json", no_argument, NULL, 'J' },
         { "control", required_argument, NULL, 'C' },
         { "client-isolation", no_argument, NULL, 'I' },
+        { "format", required_argument, NULL, 'F' },
+        { "domain", required_argument, NULL, 'D' },
+        { "upstream-port", required_argument, NULL, 'U' },
+        { "default", required_argument, NULL, 'E' },
         { NULL, 0, NULL, 0 }
     };
     int opt;
     int option_index = 0;
 
     opterr = 0;
-    while ((opt = getopt_long(argc, argv, "M:b:an:f:l:g:p:s:c:t:k:evhP:d:T:R:K:W:GS:Y:QJC:I",
+    while ((opt = getopt_long(argc, argv, "M:b:an:f:l:g:p:s:c:t:k:evhP:d:T:R:K:W:GS:Y:QJC:IF:D:U:E:",
                              long_options, &option_index)) != -1) {
         switch (opt) {
         case 'M':
@@ -298,6 +302,42 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
             break;
         case 'I':
             config->client_isolation = 1U;
+            break;
+        case 'F':
+            if (strcmp(optarg, "nginx-map") == 0) {
+                config->status_nginx_map = 1U;
+            } else if (strcmp(optarg, "json") == 0) {
+                config->status_json = 1U;
+            } else if (strcmp(optarg, "table") != 0) {
+                log_message(LOG_ERR, "Invalid --format: %s (table, json or "
+                            "nginx-map)", optarg);
+                return -1;
+            }
+            break;
+        case 'D':
+            if (copy_option(config->map_domain, sizeof(config->map_domain),
+                            optarg, "domain") != 0) {
+                return -1;
+            }
+            break;
+        case 'U':
+            {
+                char *end = NULL;
+                long val = strtol(optarg, &end, 10);
+
+                if (end == optarg || *end != '\0' || val < 1 || val > 65535) {
+                    log_message(LOG_ERR, "--upstream-port must be 1..65535, "
+                                "got: %s", optarg);
+                    return -1;
+                }
+                config->map_port = (int)val;
+            }
+            break;
+        case 'E':
+            if (copy_option(config->map_default, sizeof(config->map_default),
+                            optarg, "default") != 0) {
+                return -1;
+            }
             break;
         case 'J':
             config->status_json = 1U;
@@ -504,7 +544,15 @@ void print_usage(const char *progname)
     printf("      --status         List the connected clients of every"
            " server on this host\n");
     printf("      --json           The same as JSON, for scripts\n");
-    printf("      --control <path> Ask only the server at this socket\n\n");
+    printf("      --control <path> Ask only the server at this socket\n");
+    printf("      --format nginx-map  An nginx map of the clients"
+           " (<id>[.<domain>] -> <address>:<port>)\n");
+    printf("      --domain <name>  With nginx-map: the domain after the"
+           " client ID\n");
+    printf("      --upstream-port <port>  With nginx-map: the clients'"
+           " web port (default: 80)\n");
+    printf("      --default <host:port>  With nginx-map: where unknown"
+           " names go\n\n");
 
     printf("Common options:\n");
     printf("  -t, --mtu <size>     Tunnel MTU, 576-9000 (default: 1500)\n");
@@ -598,7 +646,14 @@ int main(int argc, char *argv[])
     parse_result = parse_arguments(argc, argv, &config);
     if (parse_result == 0 && config.status_query) {
         /* camex --status (#82): ask the running server(s), nothing else */
-        int rc = control_status(config.control_path, config.status_json);
+        int rc = config.status_nginx_map
+                     ? control_nginx_map(config.control_path,
+                                         config.map_domain,
+                                         config.map_port > 0 ? config.map_port
+                                                             : 80,
+                                         config.map_default)
+                     : control_status(config.control_path,
+                                      config.status_json);
 
 #ifndef _WIN32
         closelog();
