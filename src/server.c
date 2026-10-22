@@ -937,6 +937,8 @@ typedef struct {
 } server_share_t;
 
 typedef struct {
+    uint32_t a;            /* source address, host order */
+    int looked_up;         /* addr and net are set (server_source_shares()) */
     server_share_t *addr;  /* NULL: no slot this second */
     server_share_t *net;
     server_client_t *known;   /* the live client at this source, or NULL */
@@ -1031,18 +1033,29 @@ static server_client_t *server_known_source(const struct sockaddr_in *from)
 static void server_source_for(const struct sockaddr_in *from,
                               server_source_t *src)
 {
-    uint32_t a = ntohl(from->sin_addr.s_addr);
-
     server_budget_window();
+    src->a = ntohl(from->sin_addr.s_addr);
+    src->looked_up = 0;
+    src->addr = NULL;
+    src->net = NULL;
     src->known = server_known_source(from);
-    src->addr = server_share_of(a, 0U);
-    src->net = server_share_of(a & 0xFFFFFF00U, 1U);
+}
+
+/* The source's share entries, looked up only once the whole budgets
+ * leave room: a flood over them costs no hashing */
+static void server_source_shares(server_source_t *src)
+{
+    if (!src->looked_up) {
+        src->looked_up = 1;
+        src->addr = server_share_of(src->a, 0U);
+        src->net = server_share_of(src->a & 0xFFFFFF00U, 1U);
+    }
 }
 
 /* One more INIT within the budgets: 0, -1 when all handshakes of this
  * second are taken, -2 when those of unknown sources are, -3 when this
  * source's or its /24's share is */
-static int server_handshake_budget(const server_source_t *src)
+static int server_handshake_budget(server_source_t *src)
 {
     if (budget_handshakes >= SERVER_HANDSHAKES_PER_SEC) {
         return -1;
@@ -1052,6 +1065,7 @@ static int server_handshake_budget(const server_source_t *src)
             SERVER_UNKNOWN_SHARE(SERVER_HANDSHAKES_PER_SEC)) {
             return -2;
         }
+        server_source_shares(src);
         if ((src->addr != NULL &&
              src->addr->handshakes >=
                  SERVER_SRC_SHARE(SERVER_HANDSHAKES_PER_SEC)) ||
@@ -1097,7 +1111,7 @@ static size_t server_trial_share(int is_net)
 
 /* One more key trial within the budgets, as server_handshake_budget();
  * own: the trial of a known source's own key */
-static int server_key_trial_budget(const server_source_t *src, int own)
+static int server_key_trial_budget(server_source_t *src, int own)
 {
     size_t limit = server_key_trials_limit();
 
@@ -1108,6 +1122,7 @@ static int server_key_trial_budget(const server_source_t *src, int own)
         if (budget_unknown_trials >= SERVER_UNKNOWN_SHARE(limit)) {
             return -2;
         }
+        server_source_shares(src);
         if ((src->addr != NULL && src->addr->trials >= server_trial_share(0)) ||
             (src->net != NULL && src->net->trials >= server_trial_share(1))) {
             return -3;
