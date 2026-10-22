@@ -386,7 +386,8 @@ check $? "the server logs the offer, not an assignment"
 docker exec "$P-pend" ping -c 3 -W 2 10.82.0.2 >/dev/null 2>&1
 check $? "the client's old address still carries traffic: it has not confirmed the new one"
 atk "$P-pend" OTHER77@10.83.0.2 > "$BUILD_CTX/other.txt"
-! grep -q " 10.83.0.2/24$" "$BUILD_CTX/other.txt"
+# A result line first: an empty output would pass the negated check
+grep -q "^OTHER77@10.83.0.2 " "$BUILD_CTX/other.txt" && ! grep -q " 10.83.0.2/24$" "$BUILD_CTX/other.txt"
 check $? "the pending 10.83.0.2 is not given to another client ($(cut -d' ' -f2 "$BUILD_CTX/other.txt"))"
 v2 "$P-pend" manual:10.83.0.2 > "$BUILD_CTX/manual.txt"
 grep -q "^manual:10.83.0.2 -$" "$BUILD_CTX/manual.txt" &&
@@ -426,7 +427,7 @@ docker logs "$P-prev" 2>&1 | grep -q "Offered 10.85.0.60/24 to client PREV77 (it
     docker logs "$P-prev" 2>&1 | grep -q "Client PREV77 moved to 10.85.0.60"
 check $? "the server logs the offer of the changed profile address and the move"
 atk "$P-prev" GRAB@10.85.0.50 > "$BUILD_CTX/grab.txt"
-! grep -q " 10.85.0.50/24$" "$BUILD_CTX/grab.txt"
+grep -q "^GRAB@10.85.0.50 " "$BUILD_CTX/grab.txt" && ! grep -q " 10.85.0.50/24$" "$BUILD_CTX/grab.txt"
 check $? "within the grace period 10.85.0.50 is not given to another client ($(cut -d' ' -f2 "$BUILD_CTX/grab.txt"))"
 
 if [ "$FAILS" != 0 ]; then
