@@ -430,10 +430,20 @@ protects before exposing it to an untrusted network.
 - Log messages that a peer can trigger (dropped packets, rejected
   registrations) are rate-limited; the number suppressed is logged.
 - The auto pool hands out only client addresses of its network (by default
-  `10.200.0.2`–`.254`) and never gives one address to two live clients (an expired client's address is handed out again; a client that
-  reconnects, also after a server restart, gets its previous address back while
-  it is free);
-  `allow_unknown_clients=no` serves only auto-mode IDs listed in the config file
+  `10.200.0.2`–`.254`) and never gives one address to two clients (#81):
+  - when a client's session ends (it went silent for 120 s, its TCP connection
+    closed, its slot was needed), its address stays leased to its ID: no other
+    client gets it while the pool has other free addresses, and never within 12
+    minutes; the client gets it back when it returns;
+  - for 60 s after the server starts, clients get only the address they ask for
+    (their previous one), so returning clients come back before new clients take
+    addresses; a new client waits and retries;
+  - a reload that gives a live client's address to a `[client ID]` `local_cidr`
+    ends that client's session (it comes back with another address), and the
+    profile's client is refused while another client still has the address;
+  - a manual client cannot claim a live client's address (only the same manual
+    client, with the same ID and key, can take its entry over).
+- `allow_unknown_clients=no` serves only auto-mode IDs listed in the config file
   (manual clients are bound by their key and address, see [Notes](#notes)).
 
 ### Recommended deployment

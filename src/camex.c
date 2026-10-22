@@ -1014,7 +1014,7 @@ static void drain_tcp_client_read(int fd)
                 log_message(LOG_INFO,
                             "TCP client disconnected: %s (fd=%d)",
                             peer_str, fd);
-                server_drop_entry(&server_clients[i]);
+                server_end_client(&server_clients[i]);   /* lease (#81) */
                 return;
             }
         }
@@ -1254,6 +1254,7 @@ void camex_run(void)
                     if (!restore) {
                         server_revalidate_keys();
                         server_revalidate_unknown_clients();
+                        server_revalidate_profile_addresses();
                     }
                 }
                 if (restore) {

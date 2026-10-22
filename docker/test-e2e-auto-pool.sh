@@ -69,6 +69,8 @@ cp "$CAMEX_BINARY" "$BUILD_CTX/camex"
 gen_server_key "$BUILD_CTX" "$CAMEX_BINARY" || { echo "cannot create a server key"; exit 1; }
 cat > "$BUILD_CTX/Dockerfile" <<'EOF'
 FROM ubuntu:24.04
+# New clients right after the server starts: no start hold (#81)
+ENV CAMEX_POOL_HOLD=0
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
         python3-minimal iputils-ping iproute2 >/dev/null && rm -rf /var/lib/apt/lists/*
 COPY camex /usr/local/bin/camex

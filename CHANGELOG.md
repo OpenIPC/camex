@@ -4,6 +4,29 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.2.1 — 2026-10-22
+
+- Server: the auto pool never gives one address to two clients (#81). Reported: two
+  auto clients with different IDs had the same address. Reproduced on 3.1.1 in four
+  ways, all fixed:
+  - a client that went silent (`--keepalive 0`, an outage) expired on the server while
+    it still had its address, and the address went to the next client. Now the address
+    of an auto client whose session ends (expiry, a closed TCP connection, its slot
+    taken) stays leased to its ID: other clients get it only when the pool has no
+    other free address, and never within 12 minutes; the client gets it back;
+  - after a server restart, a new client could take the address of a client that had
+    not come back yet. For 60 s after the start, clients now get only the address they
+    ask for (their previous one); new clients wait and retry;
+  - a reload that gave a live client's address to a `[client ID]` `local_cidr` let the
+    profile's client register with it too. The reload now ends that client's session
+    (it comes back with another address), and the profile's client is refused while
+    another client has the address;
+  - a manual client with the global key took over a live auto client's entry and
+    address. It is now refused; only the same manual client (same ID, same key) takes
+    its entry over.
+- Tests: `test-e2e-multi-client.sh` runs real auto clients through restarts, expiry,
+  a full pool, a reload, a manual claim and slot eviction (9 checks fail on 3.1.1).
+
 ## 3.2.0 — 2026-10-22
 
 - Server: the handshake budgets are shared out by source (#78). Every client knows the
