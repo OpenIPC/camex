@@ -96,10 +96,11 @@ client() {  # client <name> <ip> [env...]: an auto-mode client with its key
         --port 5800 --server-pubkey "$SERVER_PUBKEY" --psk "$(key $n)" >/dev/null
 }
 
-flood() {   # flood <name> <ip>: bogus INITs (valid mac1, no key opens them)
+flood() {   # flood <name> <ip>: bogus INITs (valid mac1, no key opens them;
+            # a hex: key, so the tool runs no Argon2id per batch)
     docker run -d --name "$P-$1" --network "$NET_NAME" --ip "$2" -e NOWAIT=1 \
         --entrypoint /bin/sh "$IMAGE" -c \
-        "while :; do /usr/local/bin/v2tool $SRV_IP 5800 $SERVER_PUBKEY nobody-has-this udp \
+        "while :; do /usr/local/bin/v2tool $SRV_IP 5800 $SERVER_PUBKEY $(key 99999) udp \
             \$(seq -f auto:F%g 1 100) >/dev/null; done" >/dev/null
 }
 
