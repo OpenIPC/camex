@@ -124,6 +124,35 @@ size_t server_default_max_clients(void)
  * client (#75); set by server_check_pool() at startup and reload */
 static uint32_t server_tunnel_ip = 0U;
 
+/*
+ * Leases (#81): an auto client whose entry ends (it expired, was evicted
+ * for a slot, its TCP connection closed) keeps its address under its ID.
+ * The pool gives that address to another client only when it has no
+ * other free one and the lease is older than SERVER_LEASE_MIN (a client
+ * that is still alive without the server knowing comes back within a
+ * rekey interval); the client gets it back when it returns. One lease per
+ * slot; when they are all taken the oldest one goes.
+ */
+#define SERVER_LEASE_MIN (V2_REKEY_AFTER_TIME + CAMEX_CLIENT_TIMEOUT)
+#define SERVER_LEASE_MAX (1U << 20)   /* the table grows up to this */
+
+typedef struct {
+    char id[CAMEX_CLIENT_ID_LEN];
+    uint32_t ip_be;        /* 0 = unused */
+    time_t since;
+    uint8_t prev;          /* the address of its previous session: kept
+                            * for it, never handed back as its address */
+} server_lease_t;
+
+static server_lease_t *server_leases = NULL;
+static size_t server_lease_cap = 0U;
+static slotidx_t idx_lease_ip;
+static slotidx_t idx_lease_id;
+static int lease_idx_ok = 0;
+static size_t server_lease_used = 0U;   /* leases in the table */
+static size_t server_lease_next = 0U;   /* where a free one is looked for */
+static time_t server_started = 0;   /* for the pool's start hold (#81) */
+
 void server_check_pool(const char *server_cidr)
 {
     char ip[16];
@@ -217,6 +246,201 @@ static uint32_t hash_addr(const struct sockaddr_in *addr)
 static int addr_is_set(const struct sockaddr_in *addr)
 {
     return addr->sin_addr.s_addr != 0U || addr->sin_port != 0U;
+}
+
+static int match_lease_ip(uint32_t slot, const void *key)
+{
+    const uint32_t ip = *(const uint32_t *)key;
+
+    return ip != 0U && slot < server_lease_cap &&
+           server_leases[slot].ip_be == ip;
+}
+
+static int match_lease_id(uint32_t slot, const void *key)
+{
+    return slot < server_lease_cap && server_leases[slot].ip_be != 0U &&
+           !server_leases[slot].prev &&
+           strcasecmp(server_leases[slot].id, (const char *)key) == 0;
+}
+
+static void server_lease_index_rebuild(void)
+{
+    size_t i;
+
+    lease_idx_ok = slotidx_reset(&idx_lease_ip, server_lease_cap) == 0 &&
+                   slotidx_reset(&idx_lease_id, server_lease_cap) == 0;
+    for (i = 0U; lease_idx_ok && i < server_lease_cap; ++i) {
+        const server_lease_t *l = &server_leases[i];
+
+        if (l->ip_be != 0U &&
+            (slotidx_insert(&idx_lease_ip, slotidx_hash_u32(l->ip_be),
+                            (uint32_t)i) != 0 ||
+             slotidx_insert(&idx_lease_id, slotidx_hash_nocase(l->id),
+                            (uint32_t)i) != 0)) {
+            lease_idx_ok = 0;
+        }
+    }
+}
+
+static server_lease_t *server_lease_by_ip(uint32_t ip_be)
+{
+    size_t i;
+
+    if (ip_be == 0U) {
+        return NULL;
+    }
+    if (lease_idx_ok) {
+        long k = slotidx_find(&idx_lease_ip, slotidx_hash_u32(ip_be),
+                              match_lease_ip, &ip_be);
+
+        return k >= 0 ? &server_leases[k] : NULL;
+    }
+    for (i = 0U; i < server_lease_cap; ++i) {
+        if (match_lease_ip((uint32_t)i, &ip_be)) {
+            return &server_leases[i];
+        }
+    }
+    return NULL;
+}
+
+static server_lease_t *server_lease_by_id(const char *client_id)
+{
+    size_t i;
+
+    if (client_id == NULL || client_id[0] == '\0') {
+        return NULL;
+    }
+    if (lease_idx_ok) {
+        long k = slotidx_find(&idx_lease_id, slotidx_hash_nocase(client_id),
+                              match_lease_id, client_id);
+
+        return k >= 0 ? &server_leases[k] : NULL;
+    }
+    for (i = 0U; i < server_lease_cap; ++i) {
+        if (match_lease_id((uint32_t)i, client_id)) {
+            return &server_leases[i];
+        }
+    }
+    return NULL;
+}
+
+static void server_lease_drop(server_lease_t *l)
+{
+    if (l != NULL && l->ip_be != 0U) {
+        memset(l, 0, sizeof(*l));   /* its index entries go stale */
+        server_lease_used--;
+    }
+}
+
+/* The lease of ip_be leaves room for client_id: none, or its own */
+static int server_lease_allows(uint32_t ip_be, const char *client_id)
+{
+    const server_lease_t *l = server_lease_by_ip(ip_be);
+
+    return l == NULL || (client_id != NULL &&
+                         strcasecmp(l->id, client_id) == 0);
+}
+
+/* prev: the address of the client's previous session, kept as well */
+static void server_lease_add(const char *client_id, uint32_t ip_be,
+                             int prev)
+{
+    server_lease_t *l = NULL;
+    size_t i;
+
+    if (server_lease_cap == 0U || ip_be == 0U || client_id == NULL ||
+        client_id[0] == '\0') {
+        return;
+    }
+    if (!prev) {
+        server_lease_drop(server_lease_by_id(client_id));
+    }
+    server_lease_drop(server_lease_by_ip(ip_be));
+    if (server_lease_used < server_lease_cap) {
+        /* A free one, from a cursor: many clients ending at once (an
+         * outage) cost one step each, not a scan each */
+        for (i = 0U; i < server_lease_cap; ++i) {
+            size_t k = (server_lease_next + i) % server_lease_cap;
+
+            if (server_leases[k].ip_be == 0U) {
+                l = &server_leases[k];
+                server_lease_next = (k + 1U) % server_lease_cap;
+                break;
+            }
+        }
+    }
+    if (l == NULL) {
+        for (i = 0U; i < server_lease_cap; ++i) {
+            if (l == NULL || server_leases[i].since < l->since) {
+                l = &server_leases[i];   /* the oldest */
+            }
+        }
+    }
+    /* All taken and the oldest is still young: grow the table, up to the
+     * pool's size, rather than give a young lease up (#81) */
+    if (l->ip_be != 0U &&
+        difftime(g_now, l->since) < (double)SERVER_LEASE_MIN) {
+        size_t limit = pool_size() > SERVER_LEASE_MAX ? SERVER_LEASE_MAX
+                                                      : pool_size();
+        size_t cap = server_lease_cap * 2U > limit ? limit
+                                                   : server_lease_cap * 2U;
+        server_lease_t *grown = cap > server_lease_cap
+                                    ? realloc(server_leases,
+                                              cap * sizeof(*grown))
+                                    : NULL;
+
+        if (grown != NULL) {
+            memset(grown + server_lease_cap, 0,
+                   (cap - server_lease_cap) * sizeof(*grown));
+            l = grown + server_lease_cap;
+            server_lease_next = server_lease_cap + 1U;
+            server_leases = grown;
+            server_lease_cap = cap;
+            lease_idx_ok = 0;   /* rebuilt below for the new size */
+        } else {
+            char ip[16];
+
+            ip_text(ntohl(l->ip_be), ip, sizeof(ip));
+            log_message(LOG_WARNING, "Lease table full: the address %s of "
+                        "client %s (gone for %.0f s) is no longer kept",
+                        ip, l->id, difftime(g_now, l->since));
+        }
+    }
+    if (l->ip_be == 0U) {
+        server_lease_used++;
+    }
+    snprintf(l->id, sizeof(l->id), "%s", client_id);
+    l->ip_be = ip_be;
+    l->since = g_now != 0 ? g_now : time(NULL);
+    l->prev = prev ? 1U : 0U;
+    if (!lease_idx_ok ||
+        slotidx_crowded(&idx_lease_ip, server_lease_cap) ||
+        slotidx_crowded(&idx_lease_id, server_lease_cap) ||
+        slotidx_insert(&idx_lease_ip, slotidx_hash_u32(ip_be),
+                       (uint32_t)(l - server_leases)) != 0 ||
+        slotidx_insert(&idx_lease_id, slotidx_hash_nocase(l->id),
+                       (uint32_t)(l - server_leases)) != 0) {
+        server_lease_index_rebuild();
+    }
+}
+
+/* Seconds after the start in which the auto pool hands out only the
+ * address a client asks for (its previous one): the leases did not
+ * survive the restart, and clients come back within a few seconds
+ * (#81). SERVER_POOL_HOLD; CAMEX_POOL_HOLD (0..600) changes it, for
+ * tests. */
+static int server_pool_holding(void)
+{
+    static int value = -1;
+
+    if (value < 0) {
+        const char *env = getenv("CAMEX_POOL_HOLD");
+        int v = env != NULL ? atoi(env) : -1;
+
+        value = (env != NULL && v >= 0 && v <= 600) ? v : SERVER_POOL_HOLD;
+    }
+    return server_started != 0 &&
+           difftime(g_now, server_started) < (double)value;
 }
 
 /* Rebuild all three indexes from the table */
@@ -366,6 +590,13 @@ int server_clients_init(size_t count)
     }
     auto_pool_next = 0U;
     server_index_rebuild();
+    /* One lease per slot (#81) */
+    server_leases = calloc(count, sizeof(*server_leases));
+    server_lease_cap = server_leases != NULL ? count : 0U;
+    server_lease_used = 0U;
+    server_lease_next = 0U;
+    server_lease_index_rebuild();
+    server_started = time(NULL);
     return 0;
 }
 
@@ -382,6 +613,12 @@ void server_clients_free(void)
     slotidx_free(&idx_id);
     slotidx_free(&idx_addr);
     idx_ok = 0;
+    free(server_leases);
+    server_leases = NULL;
+    server_lease_cap = 0U;
+    slotidx_free(&idx_lease_ip);
+    slotidx_free(&idx_lease_id);
+    lease_idx_ok = 0;
 }
 
 static const char *profile_owner_of_ip(uint32_t ip_be);
@@ -483,6 +720,11 @@ server_client_t *server_alloc_client(void)
         }
     }
 
+    /* Just started: the clients now coming back must not be evicted for
+     * new ones that get no address yet (#81) */
+    if (server_pool_holding()) {
+        return NULL;
+    }
     /* Full: evict the client that was quiet longest */
     for (i = 0; i < server_max_clients; ++i) {
         if (!oldest_found || server_clients[i].last_seen < oldest_seen) {
@@ -491,9 +733,32 @@ server_client_t *server_alloc_client(void)
             oldest_seen = server_clients[i].last_seen;
         }
     }
-    server_drop_entry(&server_clients[oldest]);
+    server_end_client(&server_clients[oldest]);
     server_clients[oldest].active = 1U;
     return &server_clients[oldest];
+}
+
+/* An entry ends while its client may still be alive: an auto client's
+ * address stays leased to its ID (#81) */
+void server_end_client(server_client_t *entry)
+{
+    if (entry == NULL) {
+        return;
+    }
+    if (entry->active && entry->registered && entry->auto_client &&
+        entry->client_id[0] != '\0') {
+        if (pool_has(entry->ip_be) &&
+            profile_owner_of_ip(entry->ip_be) == NULL) {
+            server_lease_add(entry->client_id, entry->ip_be, 0);
+        }
+        /* Its previous session may still send from the old address */
+        if (entry->prev.valid && entry->prev_ip_be != entry->ip_be &&
+            pool_has(entry->prev_ip_be) &&
+            profile_owner_of_ip(entry->prev_ip_be) == NULL) {
+            server_lease_add(entry->client_id, entry->prev_ip_be, 1);
+        }
+    }
+    server_drop_entry(entry);
 }
 
 void server_drop_entry(server_client_t *entry)
@@ -581,16 +846,35 @@ void server_expire_clients(void)
             } else {
                 log_message(LOG_INFO, "Expired client %s", ipbuf);
             }
-            server_drop_entry(c);
+            server_end_client(c);
         }
     }
 }
 
-/* Take a free auto-pool address for entry (#15, #75): not used by another
- * live client nor by a [client ID] profile. Addresses of expired clients
- * become free again. Returns 0 and the address (network order), or -1 if
- * the pool is full. A full pool is walked at most once a second: clients
- * expire on whole seconds, and a client that finds no address retries. */
+/* May entry (client_id) have ip_be from the auto pool? In the pool, not
+ * the server's tunnel address nor a [client ID] profile's, not held by
+ * another live client (current, pending or previous address) and not
+ * leased to another ID (#15, #75, #81) */
+static int server_ip_usable(const server_client_t *entry, uint32_t ip_be,
+                            const char *client_id)
+{
+    const server_client_t *user;
+
+    if (!pool_has(ip_be) || ip_be == server_tunnel_ip ||
+        profile_owner_of_ip(ip_be) != NULL) {
+        return 0;
+    }
+    user = server_find_by_ip(ip_be);
+    return (user == NULL || user == entry) &&
+           server_lease_allows(ip_be, client_id);
+}
+
+/* Take a free auto-pool address for entry (#15, #75): one that
+ * server_ip_usable() allows, from a cursor that walks the pool. When there
+ * is none, the address of the oldest lease past SERVER_LEASE_MIN (#81).
+ * Returns 0 and the address (network order), or -1 if the pool is full. A
+ * full pool is walked at most once a second: clients expire on whole
+ * seconds, and a client that finds no address retries. */
 static int server_auto_pool_take(const server_client_t *entry,
                                  uint32_t *ip_be)
 {
@@ -599,6 +883,7 @@ static int server_auto_pool_take(const server_client_t *entry,
     const uint32_t start = (auto_pool_next >= first &&
                             auto_pool_next <= pool_last())
                                ? auto_pool_next - first : 0U;
+    server_lease_t *oldest = NULL;
     uint32_t n;
 
     if (pool_full_at == g_now && pool_full_at != 0 &&
@@ -609,14 +894,34 @@ static int server_auto_pool_take(const server_client_t *entry,
     for (n = 0U; n < size; ++n) {
         uint32_t host = first + (start + n) % size;
         uint32_t a = htonl(host);
-        server_client_t *user = server_find_by_ip(a);
+        server_lease_t *l;
+        const server_client_t *user;
 
-        if ((user != NULL && user != entry) || a == server_tunnel_ip ||
-            profile_owner_of_ip(a) != NULL) {
-            continue;
+        if (server_ip_usable(entry, a, entry->client_id)) {
+            *ip_be = a;
+            auto_pool_next = host < pool_last() ? host + 1U : first;
+            return 0;
         }
-        *ip_be = a;
-        auto_pool_next = host < pool_last() ? host + 1U : first;
+        /* Leased to another ID and otherwise free: a candidate for when
+         * the pool has nothing else */
+        l = server_lease_by_ip(a);
+        if (l != NULL && a != server_tunnel_ip &&
+            profile_owner_of_ip(a) == NULL &&
+            ((user = server_find_by_ip(a)) == NULL || user == entry) &&
+            difftime(g_now, l->since) >= (double)SERVER_LEASE_MIN &&
+            (oldest == NULL || l->since < oldest->since)) {
+            oldest = l;
+        }
+    }
+    if (oldest != NULL) {
+        char ip[16];
+
+        ip_text(ntohl(oldest->ip_be), ip, sizeof(ip));
+        log_message(LOG_NOTICE, "Auto pool full: %s of client %s (gone for "
+                    "%.0f s) goes to client %s", ip, oldest->id,
+                    difftime(g_now, oldest->since), entry->client_id);
+        /* The lease goes when the handshake succeeds */
+        *ip_be = oldest->ip_be;
         return 0;
     }
     pool_full_at = g_now;
@@ -644,6 +949,51 @@ void server_revalidate_unknown_clients(void)
         log_message(LOG_NOTICE,
                     "Ended session of client %s: unknown client ID "
                     "(allow_unknown_clients = no)", c->client_id);
+        /* It may still run: its address stays kept (#81) */
+        server_end_client(c);
+    }
+}
+
+void server_revalidate_profile_addresses(void)
+{
+    size_t i;
+
+    /* A reload may give a live client's address to another client's
+     * [client ID] local_cidr: that client's session ends, so the profile's
+     * client can have the address and the other one gets a new one when
+     * it comes back (#81). A manual client without an ID may be the
+     * profile's own device: it stays, and the profile's client is refused
+     * while it has the address. */
+    for (i = 0U; i < server_max_clients; ++i) {
+        server_client_t *c = &server_clients[i];
+        const char *owner;
+
+        if (!c->active || !c->registered) {
+            continue;
+        }
+        if (c->pending_ip_be != 0U &&
+            (owner = profile_owner_of_ip(c->pending_ip_be)) != NULL &&
+            strcasecmp(owner, c->client_id) != 0) {
+            /* The offer is withdrawn, and the unconfirmed session whose
+             * CONFIG carried it ends: the client must not confirm it */
+            c->pending_ip_be = 0U;
+            session_wipe(&c->next);
+        }
+        owner = profile_owner_of_ip(c->ip_be);
+        if (owner == NULL || strcasecmp(owner, c->client_id) == 0 ||
+            (!c->auto_client && c->client_id[0] == '\0')) {
+            continue;
+        }
+        {
+            char ip[16];
+
+            ip_text(ntohl(c->ip_be), ip, sizeof(ip));
+            log_message(LOG_NOTICE,
+                        "Ended session of client %s: its address %s is now "
+                        "client %s's (config reload)",
+                        c->client_id[0] != '\0' ? c->client_id : "(manual)",
+                        ip, owner);
+        }
         server_drop_entry(c);
     }
 }
@@ -674,18 +1024,18 @@ static int server_build_config(server_client_t *entry, const char *client_id,
             uint32_t ip_be = 0U;
             char ip[16];
 
-            /* Reuse existing auto-IP if client already has one, else the
-             * address the client asks for (its previous one) when free */
-            if (entry->ip_be == 0U && hint_ip != NULL &&
-                hint_ip[0] != '\0') {
+            /* A new entry: the address leased to its ID (#81), else the
+             * one the client asks for (its previous one) when it is free */
+            if (entry->ip_be == 0U) {
+                const server_lease_t *l = server_lease_by_id(client_id);
                 struct in_addr h;
-                server_client_t *user;
 
-                if (inet_pton(AF_INET, hint_ip, &h) == 1 &&
-                    pool_has(h.s_addr) && h.s_addr != server_tunnel_ip &&
-                    profile_owner_of_ip(h.s_addr) == NULL &&
-                    ((user = server_find_by_ip(h.s_addr)) == NULL ||
-                     user == entry)) {
+                if (l != NULL &&
+                    server_ip_usable(entry, l->ip_be, client_id)) {
+                    server_set_ip(entry, l->ip_be);
+                } else if (hint_ip != NULL && hint_ip[0] != '\0' &&
+                           inet_pton(AF_INET, hint_ip, &h) == 1 &&
+                           server_ip_usable(entry, h.s_addr, client_id)) {
                     server_set_ip(entry, h.s_addr);
                 }
             }
@@ -694,16 +1044,21 @@ static int server_build_config(server_client_t *entry, const char *client_id,
             uint32_t given = entry->pending_ip_be != 0U ? entry->pending_ip_be
                                                         : entry->ip_be;
 
-            if (pool_has(given) && given != server_tunnel_ip &&
-                profile_owner_of_ip(given) == NULL) {
+            if (given != 0U && server_ip_usable(entry, given, client_id)) {
                 /* Keep the same IP (a changed pool takes it away) */
                 ip_be = given;
-            } else if (given != entry->ip_be && pool_has(entry->ip_be) &&
-                       entry->ip_be != server_tunnel_ip &&
-                       profile_owner_of_ip(entry->ip_be) == NULL) {
+            } else if (given != entry->ip_be && entry->ip_be != 0U &&
+                       server_ip_usable(entry, entry->ip_be, client_id)) {
                 /* The pending address is not usable any more, the current
                  * one still is: keep it (#77) */
                 ip_be = entry->ip_be;
+            } else if (server_pool_holding()) {
+                /* Just started: the addresses of clients that have not
+                 * come back yet are unknown (#81); the client retries */
+                log_peer(LOG_NOTICE, "Auto pool: no new address for client "
+                         "%s yet, the server waits for returning clients "
+                         "after its start", client_id);
+                return -1;
             } else if (server_auto_pool_take(entry, &ip_be) != 0) {
                 char net[16];
 
@@ -721,7 +1076,9 @@ static int server_build_config(server_client_t *entry, const char *client_id,
                     sizeof(profile.gateway_ip));
             uint32_t was_ip_be = entry->ip_be;
 
-            /* Store assigned IP in client entry for packet forwarding */
+            /* Store assigned IP in client entry for packet forwarding;
+             * leases go once the reply is out (server_handle_init()), so
+             * a failed handshake keeps them (#81) */
             server_assign_ip(entry, ip_be);
             /* Rekeys repeat the CONFIG: log new assignments only. A live
              * client's new address is only pending until it confirms the
@@ -835,7 +1192,8 @@ void server_revalidate_keys(void)
                     "Ended session of client %s: its key is no longer "
                     "allowed after the config reload",
                     c->client_id[0] != '\0' ? c->client_id : "(manual)");
-        server_drop_entry(c);
+        /* It may still run: its address stays kept (#81) */
+        server_end_client(c);
     }
 }
 
@@ -1207,7 +1565,8 @@ static void server_adopt_tcp(server_client_t *entry, int fd)
 
 /* The client entry a handshake belongs to (created or reused), or NULL if
  * it must be rejected. *fresh is set when a new slot was taken. */
-static server_client_t *server_entry_for(const char *client_id,
+static server_client_t *server_entry_for(const uint8_t *key,
+                                         const char *client_id,
                                          const char *local_ip,
                                          uint8_t auto_request,
                                          const struct sockaddr_in *from,
@@ -1278,16 +1637,35 @@ static server_client_t *server_entry_for(const char *client_id,
                                                   : "(manual)");
             return NULL;
         }
-        /* The address may be in use by a live session whose address came
-         * from [defaults] or the auto pool, which profile_owner_of_ip()
-         * cannot see. Do not hand it to a different keyed client. */
-        if (by_ip != NULL && by_ip != by_addr &&
-            strcasecmp(by_ip->client_id, client_id) != 0 &&
-            keystore_has_owner(by_ip->client_id)) {
+        /* A live client has the address: only the same manual client may
+         * take its entry over (a restart, a new port or TCP connection):
+         * same ID or none, same key. Never an auto client's (#81), whose
+         * address came from the pool, nor another client's. */
+        if (by_ip != NULL &&
+            (by_ip->auto_client ||
+             (by_ip != by_addr &&
+              (strcasecmp(by_ip->client_id, client_id) != 0 ||
+               key == NULL || memcmp(by_ip->psk_key, key, 32) != 0)))) {
             log_peer(LOG_WARNING,
                      "Rejected handshake from %s: address %s is in use "
-                     "by client %s", peer, local_ip, by_ip->client_id);
+                     "by client %s", peer, local_ip,
+                     by_ip->client_id[0] != '\0' ? by_ip->client_id
+                                                  : "(manual)");
             return NULL;
+        }
+        /* An auto client that is gone keeps its address for a while
+         * (#81): it may still be using it */
+        {
+            const server_lease_t *l = server_lease_by_ip(addr.s_addr);
+
+            if (l != NULL && strcasecmp(l->id, client_id) != 0 &&
+                difftime(g_now, l->since) < (double)SERVER_LEASE_MIN) {
+                log_peer(LOG_WARNING,
+                         "Rejected handshake from %s: address %s is kept "
+                         "for client %s (gone for %.0f s)", peer, local_ip,
+                         l->id, difftime(g_now, l->since));
+                return NULL;
+            }
         }
         if (by_ip != NULL && (by_addr == NULL || by_addr == by_ip ||
                               (by_addr->tcp_fd >= 0 && !by_addr->registered))) {
@@ -1520,8 +1898,35 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         }
     }
 
-    entry = server_entry_for(client_id, local_ip, auto_request, from, fd,
-                             &fresh);
+    /* Never one address for two live clients (#81): the profile address
+     * of this client is held by another one (a reload gave it to this
+     * profile; server_revalidate_profile_addresses() ended that session
+     * unless it is a manual client). Checked before server_entry_for(),
+     * which would take this client's new TCP connection over. */
+    if (auto_request) {
+        camex_profile_t profile;
+        char ip[16], mask[16];
+        struct in_addr a;
+        const server_client_t *holder;
+
+        if (config_db_lookup_profile(client_id, &profile) == 0 &&
+            profile.local_cidr[0] != '\0' &&
+            parse_local_cidr(profile.local_cidr, ip, sizeof(ip), mask,
+                             sizeof(mask)) == 0 &&
+            inet_pton(AF_INET, ip, &a) == 1 &&
+            (holder = server_find_by_ip(a.s_addr)) != NULL &&
+            strcasecmp(holder->client_id, client_id) != 0) {
+            log_peer(LOG_WARNING, "Rejected handshake from %s: the address "
+                     "%s of client %s is in use by client %s", peer, ip,
+                     client_id, holder->client_id[0] != '\0'
+                                    ? holder->client_id : "(manual)");
+            noise_wipe(&hs);
+            return -1;
+        }
+    }
+
+    entry = server_entry_for(used_key, client_id, local_ip, auto_request,
+                             from, fd, &fresh);
     if (entry == NULL) {
         noise_wipe(&hs);
         return -1;
@@ -1633,6 +2038,15 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
                                 V2_RESP_HDR + resp_len) < 0) {
         goto fail;
     }
+    /* The client has its address: no lease is kept for its ID, nor for
+     * its addresses under another ID (#81) */
+    if (auto_request) {
+        server_lease_drop(server_lease_by_id(client_id));
+        server_lease_drop(server_lease_by_ip(entry->ip_be));
+        /* A pending address keeps its old lease until the client
+         * confirms it (server_handle_data()): an offer that expires
+         * gives nothing away */
+    }
     if (first) {
         if (auto_request) {
             log_message(LOG_INFO, "Registered auto client %s", client_id);
@@ -1734,6 +2148,7 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
 
             server_set_ip(entry, entry->pending_ip_be);
             entry->pending_ip_be = 0U;
+            server_lease_drop(server_lease_by_ip(entry->ip_be));   /* #81 */
             ip_text(ntohl(entry->ip_be), ip, sizeof(ip));
             log_message(LOG_INFO, "Client %s moved to %s",
                         entry->client_id, ip);

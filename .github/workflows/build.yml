@@ -117,6 +117,10 @@ jobs:
         run: ./docker/test-e2e-fair-budget.sh
         if: matrix.target == 'x86_64'
 
+      - name: E2E test (no address for two clients, issue #81)
+        run: ./docker/test-e2e-multi-client.sh
+        if: matrix.target == 'x86_64'
+
       - name: Cache toolchain
         uses: actions/cache@v6
         with:

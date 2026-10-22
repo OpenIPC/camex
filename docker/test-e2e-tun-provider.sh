@@ -45,6 +45,8 @@ cp "$REPO_DIR"/src/*.c "$REPO_DIR"/src/*.h "$BUILD_CTX/src/"
 cp "$REPO_DIR/tests/android/test_tun_provider.c" "$BUILD_CTX/test/"
 cat > "$BUILD_CTX/Dockerfile" <<'DOCKERFILE'
 FROM ubuntu:24.04
+# New clients right after the server starts: no start hold (#81)
+ENV CAMEX_POOL_HOLD=0
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
         gcc libc6-dev iproute2 iputils-ping >/dev/null && rm -rf /var/lib/apt/lists/*
 COPY src /b/src

@@ -27,6 +27,11 @@
  * each costs X25519 operations */
 #define SERVER_HANDSHAKES_PER_SEC 200U
 
+/* Seconds after the start in which the auto pool gives clients only the
+ * address they ask for, their previous one (#81): returning clients come
+ * back first, so no address is handed out twice */
+#define SERVER_POOL_HOLD 60
+
 /* Keys tried per second, all handshakes together (#75): each handshake
  * tries the keystore in turn (the global key first, not counted; a live
  * client's own key before the others, #78) until one opens it. The bound
@@ -99,6 +104,9 @@ server_client_t *server_find_by_addr(const struct sockaddr_in *addr);
 server_client_t *server_alloc_client(void);
 
 /* Close the entry's TCP connection (if any), wipe its keys, free it */
+/* End an entry whose client may still be alive: an auto client's address
+ * stays leased to its ID (#81). server_drop_entry() keeps no lease. */
+void server_end_client(server_client_t *entry);
 void server_drop_entry(server_client_t *entry);
 
 /* Expire stale clients and old sessions */
@@ -111,6 +119,10 @@ void server_revalidate_keys(void);
 /* After a config reload: end sessions of auto clients whose ID is not in
  * the file when allow_unknown_clients = no (#15). */
 void server_revalidate_unknown_clients(void);
+
+/* After a reload: end sessions of clients whose address is now another
+ * client's [client ID] local_cidr (#81) */
+void server_revalidate_profile_addresses(void);
 
 /* Forward an IP packet from one client to another (or local TUN) */
 int server_forward_packet(const uint8_t *packet, size_t len,

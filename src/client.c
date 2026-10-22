@@ -266,11 +266,15 @@ int client_wait_for_config(void)
 {
     uint8_t buffer[V2_RESP_HDR + NOISE_MSG2_OVERHEAD + CAMEX_CONTROL_MAX];
     fd_set readset;
+    fd_set writeset;
     struct timeval tv;
     int ready;
+    int maxfd;
     unsigned int waited;
+    time_t wait_start;
 
     log_message(LOG_INFO, "Waiting for auto-config from server...");
+    wait_start = time(NULL);
 
     for (waited = 0U; waited < 300U; ) {
         if (!running) {
@@ -284,11 +288,18 @@ int client_wait_for_config(void)
         }
 
         FD_ZERO(&readset);
+        FD_ZERO(&writeset);
         FD_SET(net_fd, &readset);
+        /* A TCP INIT the socket could not take at once is sent here, as
+         * in the main loop (a handshake after a reconnect included) */
+        maxfd = net_tcp_pending_fdset(&writeset, net_fd);
         tv.tv_sec = 1;
         tv.tv_usec = 0;
 
-        ready = select(net_fd + 1, &readset, NULL, NULL, &tv);
+        ready = select(maxfd + 1, &readset, &writeset, NULL, &tv);
+        if (ready > 0) {
+            net_tcp_flush_writable(&writeset);
+        }
         if (ready < 0) {
             if (errno == EINTR) {
                 continue;
@@ -310,8 +321,38 @@ int client_wait_for_config(void)
             int rc = net_tcp_recv_frame(net_fd, buffer, sizeof(buffer),
                                         &frame_len, &client_recv_state);
             if (rc < 0) {
-                log_message(LOG_ERR, "Connection to the server closed");
-                return -1;
+                /* Closed before a CONFIG: the server had no address yet
+                 * (its pool full, or it waits for returning clients after
+                 * a restart, #81). Connect again within the same wait. */
+                log_message(LOG_WARNING, "Connection to the server closed "
+                            "before its config; reconnecting");
+                for (;;) {
+                    unsigned int step;
+
+                    net_close();
+                    memset(&client_recv_state, 0, sizeof(client_recv_state));
+                    for (step = 0U; step < 2U && running; ++step) {
+                        struct timeval pause = { 1, 0 };
+
+                        select(0, NULL, NULL, NULL, &pause);
+                    }
+                    /* The whole wait, connection attempts included */
+                    if (!running ||
+                        difftime(time(NULL), wait_start) >= 300.0) {
+                        return -1;
+                    }
+                    if (client_socket_create(current_config.server_host,
+                                             current_config.port,
+                                             current_config.bind_dev) != 0) {
+                        continue;
+                    }
+                    g_now = time(NULL);
+                    if (client_start_handshake() == 0) {
+                        break;
+                    }
+                }
+                waited = (unsigned int)difftime(time(NULL), wait_start);
+                continue;
             }
             if (rc != 0) {
                 continue;

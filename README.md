@@ -306,9 +306,10 @@ sudo ./camex --mode server --port 5800 --config /etc/camex/camex.conf
 Auto-mode clients get their addresses from the config file. A client whose ID
 has no `[client ID]` block gets `[defaults]`, or, when no address is configured,
 one from the auto pool, `10.200.0.2`–`10.200.0.254` by default (addresses in use
-and those of `[client ID]` blocks are skipped; addresses of expired clients are
-reused). To serve only the IDs listed in the file, set `allow_unknown_clients=no`
-in the `[server]` block.
+and those of `[client ID]` blocks are skipped; a client that is gone keeps its
+address under its ID and gets it back, see
+[Denial of service limits](#denial-of-service-limits)). To serve only the IDs
+listed in the file, set `allow_unknown_clients=no` in the `[server]` block.
 
 After a change to the file, `kill -HUP` the server. A running auto-mode client
 picks up a changed address, gateway, MTU or routes with its next handshake (a
@@ -430,10 +431,22 @@ protects before exposing it to an untrusted network.
 - Log messages that a peer can trigger (dropped packets, rejected
   registrations) are rate-limited; the number suppressed is logged.
 - The auto pool hands out only client addresses of its network (by default
-  `10.200.0.2`–`.254`) and never gives one address to two live clients (an expired client's address is handed out again; a client that
-  reconnects, also after a server restart, gets its previous address back while
-  it is free);
-  `allow_unknown_clients=no` serves only auto-mode IDs listed in the config file
+  `10.200.0.2`–`.254`) and never gives one address to two clients (#81):
+  - when a client's session ends (it went silent for 120 s, its TCP connection
+    closed, its slot was needed), its address stays leased to its ID: no other
+    client gets it while the pool has other free addresses, and never within 12
+    minutes; the client gets it back when it returns;
+  - for 60 s after the server starts, clients get only the address they ask for
+    (their previous one), so returning clients come back before new clients take
+    addresses; a new client waits and retries;
+  - a reload that gives a live client's address to a `[client ID]` `local_cidr`
+    ends that client's session (it comes back with another address), and the
+    profile's client is refused while another client still has the address;
+  - a manual client cannot claim a live client's address (only the same manual
+    client, with the same ID and key, can take its entry over);
+  - this holds within one server: two servers (say a UDP and a TCP one) do not
+    know each other's clients, so give each its own `auto_pool=` network.
+- `allow_unknown_clients=no` serves only auto-mode IDs listed in the config file
   (manual clients are bound by their key and address, see [Notes](#notes)).
 
 ### Recommended deployment
