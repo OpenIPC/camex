@@ -15,6 +15,8 @@
 # 8. A reload that gives a live client's address to a [client ID] profile
 #    ends that client's session; it comes back with another address.
 # 9. With all slots taken, the evicted client's address stays leased.
+# 10. A new TCP client that comes during the start hold reconnects until
+#    it gets an address.
 #
 # Usage: ./test-e2e-multi-client.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
@@ -200,6 +202,13 @@ sleep 6
 check $? "a full pool does not hand out its address ($s_ip: $(holders "$s_ip" | tr '\n' ' '))"
 docker logs "$P-srv" 2>&1 | grep -q "Auto pool 10.200.0.0/29 is full"
 check $? "the fifth new client finds the pool full"
+docker run -d --name "$P-MANL" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD "$IMAGE" \
+    --mode client --local-cidr "$s_ip/29" --gateway-ip 10.200.0.1 --server-host "$P-srv" \
+    --port 5800 --server-pubkey "$SERVER_PUBKEY" --psk "$PSK" >/dev/null
+sleep 4
+docker logs "$P-srv" 2>&1 | grep -q "address $s_ip is kept for client SIL"
+check $? "a manual client cannot claim the kept address"
+docker rm -f "$P-MANL" >/dev/null
 back=1
 for _ in $(seq 1 50); do
     docker logs "$P-srv" 2>&1 | grep -q "Registered auto client SIL" &&
@@ -263,6 +272,17 @@ client E3
 e3=$(wait_addr E3 20)
 [ -n "$e3" ] && [ "$e3" != "$e1" ]
 check $? "the new client does not get the evicted client's address ($e1 -> $e3)"
+
+echo "== 10. a new TCP client during the start hold"
+reset
+docker run -d --name "$P-srv" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    -e CAMEX_POOL_HOLD=15 "$IMAGE" --mode server --port 5800 --transport tcp \
+    --local-cidr 10.200.0.1/24 $SERVER_KEY_ARGS --psk "$PSK" >/dev/null
+sleep 1
+client NEWT --transport tcp
+t_ip=$(wait_addr NEWT 45)
+[ -n "$t_ip" ] && docker exec "$P-srv" ping -c 2 -W 2 "$t_ip" >/dev/null 2>&1
+check $? "it reconnects and gets an address after the hold (${t_ip:--})"
 
 if [ "$FAILS" -ne 0 ]; then
     echo "FAIL: $FAILS check(s) failed"

@@ -1599,14 +1599,31 @@ static server_client_t *server_entry_for(const uint8_t *key,
          * take its entry over (a restart, a new port or TCP connection):
          * same ID or none, same key. Never an auto client's (#81), whose
          * address came from the pool, nor another client's. */
-        if (by_ip != NULL && by_ip != by_addr &&
+        if (by_ip != NULL &&
             (by_ip->auto_client ||
-             strcasecmp(by_ip->client_id, client_id) != 0 ||
-             key == NULL || memcmp(by_ip->psk_key, key, 32) != 0)) {
+             (by_ip != by_addr &&
+              (strcasecmp(by_ip->client_id, client_id) != 0 ||
+               key == NULL || memcmp(by_ip->psk_key, key, 32) != 0)))) {
             log_peer(LOG_WARNING,
                      "Rejected handshake from %s: address %s is in use "
-                     "by client %s", peer, local_ip, by_ip->client_id);
+                     "by client %s", peer, local_ip,
+                     by_ip->client_id[0] != '\0' ? by_ip->client_id
+                                                  : "(manual)");
             return NULL;
+        }
+        /* An auto client that is gone keeps its address for a while
+         * (#81): it may still be using it */
+        {
+            const server_lease_t *l = server_lease_by_ip(addr.s_addr);
+
+            if (l != NULL && strcasecmp(l->id, client_id) != 0 &&
+                difftime(g_now, l->since) < (double)SERVER_LEASE_MIN) {
+                log_peer(LOG_WARNING,
+                         "Rejected handshake from %s: address %s is kept "
+                         "for client %s (gone for %.0f s)", peer, local_ip,
+                         l->id, difftime(g_now, l->since));
+                return NULL;
+            }
         }
         if (by_ip != NULL && (by_addr == NULL || by_addr == by_ip ||
                               (by_addr->tcp_fd >= 0 && !by_addr->registered))) {
@@ -1839,6 +1856,33 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         }
     }
 
+    /* Never one address for two live clients (#81): the profile address
+     * of this client is held by another one (a reload gave it to this
+     * profile; server_revalidate_profile_addresses() ended that session
+     * unless it is a manual client). Checked before server_entry_for(),
+     * which would take this client's new TCP connection over. */
+    if (auto_request) {
+        camex_profile_t profile;
+        char ip[16], mask[16];
+        struct in_addr a;
+        const server_client_t *holder;
+
+        if (config_db_lookup_profile(client_id, &profile) == 0 &&
+            profile.local_cidr[0] != '\0' &&
+            parse_local_cidr(profile.local_cidr, ip, sizeof(ip), mask,
+                             sizeof(mask)) == 0 &&
+            inet_pton(AF_INET, ip, &a) == 1 &&
+            (holder = server_find_by_ip(a.s_addr)) != NULL &&
+            strcasecmp(holder->client_id, client_id) != 0) {
+            log_peer(LOG_WARNING, "Rejected handshake from %s: the address "
+                     "%s of client %s is in use by client %s", peer, ip,
+                     client_id, holder->client_id[0] != '\0'
+                                    ? holder->client_id : "(manual)");
+            noise_wipe(&hs);
+            return -1;
+        }
+    }
+
     entry = server_entry_for(used_key, client_id, local_ip, auto_request,
                              from, fd, &fresh);
     if (entry == NULL) {
@@ -1872,22 +1916,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
                                  mask, sizeof(mask)) == 0 &&
                 inet_pton(AF_INET, ip, &a) == 1) {
                 uint32_t offered = entry->pending_ip_be;
-                const server_client_t *holder = server_find_by_ip(a.s_addr);
 
-                /* Never one address for two live clients (#81): another
-                 * client still has it (a reload gave it to this profile;
-                 * server_revalidate_profile_addresses() ended that
-                 * session unless it is a manual client) */
-                if (holder != NULL && holder != entry) {
-                    log_peer(LOG_WARNING,
-                             "Rejected handshake from %s: the address %s "
-                             "of client %s is in use by client %s", peer,
-                             ip, client_id,
-                             holder->client_id[0] != '\0' ? holder->client_id
-                                                          : "(manual)");
-                    noise_wipe(&hs);
-                    goto fail;
-                }
                 server_assign_ip(entry, a.s_addr);
                 /* A live client's changed profile address (#77) */
                 if (entry->pending_ip_be == a.s_addr && offered != a.s_addr) {
@@ -1972,7 +2001,9 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     if (auto_request) {
         server_lease_drop(server_lease_by_id(client_id));
         server_lease_drop(server_lease_by_ip(entry->ip_be));
-        server_lease_drop(server_lease_by_ip(entry->pending_ip_be));
+        /* A pending address keeps its old lease until the client
+         * confirms it (server_handle_data()): an offer that expires
+         * gives nothing away */
     }
     if (first) {
         if (auto_request) {
@@ -2075,6 +2106,7 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
 
             server_set_ip(entry, entry->pending_ip_be);
             entry->pending_ip_be = 0U;
+            server_lease_drop(server_lease_by_ip(entry->ip_be));   /* #81 */
             ip_text(ntohl(entry->ip_be), ip, sizeof(ip));
             log_message(LOG_INFO, "Client %s moved to %s",
                         entry->client_id, ip);

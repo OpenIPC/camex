@@ -310,8 +310,36 @@ int client_wait_for_config(void)
             int rc = net_tcp_recv_frame(net_fd, buffer, sizeof(buffer),
                                         &frame_len, &client_recv_state);
             if (rc < 0) {
-                log_message(LOG_ERR, "Connection to the server closed");
-                return -1;
+                /* Closed before a CONFIG: the server had no address yet
+                 * (its pool full, or it waits for returning clients after
+                 * a restart, #81). Connect again within the same wait. */
+                log_message(LOG_WARNING, "Connection to the server closed "
+                            "before its config; reconnecting");
+                net_close();
+                memset(&client_recv_state, 0, sizeof(client_recv_state));
+                for (;;) {
+                    unsigned int step;
+
+                    for (step = 0U; step < 2U && running; ++step) {
+                        struct timeval pause = { 1, 0 };
+
+                        select(0, NULL, NULL, NULL, &pause);
+                    }
+                    waited += 2U;
+                    if (!running || waited >= 300U) {
+                        return -1;
+                    }
+                    if (client_socket_create(current_config.server_host,
+                                             current_config.port,
+                                             current_config.bind_dev) == 0) {
+                        break;
+                    }
+                }
+                g_now = time(NULL);
+                if (client_start_handshake() != 0) {
+                    return -1;
+                }
+                continue;
             }
             if (rc != 0) {
                 continue;

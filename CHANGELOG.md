@@ -24,6 +24,9 @@ release, rebuilt from every push to `master`; this file is the change history.
   - a manual client with the global key took over a live auto client's entry and
     address. It is now refused; only the same manual client (same ID, same key) takes
     its entry over.
+- Client: a TCP client whose connection the server closes before its first CONFIG
+  (no address yet: the start hold, a full pool) reconnects and retries within its
+  wait instead of exiting.
 - This holds within one server: two servers (a UDP and a TCP one, say) do not know
   each other's clients and need different `auto_pool=` networks (README).
 - Tests: `test-e2e-multi-client.sh` runs real auto clients through restarts, expiry,
