@@ -269,8 +269,10 @@ int client_wait_for_config(void)
     struct timeval tv;
     int ready;
     unsigned int waited;
+    time_t wait_start;
 
     log_message(LOG_INFO, "Waiting for auto-config from server...");
+    wait_start = time(NULL);
 
     for (waited = 0U; waited < 300U; ) {
         if (!running) {
@@ -315,30 +317,32 @@ int client_wait_for_config(void)
                  * a restart, #81). Connect again within the same wait. */
                 log_message(LOG_WARNING, "Connection to the server closed "
                             "before its config; reconnecting");
-                net_close();
-                memset(&client_recv_state, 0, sizeof(client_recv_state));
                 for (;;) {
                     unsigned int step;
 
+                    net_close();
+                    memset(&client_recv_state, 0, sizeof(client_recv_state));
                     for (step = 0U; step < 2U && running; ++step) {
                         struct timeval pause = { 1, 0 };
 
                         select(0, NULL, NULL, NULL, &pause);
                     }
-                    waited += 2U;
-                    if (!running || waited >= 300U) {
+                    /* The whole wait, connection attempts included */
+                    if (!running ||
+                        difftime(time(NULL), wait_start) >= 300.0) {
                         return -1;
                     }
                     if (client_socket_create(current_config.server_host,
                                              current_config.port,
-                                             current_config.bind_dev) == 0) {
+                                             current_config.bind_dev) != 0) {
+                        continue;
+                    }
+                    g_now = time(NULL);
+                    if (client_start_handshake() == 0) {
                         break;
                     }
                 }
-                g_now = time(NULL);
-                if (client_start_handshake() != 0) {
-                    return -1;
-                }
+                waited = (unsigned int)difftime(time(NULL), wait_start);
                 continue;
             }
             if (rc != 0) {

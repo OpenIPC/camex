@@ -140,6 +140,8 @@ typedef struct {
     char id[CAMEX_CLIENT_ID_LEN];
     uint32_t ip_be;        /* 0 = unused */
     time_t since;
+    uint8_t prev;          /* the address of its previous session: kept
+                            * for it, never handed back as its address */
 } server_lease_t;
 
 static server_lease_t *server_leases = NULL;
@@ -147,6 +149,8 @@ static size_t server_lease_cap = 0U;
 static slotidx_t idx_lease_ip;
 static slotidx_t idx_lease_id;
 static int lease_idx_ok = 0;
+static size_t server_lease_used = 0U;   /* leases in the table */
+static size_t server_lease_next = 0U;   /* where a free one is looked for */
 static time_t server_started = 0;   /* for the pool's start hold (#81) */
 
 void server_check_pool(const char *server_cidr)
@@ -255,6 +259,7 @@ static int match_lease_ip(uint32_t slot, const void *key)
 static int match_lease_id(uint32_t slot, const void *key)
 {
     return slot < server_lease_cap && server_leases[slot].ip_be != 0U &&
+           !server_leases[slot].prev &&
            strcasecmp(server_leases[slot].id, (const char *)key) == 0;
 }
 
@@ -321,8 +326,9 @@ static server_lease_t *server_lease_by_id(const char *client_id)
 
 static void server_lease_drop(server_lease_t *l)
 {
-    if (l != NULL) {
+    if (l != NULL && l->ip_be != 0U) {
         memset(l, 0, sizeof(*l));   /* its index entries go stale */
+        server_lease_used--;
     }
 }
 
@@ -335,25 +341,39 @@ static int server_lease_allows(uint32_t ip_be, const char *client_id)
                          strcasecmp(l->id, client_id) == 0);
 }
 
-static void server_lease_add(const char *client_id, uint32_t ip_be)
+/* prev: the address of the client's previous session, kept as well */
+static void server_lease_add(const char *client_id, uint32_t ip_be,
+                             int prev)
 {
-    server_lease_t *l;
+    server_lease_t *l = NULL;
     size_t i;
 
     if (server_lease_cap == 0U || ip_be == 0U || client_id == NULL ||
         client_id[0] == '\0') {
         return;
     }
-    server_lease_drop(server_lease_by_id(client_id));
+    if (!prev) {
+        server_lease_drop(server_lease_by_id(client_id));
+    }
     server_lease_drop(server_lease_by_ip(ip_be));
-    l = NULL;
-    for (i = 0U; i < server_lease_cap; ++i) {
-        if (server_leases[i].ip_be == 0U) {
-            l = &server_leases[i];
-            break;
+    if (server_lease_used < server_lease_cap) {
+        /* A free one, from a cursor: many clients ending at once (an
+         * outage) cost one step each, not a scan each */
+        for (i = 0U; i < server_lease_cap; ++i) {
+            size_t k = (server_lease_next + i) % server_lease_cap;
+
+            if (server_leases[k].ip_be == 0U) {
+                l = &server_leases[k];
+                server_lease_next = (k + 1U) % server_lease_cap;
+                break;
+            }
         }
-        if (l == NULL || server_leases[i].since < l->since) {
-            l = &server_leases[i];   /* the oldest, if none is free */
+    }
+    if (l == NULL) {
+        for (i = 0U; i < server_lease_cap; ++i) {
+            if (l == NULL || server_leases[i].since < l->since) {
+                l = &server_leases[i];   /* the oldest */
+            }
         }
     }
     /* All taken and the oldest is still young: grow the table, up to the
@@ -373,6 +393,7 @@ static void server_lease_add(const char *client_id, uint32_t ip_be)
             memset(grown + server_lease_cap, 0,
                    (cap - server_lease_cap) * sizeof(*grown));
             l = grown + server_lease_cap;
+            server_lease_next = server_lease_cap + 1U;
             server_leases = grown;
             server_lease_cap = cap;
             lease_idx_ok = 0;   /* rebuilt below for the new size */
@@ -385,9 +406,13 @@ static void server_lease_add(const char *client_id, uint32_t ip_be)
                         ip, l->id, difftime(g_now, l->since));
         }
     }
+    if (l->ip_be == 0U) {
+        server_lease_used++;
+    }
     snprintf(l->id, sizeof(l->id), "%s", client_id);
     l->ip_be = ip_be;
     l->since = g_now != 0 ? g_now : time(NULL);
+    l->prev = prev ? 1U : 0U;
     if (!lease_idx_ok ||
         slotidx_crowded(&idx_lease_ip, server_lease_cap) ||
         slotidx_crowded(&idx_lease_id, server_lease_cap) ||
@@ -568,6 +593,8 @@ int server_clients_init(size_t count)
     /* One lease per slot (#81) */
     server_leases = calloc(count, sizeof(*server_leases));
     server_lease_cap = server_leases != NULL ? count : 0U;
+    server_lease_used = 0U;
+    server_lease_next = 0U;
     server_lease_index_rebuild();
     server_started = time(NULL);
     return 0;
@@ -693,6 +720,11 @@ server_client_t *server_alloc_client(void)
         }
     }
 
+    /* Just started: the clients now coming back must not be evicted for
+     * new ones that get no address yet (#81) */
+    if (server_pool_holding()) {
+        return NULL;
+    }
     /* Full: evict the client that was quiet longest */
     for (i = 0; i < server_max_clients; ++i) {
         if (!oldest_found || server_clients[i].last_seen < oldest_seen) {
@@ -714,9 +746,17 @@ void server_end_client(server_client_t *entry)
         return;
     }
     if (entry->active && entry->registered && entry->auto_client &&
-        entry->client_id[0] != '\0' && pool_has(entry->ip_be) &&
-        profile_owner_of_ip(entry->ip_be) == NULL) {
-        server_lease_add(entry->client_id, entry->ip_be);
+        entry->client_id[0] != '\0') {
+        if (pool_has(entry->ip_be) &&
+            profile_owner_of_ip(entry->ip_be) == NULL) {
+            server_lease_add(entry->client_id, entry->ip_be, 0);
+        }
+        /* Its previous session may still send from the old address */
+        if (entry->prev.valid && entry->prev_ip_be != entry->ip_be &&
+            pool_has(entry->prev_ip_be) &&
+            profile_owner_of_ip(entry->prev_ip_be) == NULL) {
+            server_lease_add(entry->client_id, entry->prev_ip_be, 1);
+        }
     }
     server_drop_entry(entry);
 }
@@ -909,7 +949,8 @@ void server_revalidate_unknown_clients(void)
         log_message(LOG_NOTICE,
                     "Ended session of client %s: unknown client ID "
                     "(allow_unknown_clients = no)", c->client_id);
-        server_drop_entry(c);
+        /* It may still run: its address stays kept (#81) */
+        server_end_client(c);
     }
 }
 
@@ -1151,7 +1192,8 @@ void server_revalidate_keys(void)
                     "Ended session of client %s: its key is no longer "
                     "allowed after the config reload",
                     c->client_id[0] != '\0' ? c->client_id : "(manual)");
-        server_drop_entry(c);
+        /* It may still run: its address stays kept (#81) */
+        server_end_client(c);
     }
 }
 
