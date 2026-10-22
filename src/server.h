@@ -56,6 +56,8 @@ typedef struct {
     uint8_t psk_key[32];  /* key of the last handshake (for reloads) */
     uint8_t hs_ts[V2_TIMESTAMP_LEN];  /* its timestamp: a live session
                                        * takes only newer ones */
+    time_t hs_window;     /* INITs from its address this second, at most */
+    uint8_t hs_count;     /* SERVER_KNOWN_PER_SEC as a known source (#78) */
     session_t cur;        /* current session: the server sends on it */
     session_t next;       /* from the latest handshake: receives only, and
                            * becomes cur with the client's first packet on

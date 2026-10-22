@@ -906,19 +906,25 @@ static int server_register_allowed(const uint8_t *key, char *client_id,
  * client knows the server's public key, so the per-second budgets are
  * shared out by source:
  *  - a known source (the address and port of a client that sent
- *    authenticated data within CAMEX_CLIENT_TIMEOUT, as a rekey does) may
- *    use all of them, and its own key is tried first;
- *  - other sources together use at most SERVER_UNKNOWN_SHARE of each, so
+ *    authenticated data within CAMEX_CLIENT_TIMEOUT, as a rekey does) has
+ *    its own key tried first; that trial and up to SERVER_KNOWN_PER_SEC of
+ *    its INITs a second count only against the whole budgets. Anything
+ *    more (further INITs, other keys) counts as from an unknown source, so
+ *    a client, or a sender that forges its address, cannot drain them;
+ *  - unknown sources together use at most SERVER_UNKNOWN_SHARE of each, so
  *    a flood from unknown sources does not stop live clients' rekeys;
  *  - one source address at most SERVER_SRC_SHARE, one /24 at most
  *    SERVER_NET_SHARE of each; the key trial shares are at least one and
  *    two keystores' worth, so a handshake can always reach every key.
- * Sources of the current second are kept in a small table; when it is
- * full, the sources not in it share one entry per kind.
+ * Sources of the current second sit in a small table, placed by a keyed
+ * hash, so a sender cannot choose addresses that crowd out another one;
+ * a source that finds no free slot (hundreds of sources in one second) is
+ * held by the unknown sources' share only.
  */
 #define SERVER_UNKNOWN_SHARE(n) ((n) / 4U * 3U)
 #define SERVER_SRC_SHARE(n)     ((n) / 8U)
 #define SERVER_NET_SHARE(n)     ((n) / 4U)
+#define SERVER_KNOWN_PER_SEC 4U
 #define SERVER_SRC_SLOTS  512U
 #define SERVER_SRC_PROBES 8U
 
@@ -931,12 +937,14 @@ typedef struct {
 } server_share_t;
 
 typedef struct {
-    server_share_t *addr;  /* both NULL for a known source */
+    server_share_t *addr;  /* NULL: no slot this second */
     server_share_t *net;
+    server_client_t *known;   /* the live client at this source, or NULL */
 } server_source_t;
 
 static server_share_t server_shares[SERVER_SRC_SLOTS];
-static server_share_t server_share_rest[2];   /* addresses, /24s */
+static uint8_t server_share_key[16];
+static int server_share_key_ready = 0;
 static time_t budget_window = 0;
 static unsigned int budget_handshakes = 0U;   /* all sources */
 static unsigned int budget_unknown_handshakes = 0U;
@@ -954,15 +962,31 @@ static void server_budget_window(void)
     }
 }
 
-/* The share entry of key for this second, or the entry of those not in
- * the table */
+/* The share entry of key for this second, or NULL when its slots are
+ * taken */
 static server_share_t *server_share_of(uint32_t key, uint8_t is_net)
 {
-    uint32_t h = slotidx_hash_u32(key ^ (is_net ? 0x9e3779b9U : 0U));
+    uint8_t msg[5];
+    uint8_t hash[4];
+    uint32_t h;
     server_share_t *free_slot = NULL;
     server_share_t *s;
     uint32_t p;
 
+    if (!server_share_key_ready) {
+        /* Without randomness the placement is only predictable */
+        (void)get_random_bytes(server_share_key, sizeof(server_share_key));
+        server_share_key_ready = 1;
+    }
+    msg[0] = (uint8_t)(key >> 24);
+    msg[1] = (uint8_t)(key >> 16);
+    msg[2] = (uint8_t)(key >> 8);
+    msg[3] = (uint8_t)key;
+    msg[4] = is_net;
+    crypto_blake2b_keyed(hash, sizeof(hash), server_share_key,
+                         sizeof(server_share_key), msg, sizeof(msg));
+    h = ((uint32_t)hash[0] << 24) | ((uint32_t)hash[1] << 16) |
+        ((uint32_t)hash[2] << 8) | (uint32_t)hash[3];
     for (p = 0U; p < SERVER_SRC_PROBES; ++p) {
         s = &server_shares[(h + p) % SERVER_SRC_SLOTS];
         if (s->window != g_now) {
@@ -973,15 +997,14 @@ static server_share_t *server_share_of(uint32_t key, uint8_t is_net)
             return s;
         }
     }
-    s = free_slot != NULL ? free_slot : &server_share_rest[is_net];
-    if (s->window != g_now || s == free_slot) {
-        s->key = key;
-        s->is_net = is_net;
-        s->window = g_now;
-        s->handshakes = 0U;
-        s->trials = 0U;
+    if (free_slot != NULL) {
+        free_slot->key = key;
+        free_slot->is_net = is_net;
+        free_slot->window = g_now;
+        free_slot->handshakes = 0U;
+        free_slot->trials = 0U;
     }
-    return s;
+    return free_slot;
 }
 
 /* The live client at from, or NULL: its handshakes are rekeys */
@@ -993,17 +1016,27 @@ static server_client_t *server_known_source(const struct sockaddr_in *from)
         c->last_data == 0 || g_now - c->last_data > CAMEX_CLIENT_TIMEOUT) {
         return NULL;
     }
+    /* SERVER_KNOWN_PER_SEC INITs a second; more count as unknown */
+    if (c->hs_window != g_now) {
+        c->hs_window = g_now;
+        c->hs_count = 0U;
+    }
+    if (c->hs_count >= SERVER_KNOWN_PER_SEC) {
+        return NULL;
+    }
+    c->hs_count++;
     return c;
 }
 
-static void server_source_for(const struct sockaddr_in *from, int known,
+static void server_source_for(const struct sockaddr_in *from,
                               server_source_t *src)
 {
     uint32_t a = ntohl(from->sin_addr.s_addr);
 
     server_budget_window();
-    src->addr = known ? NULL : server_share_of(a, 0U);
-    src->net = known ? NULL : server_share_of(a & 0xFFFFFF00U, 1U);
+    src->known = server_known_source(from);
+    src->addr = server_share_of(a, 0U);
+    src->net = server_share_of(a & 0xFFFFFF00U, 1U);
 }
 
 /* One more INIT within the budgets: 0, -1 when all handshakes of this
@@ -1014,19 +1047,25 @@ static int server_handshake_budget(const server_source_t *src)
     if (budget_handshakes >= SERVER_HANDSHAKES_PER_SEC) {
         return -1;
     }
-    if (src->addr != NULL) {
+    if (src->known == NULL) {
         if (budget_unknown_handshakes >=
             SERVER_UNKNOWN_SHARE(SERVER_HANDSHAKES_PER_SEC)) {
             return -2;
         }
-        if (src->addr->handshakes >=
-                SERVER_SRC_SHARE(SERVER_HANDSHAKES_PER_SEC) ||
-            src->net->handshakes >=
-                SERVER_NET_SHARE(SERVER_HANDSHAKES_PER_SEC)) {
+        if ((src->addr != NULL &&
+             src->addr->handshakes >=
+                 SERVER_SRC_SHARE(SERVER_HANDSHAKES_PER_SEC)) ||
+            (src->net != NULL &&
+             src->net->handshakes >=
+                 SERVER_NET_SHARE(SERVER_HANDSHAKES_PER_SEC))) {
             return -3;
         }
-        src->addr->handshakes++;
-        src->net->handshakes++;
+        if (src->addr != NULL) {
+            src->addr->handshakes++;
+        }
+        if (src->net != NULL) {
+            src->net->handshakes++;
+        }
         budget_unknown_handshakes++;
     }
     budget_handshakes++;
@@ -1056,24 +1095,29 @@ static size_t server_trial_share(int is_net)
     return share > floor ? share : floor;
 }
 
-/* One more key trial within the budgets, as server_handshake_budget() */
-static int server_key_trial_budget(const server_source_t *src)
+/* One more key trial within the budgets, as server_handshake_budget();
+ * own: the trial of a known source's own key */
+static int server_key_trial_budget(const server_source_t *src, int own)
 {
     size_t limit = server_key_trials_limit();
 
     if (budget_trials >= limit) {
         return -1;
     }
-    if (src->addr != NULL) {
+    if (!own) {
         if (budget_unknown_trials >= SERVER_UNKNOWN_SHARE(limit)) {
             return -2;
         }
-        if (src->addr->trials >= server_trial_share(0) ||
-            src->net->trials >= server_trial_share(1)) {
+        if ((src->addr != NULL && src->addr->trials >= server_trial_share(0)) ||
+            (src->net != NULL && src->net->trials >= server_trial_share(1))) {
             return -3;
         }
-        src->addr->trials++;
-        src->net->trials++;
+        if (src->addr != NULL) {
+            src->addr->trials++;
+        }
+        if (src->net != NULL) {
+            src->net->trials++;
+        }
         budget_unknown_trials++;
     }
     budget_trials++;
@@ -1284,8 +1328,8 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     size_t resp_len;
     size_t i;
     size_t n;
+    size_t ahead;
     long own;
-    server_client_t *known;
     server_source_t src;
     int budget;
     int fresh = 0;
@@ -1314,8 +1358,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
             return -1;
         }
     }
-    known = server_known_source(from);
-    server_source_for(from, known != NULL, &src);
+    server_source_for(from, &src);
     budget = server_handshake_budget(&src);
     if (budget == -1) {
         log_peer(LOG_WARNING, "Dropped handshake from %s: more than %u "
@@ -1346,15 +1389,17 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     /* Any keystore key may authenticate message 1; the payload then has
      * to name a client that key belongs to (#5) */
     memset(&hs, 0, sizeof(hs));
-    /* A live client's own key goes first (#78): its rekeys cost one trial
-     * however large the keystore is */
-    own = known != NULL ? config_ks_find(known->psk_key) : -1L;
-    for (n = 0U; n < server_keystore_count + (own > 0L ? 1U : 0U); ++n) {
-        if (own > 0L) {
-            i = n == 0U ? (size_t)own : n - 1U;
-            if (n != 0U && i == (size_t)own) {
-                continue;
-            }
+    /* The global key first (entry 0 when there is one, tried free), then
+     * a live client's own key (#78): its rekeys cost one trial however
+     * large the keystore is; then the rest in turn */
+    own = src.known != NULL ? config_ks_find(src.known->psk_key) : -1L;
+    ahead = server_keystore_count > 0U &&
+            server_keystore[0].owner[0] == '\0' ? 1U : 0U;
+    for (n = 0U; n < server_keystore_count; ++n) {
+        if (own > 0L && n == ahead) {
+            i = (size_t)own;
+        } else if (own > 0L && n > ahead && n <= (size_t)own) {
+            i = n - 1U;
         } else {
             i = n;
         }
@@ -1364,7 +1409,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         /* The global key (entry 0, owner "") is always tried: clients
          * that use it are not starved by per-client key trials */
         if (i != 0U || server_keystore[i].owner[0] != '\0') {
-            budget = server_key_trial_budget(&src);
+            budget = server_key_trial_budget(&src, (long)i == own);
         } else {
             budget = 0;
         }

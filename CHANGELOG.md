@@ -12,7 +12,10 @@ release, rebuilt from every push to `master`; this file is the change history.
   keystore two such handshakes were enough. Unknown sources together now get at most
   3/4 of each budget, one address at most 1/8 and one `/24` at most 1/4 (but always
   enough to try every key once). A live client rekeying from its address keeps the
-  rest, and its own key is tried first, so its rekeys cost one key trial. The key
+  rest for up to 4 handshakes a second, and its own key is tried right after the
+  global key, so its rekeys cost one key trial; more handshakes from its address, or
+  other keys, count as from an unknown source. Sources are placed in the per-second
+  table by a keyed hash. The key
   trial budget is four times the keystore when that is above 51200 (was twice).
   Cameras behind one NAT address now (re)connect at up to 25 a second; the others
   retry.

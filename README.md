@@ -420,8 +420,8 @@ protects before exposing it to an untrusted network.
   budgets are shared out by source: unknown sources together get at most 3/4
   of each, one address at most 1/8 and one `/24` at most 1/4 (at least enough
   to try every key once). A live client rekeying from its address keeps the
-  rest and its own key is tried first, so a flood from other addresses does
-  not stop it. Cameras behind one NAT address therefore (re)connect at up to
+  rest for up to 4 handshakes a second, and its own key is tried first (after
+  the global key), so a flood from other addresses does not stop it. Cameras behind one NAT address therefore (re)connect at up to
   25 a second, for example after a power cut; the others retry.
 - Log messages that a peer can trigger (dropped packets, rejected
   registrations) are rate-limited; the number suppressed is logged.
