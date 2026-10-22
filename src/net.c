@@ -513,7 +513,14 @@ int net_tcp_send_frame_ex(int fd, const uint8_t *data, size_t len,
     }
 
     /* Try to send immediately; flush will handle EAGAIN mid-write */
-    return tcp_send_flush_pending(fd);
+    {
+        int rc = tcp_send_flush_pending(fd);
+
+        if (rc < 0 && accepted != NULL) {
+            *accepted = 0;   /* a hard error dropped it after all */
+        }
+        return rc;
+    }
 }
 
 /*

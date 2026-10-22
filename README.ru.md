@@ -329,8 +329,11 @@ sudo ./camex --mode server --port 5800 --config /etc/camex/camex.conf
 `/run/camex/camex-<transport>-<port>.sock` (`udp` или `tcp`; на macOS —
 `/var/run/camex`), с правами `0600`: пользоваться им может только пользователь
 сервера, обычно root. У нескольких серверов на одной машине (например, UDP и TCP)
-сокеты свои. `control_socket=<path>` в `[server]` или `--control <path>` меняют
-путь, `none` выключает сокет. На Windows недоступно.
+сокеты свои; у сервера с `--bind-ip` или `--bind-dev` в имени ещё и адрес или
+интерфейс (`camex-udp-192.0.2.1-5800.sock`). `control_socket=<path>` в
+`[server]` или `--control <path>` меняют путь, `none` выключает сокет;
+перезагрузка конфигурации применяет изменение и оставляет прежний сокет, если
+новый путь недоступен. На Windows недоступно.
 
 ```sh
 sudo camex --status          # клиенты всех серверов на этой машине
@@ -361,7 +364,8 @@ CAM-C  10.200.0.4       gone 6m40s
 `leases`. У клиента — `id` (`null` у ручного
 клиента без ID), `mode` (`auto` или `manual`), `key` (`global` или `own`),
 `address`, `pending` и `previous` (или `null`), `peer`, `transport`,
-`registered` (время Unix), `connected_s`, `last_packet_s` (`null` до первого
+`registered` (время Unix первого рукопожатия), `connected_s` (текущее
+подключение), `last_packet_s` (`null` до первого
 пакета данных), `last_handshake_s`,
 `handshakes`, `rx_packets`, `rx_bytes`, `tx_packets`, `tx_bytes`; у сохранённого
 адреса — `id`, `address`, `gone_s` и `previous` (`true` у адреса прошлой

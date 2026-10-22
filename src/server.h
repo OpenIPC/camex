@@ -62,6 +62,8 @@ typedef struct {
     uint8_t hs_ts[V2_TIMESTAMP_LEN];  /* its timestamp: a live session
                                        * takes only newer ones */
     time_t registered_at; /* its first accepted handshake (#82) */
+    time_t session_since; /* its current connection: the first handshake
+                           * after a (re)connect; 0 until then */
     time_t last_hs;       /* its latest accepted handshake */
     uint32_t handshakes;  /* accepted handshakes */
     uint64_t rx_packets;  /* authenticated packets from it, keepalives too */

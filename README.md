@@ -326,9 +326,11 @@ packet on the new session.
 The server listens on a local control socket, by default
 `/run/camex/camex-<transport>-<port>.sock` (`udp` or `tcp`; `/var/run/camex` on
 macOS), mode `0600`: only the server's user, normally root, can use it. Several
-servers on one host (say UDP and TCP) each have their own. `control_socket=<path>`
-in `[server]` or `--control <path>` changes it, `none` turns it off. Not on
-Windows.
+servers on one host (say UDP and TCP) each have their own; a server bound with
+`--bind-ip` or `--bind-dev` has the address or interface in the name as well
+(`camex-udp-192.0.2.1-5800.sock`). `control_socket=<path>` in `[server]` or
+`--control <path>` changes it, `none` turns it off; a reload applies a change,
+and keeps the old socket if the new path cannot be had. Not on Windows.
 
 ```sh
 sudo camex --status          # the clients of every server on this host
@@ -361,7 +363,8 @@ back when it returns.
 `clients` and `leases`. Each client has `id` (`null`
 for a manual client without one), `mode` (`auto` or `manual`), `key` (`global`
 or `own`), `address`, `pending` and `previous` (or `null`), `peer`,
-`transport`, `registered` (Unix time), `connected_s`, `last_packet_s` (`null`
+`transport`, `registered` (Unix time of its first handshake), `connected_s` (its
+current connection), `last_packet_s` (`null`
 before the first data packet),
 `last_handshake_s`, `handshakes`, `rx_packets`, `rx_bytes`, `tx_packets`,
 `tx_bytes`; each lease `id`, `address`, `gone_s` and `previous` (`true` for

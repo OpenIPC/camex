@@ -38,8 +38,22 @@
 
 void control_default_path(char *buf, size_t size, int transport, int port)
 {
-    snprintf(buf, size, "%s/camex-%s-%d.sock", CAMEX_CONTROL_DIR,
-             transport == CAMEX_TRANSPORT_TCP ? "tcp" : "udp", port);
+    const char *proto = transport == CAMEX_TRANSPORT_TCP ? "tcp" : "udp";
+    const char *ip = current_config.bind_ip;
+    const char *dev = current_config.bind_dev;
+
+    /* Servers on one port bound to other addresses or interfaces each get
+     * their own socket */
+    if (ip[0] != '\0' && strcmp(ip, "0.0.0.0") != 0) {
+        snprintf(buf, size, "%s/camex-%s-%s-%d.sock", CAMEX_CONTROL_DIR,
+                 proto, ip, port);
+    } else if (dev[0] != '\0' && strchr(dev, '/') == NULL) {
+        snprintf(buf, size, "%s/camex-%s-%s-%d.sock", CAMEX_CONTROL_DIR,
+                 proto, dev, port);
+    } else {
+        snprintf(buf, size, "%s/camex-%s-%d.sock", CAMEX_CONTROL_DIR, proto,
+                 port);
+    }
 }
 
 #ifndef _WIN32
@@ -57,6 +71,8 @@ typedef struct {
 static int control_fd = -1;
 static char control_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
 static char control_spec[sizeof(control_path)];   /* as asked: "", "none" */
+static int control_spec_ok = 0;   /* control_spec is in effect */
+static time_t control_paused_until = 0;   /* accept() failed: wait */
 static control_conn_t control_conns[CONTROL_CONNS] = {
     { -1, "", 0U, NULL, 0U, 0U, 0 }, { -1, "", 0U, NULL, 0U, 0U, 0 },
     { -1, "", 0U, NULL, 0U, 0U, 0 }, { -1, "", 0U, NULL, 0U, 0U, 0 }
@@ -98,7 +114,10 @@ static int stale_socket(const char *path, struct stat *st)
     return rc;
 }
 
-int control_open(const char *path, int transport, int port)
+/* Listen on path ("" = the default): the new socket's path and
+ * descriptor, or -1 (logged) */
+static int control_listen(const char *path, int transport, int port,
+                          char *newpath, size_t newsize, int *fd_out)
 {
     struct sockaddr_un sa;
     char dir[sizeof(control_path)];
@@ -106,25 +125,19 @@ int control_open(const char *path, int transport, int port)
     mode_t old_mask;
     int fd;
 
-    snprintf(control_spec, sizeof(control_spec), "%s",
-             path != NULL ? path : "");
-    if (path != NULL && strcmp(path, "none") == 0) {
-        return 0;
-    }
     if (path == NULL || path[0] == '\0') {
-        control_default_path(control_path, sizeof(control_path), transport,
-                             port);
-    } else if (strlen(path) >= sizeof(control_path)) {
+        control_default_path(newpath, newsize, transport, port);
+    } else if (strlen(path) >= newsize) {
         log_message(LOG_WARNING, "Control socket path too long: %s "
                     "(camex --status will not reach this server)", path);
         return -1;
     } else {
-        snprintf(control_path, sizeof(control_path), "%s", path);
+        snprintf(newpath, newsize, "%s", path);
     }
 
     /* Its directory: created when missing (CAMEX_CONTROL_DIR is on a
      * tmpfs, empty after a reboot) */
-    snprintf(dir, sizeof(dir), "%s", control_path);
+    snprintf(dir, sizeof(dir), "%s", newpath);
     slash = strrchr(dir, '/');
     if (slash != NULL && slash != dir) {
         *slash = '\0';
@@ -132,8 +145,7 @@ int control_open(const char *path, int transport, int port)
             log_message(LOG_WARNING, "Cannot create %s: %s (camex --status "
                         "will not reach this server; control_socket= sets "
                         "another path)", dir, strerror(errno));
-            control_path[0] = '\0';
-            return -1;
+                        return -1;
         }
     }
     {
@@ -141,22 +153,21 @@ int control_open(const char *path, int transport, int port)
 
         /* Only the stale socket that was checked: another server that
          * bound the path in between keeps its own */
-        if (stale_socket(control_path, &stale) &&
-            lstat(control_path, &now) == 0 && now.st_ino == stale.st_ino &&
+        if (stale_socket(newpath, &stale) &&
+            lstat(newpath, &now) == 0 && now.st_ino == stale.st_ino &&
             now.st_dev == stale.st_dev) {
-            unlink(control_path);
+            unlink(newpath);
         }
     }
 
     fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
         log_message(LOG_WARNING, "Control socket: %s", strerror(errno));
-        control_path[0] = '\0';
-        return -1;
+                return -1;
     }
     memset(&sa, 0, sizeof(sa));
     sa.sun_family = AF_UNIX;
-    snprintf(sa.sun_path, sizeof(sa.sun_path), "%s", control_path);
+    snprintf(sa.sun_path, sizeof(sa.sun_path), "%s", newpath);
     /* 0600 from the start: no moment in which others could connect */
     old_mask = umask(0177);
     if (bind(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
@@ -164,35 +175,54 @@ int control_open(const char *path, int transport, int port)
 
         umask(old_mask);
         close(fd);
-        log_message(LOG_WARNING, "Cannot listen on %s: %s%s", control_path,
+        log_message(LOG_WARNING, "Cannot listen on %s: %s%s", newpath,
                     strerror(err), err == EADDRINUSE
                         ? " (another server uses it: set control_socket=)"
                         : "");
-        control_path[0] = '\0';
-        return -1;
+                return -1;
     }
     umask(old_mask);
     /* select() watches only descriptors below FD_SETSIZE */
     if (fd >= FD_SETSIZE) {
         log_message(LOG_WARNING, "Control socket %s: descriptor %d is above "
                     "FD_SETSIZE (camex --status will not reach this server)",
-                    control_path, fd);
+                    newpath, fd);
         close(fd);
-        unlink(control_path);
-        control_path[0] = '\0';
-        return -1;
+        unlink(newpath);
+                return -1;
     }
     if (listen(fd, CONTROL_CONNS) != 0 || set_nonblock(fd) != 0) {
-        log_message(LOG_WARNING, "Control socket %s: %s", control_path,
+        log_message(LOG_WARNING, "Control socket %s: %s", newpath,
                     strerror(errno));
         close(fd);
-        unlink(control_path);
-        control_path[0] = '\0';
-        return -1;
+        unlink(newpath);
+                return -1;
+    }
+    *fd_out = fd;
+    log_message(LOG_INFO, "Control socket: %s (camex --status)",
+                newpath);
+    return 0;
+}
+
+int control_open(const char *path, int transport, int port)
+{
+    char newpath[sizeof(control_path)];
+    int fd;
+
+    snprintf(control_spec, sizeof(control_spec), "%s",
+             path != NULL ? path : "");
+    control_spec_ok = 0;
+    if (path != NULL && strcmp(path, "none") == 0) {
+        control_spec_ok = 1;
+        return 0;
+    }
+    if (control_listen(path, transport, port, newpath, sizeof(newpath),
+                       &fd) != 0) {
+        return -1;   /* not recorded: a reload with this path tries again */
     }
     control_fd = fd;
-    log_message(LOG_INFO, "Control socket: %s (camex --status)",
-                control_path);
+    memcpy(control_path, newpath, sizeof(control_path));
+    control_spec_ok = 1;
     return 0;
 }
 
@@ -223,11 +253,36 @@ void control_close(void)
 
 int control_reopen(const char *path, int transport, int port)
 {
-    if (strcmp(control_spec, path != NULL ? path : "") == 0) {
+    const char *want = path != NULL ? path : "";
+    char newpath[sizeof(control_path)];
+    int fd;
+
+    if (control_spec_ok && strcmp(control_spec, want) == 0) {
         return 0;   /* unchanged: the listener stays */
     }
+    if (strcmp(want, "none") == 0) {
+        control_close();
+        snprintf(control_spec, sizeof(control_spec), "%s", want);
+        control_spec_ok = 1;
+        log_message(LOG_INFO, "Control socket off (control_socket=none)");
+        return 0;
+    }
+    /* The new socket first: if it cannot be had, the old one stays and the
+     * next reload tries again */
+    if (control_listen(path, transport, port, newpath, sizeof(newpath),
+                       &fd) != 0) {
+        if (control_fd >= 0) {
+            log_message(LOG_WARNING, "Control socket stays at %s",
+                        control_path);
+        }
+        return -1;
+    }
     control_close();
-    return control_open(path, transport, port);
+    control_fd = fd;
+    memcpy(control_path, newpath, sizeof(control_path));
+    snprintf(control_spec, sizeof(control_spec), "%s", want);
+    control_spec_ok = 1;
+    return 0;
 }
 
 int control_fdset(fd_set *readset, fd_set *writeset, int maxfd)
@@ -237,9 +292,11 @@ int control_fdset(fd_set *readset, fd_set *writeset, int maxfd)
     if (control_fd < 0) {
         return maxfd;
     }
-    FD_SET(control_fd, readset);
-    if (control_fd > maxfd) {
-        maxfd = control_fd;
+    if (time(NULL) >= control_paused_until) {
+        FD_SET(control_fd, readset);
+        if (control_fd > maxfd) {
+            maxfd = control_fd;
+        }
     }
     for (i = 0U; i < CONTROL_CONNS; ++i) {
         control_conn_t *c = &control_conns[i];
@@ -323,6 +380,14 @@ void control_handle(const fd_set *readset, const fd_set *writeset)
             control_conn_t *c = NULL;
 
             if (fd < 0) {
+                if (errno == EINTR || errno == ECONNABORTED) {
+                    continue;
+                }
+                if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                    /* Out of descriptors, say: a pending connection would
+                     * keep the socket readable, so wait a second */
+                    control_paused_until = time(NULL) + 1;
+                }
                 break;
             }
             for (i = 0U; i < CONTROL_CONNS; ++i) {
@@ -332,6 +397,15 @@ void control_handle(const fd_set *readset, const fd_set *writeset)
                 }
             }
             /* select() watches only descriptors below FD_SETSIZE */
+#ifdef SO_NOSIGPIPE
+            {
+                /* No MSG_NOSIGNAL (macOS): a client that left must not
+                 * stop the server with SIGPIPE */
+                int one = 1;
+
+                setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+            }
+#endif
             if (c == NULL || fd >= FD_SETSIZE || set_nonblock(fd) != 0) {
                 close(fd);
                 continue;
@@ -412,6 +486,11 @@ static int control_ask(const char *path, const char *cmd, char **buf,
      * others */
     {
         struct timeval tv = { 5, 0 };
+#ifdef SO_NOSIGPIPE
+        int one = 1;
+
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#endif
 
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
@@ -430,7 +509,11 @@ static int control_ask(const char *path, const char *cmd, char **buf,
         close(fd);
         return -1;
     }
+#ifdef MSG_NOSIGNAL
+    if (send(fd, cmd, strlen(cmd), MSG_NOSIGNAL) != (ssize_t)strlen(cmd)) {
+#else
     if (send(fd, cmd, strlen(cmd), 0) != (ssize_t)strlen(cmd)) {
+#endif
         fprintf(stderr, "camex: %s: %s\n", path, strerror(errno));
         close(fd);
         return -1;

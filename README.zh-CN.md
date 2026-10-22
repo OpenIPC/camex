@@ -320,9 +320,11 @@ sudo ./camex --mode server --port 5800 --config /etc/camex/camex.conf
 
 服务器监听一个本地控制套接字，默认为 `/run/camex/camex-<transport>-<port>.sock`
 （`udp` 或 `tcp`；macOS 上为 `/var/run/camex`），权限为 `0600`：只有服务器的用户
-（通常为 root）可以使用。同一主机上的多个服务器（例如 UDP 和 TCP）各有自己的套接字。
-`[server]` 中的 `control_socket=<path>` 或 `--control <path>` 可修改路径，`none` 为
-关闭。Windows 上不可用。
+（通常为 root）可以使用。同一主机上的多个服务器（例如 UDP 和 TCP）各有自己的套接字；
+使用 `--bind-ip` 或 `--bind-dev` 的服务器，其名称中还包含地址或接口
+（`camex-udp-192.0.2.1-5800.sock`）。`[server]` 中的 `control_socket=<path>` 或
+`--control <path>` 可修改路径，`none` 为关闭；重新加载配置时生效，若新路径不可用则保留
+原套接字。Windows 上不可用。
 
 ```sh
 sudo camex --status          # 本机所有服务器的客户端
@@ -350,7 +352,7 @@ CAM-C  10.200.0.4       gone 6m40s
 `slots`（`used` 含尚未握手的 TCP 连接，以及 `max`）、`clients` 和 `leases`。每个客户端包含 `id`（无 ID 的手动
 客户端为 `null`）、`mode`（`auto` 或 `manual`）、`key`（`global` 或 `own`）、
 `address`、`pending` 和 `previous`（或 `null`）、`peer`、`transport`、`registered`
-（Unix 时间）、`connected_s`、`last_packet_s`（首个数据包之前为 `null`）、`last_handshake_s`、`handshakes`、
+（首次握手的 Unix 时间）、`connected_s`（当前连接）、`last_packet_s`（首个数据包之前为 `null`）、`last_handshake_s`、`handshakes`、
 `rx_packets`、`rx_bytes`、`tx_packets`、`tx_bytes`；每个保留地址包含 `id`、
 `address`、`gone_s` 和 `previous`（客户端上一会话的地址为 `true`）。
 

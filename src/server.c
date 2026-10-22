@@ -1597,6 +1597,7 @@ static server_client_t *server_entry_for(const uint8_t *key,
 
                 net_sockaddr_to_string(&entry->addr, old_peer,
                                        sizeof(old_peer));
+                entry->session_since = 0;   /* a new connection (#82) */
                 log_message(LOG_INFO, "Client %s reconnected: %s -> %s",
                             client_id, old_peer, peer);
             }
@@ -1678,6 +1679,7 @@ static server_client_t *server_entry_for(const uint8_t *key,
 
                 net_sockaddr_to_string(&by_ip->addr, old_peer,
                                        sizeof(old_peer));
+                by_ip->session_since = 0;   /* a new connection (#82) */
                 log_message(LOG_INFO, "Client %s reconnected: %s -> %s",
                             local_ip, old_peer, peer);
             }
@@ -2052,6 +2054,11 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     if (entry->registered_at == 0) {
         entry->registered_at = g_now;
     }
+    /* The current connection: a new one after a reconnect (server_entry_for()
+     * clears it); the counters stay those of the entry */
+    if (entry->session_since == 0) {
+        entry->session_since = g_now;
+    }
     entry->last_hs = g_now;
     entry->handshakes++;
     if (first) {
@@ -2177,7 +2184,17 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
         size_t ka_len = session_seal(&entry->cur, NULL, 0U, ka, sizeof(ka));
 
         if (ka_len > 0U) {
-            (void)server_send(entry, ka, ka_len);
+            int accepted = 0;
+
+            if (entry->tcp_fd >= 0) {
+                (void)net_tcp_send_frame_ex(entry->tcp_fd, ka, ka_len,
+                                            &accepted);
+            } else {
+                accepted = server_send(entry, ka, ka_len) == 0;
+            }
+            if (accepted) {
+                entry->tx_packets++;   /* no tunnel payload: no bytes */
+            }
         }
         return 0;
     }
@@ -2427,6 +2444,24 @@ static void status_bytes(char *buf, size_t size, uint64_t v)
     snprintf(buf, size, "%.1f %s", d, unit[u]);
 }
 
+/* A client ID for the table: control and non-ASCII bytes as '?', so an
+ * ID cannot drive the terminal (JSON escapes them instead) */
+static const char *status_id(char *buf, size_t size, const char *id)
+{
+    size_t i;
+
+    if (id[0] == '\0') {
+        return "-";
+    }
+    for (i = 0U; id[i] != '\0' && i + 1U < size; ++i) {
+        unsigned char ch = (unsigned char)id[i];
+
+        buf[i] = (ch < 0x20U || ch >= 0x7fU) ? '?' : (char)ch;
+    }
+    buf[i] = '\0';
+    return buf;
+}
+
 static const char *status_key(const server_client_t *c)
 {
     return c->client_id[0] != '\0' &&
@@ -2470,7 +2505,7 @@ char *server_status(int json, size_t *len)
         net_sockaddr_to_string(&c->addr, peer, sizeof(peer));
         w = (int)strlen(peer);
         peer_w = w > peer_w ? w : peer_w;
-        w = c->pending_ip_be != 0U ? 32 : 15;
+        w = c->pending_ip_be != 0U ? 34 : 15;   /* "a.b.c.d -> e.f.g.h" */
         addr_w = w > addr_w ? w : addr_w;
     }
     leased = server_lease_used;   /* no scan of the table (#82) */
@@ -2508,8 +2543,9 @@ char *server_status(int json, size_t *len)
     for (i = 0U; i < server_max_clients; ++i) {
         const server_client_t *c = &server_clients[i];
         char pend[16] = "", prev[16] = "";
-        double since = c->registered_at != 0
-                           ? difftime(g_now, c->registered_at) : 0.0;
+        /* The current connection; "registered" is the first one */
+        double since = c->session_since != 0
+                           ? difftime(g_now, c->session_since) : 0.0;
         /* Authenticated data (keepalives too); a handshake is not one */
         double last = c->last_data != 0 ? difftime(g_now, c->last_data)
                                         : -1.0;
@@ -2568,6 +2604,7 @@ char *server_status(int json, size_t *len)
                       (unsigned long long)c->tx_bytes);
         } else {
             char addr[40], d1[32], d2[32], d3[32], rx[24], tx[24];
+            char idbuf[CAMEX_CLIENT_ID_LEN];
 
             if (pend[0] != '\0') {
                 snprintf(addr, sizeof(addr), "%s -> %s", ip, pend);
@@ -2585,7 +2622,7 @@ char *server_status(int json, size_t *len)
             status_bytes(tx, sizeof(tx), c->tx_bytes);
             sb_printf(&b, "%-*s  %-6s  %-6s  %-*s  %-*s  %-9s  %-9s  %-9s  "
                       "%5u  %10s  %8llu  %10s  %8llu\n", id_w,
-                      c->client_id[0] != '\0' ? c->client_id : "-",
+                      status_id(idbuf, sizeof(idbuf), c->client_id),
                       c->auto_client ? "auto" : "manual", status_key(c),
                       addr_w, addr, peer_w, peer, d1, d2, d3,
                       (unsigned)c->handshakes, rx,
@@ -2622,13 +2659,15 @@ char *server_status(int json, size_t *len)
         for (i = 0U, used = 0U; i < server_lease_cap && used < leased; ++i) {
             const server_lease_t *l = &server_leases[i];
             char d[32];
+            char idbuf[CAMEX_CLIENT_ID_LEN];
 
             if (l->ip_be == 0U) {
                 continue;
             }
             ip_text(ntohl(l->ip_be), ip, sizeof(ip));
             status_dur(d, sizeof(d), difftime(g_now, l->since));
-            sb_printf(&b, "%-*s  %-15s  gone %s%s\n", id_w, l->id, ip, d,
+            sb_printf(&b, "%-*s  %-15s  gone %s%s\n", id_w,
+                      status_id(idbuf, sizeof(idbuf), l->id), ip, d,
                       l->prev ? " (its previous address)" : "");
             used++;
         }

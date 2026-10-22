@@ -11,7 +11,8 @@
 #    --json has both; --control asks one.
 # 4. A client that is gone shows as a kept address (lease, #81).
 # 5. control_socket=none: no socket.
-# 6. A reload that changes control_socket= moves the socket.
+# 6. A reload that changes control_socket= moves the socket; a path that
+#    cannot be had keeps the working one.
 #
 # Usage: ./test-e2e-status.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
@@ -171,6 +172,20 @@ docker exec "$P-srv" test -S /run/camex/moved.sock &&
     ! docker exec "$P-srv" test -e /run/camex/camex-udp-5803.sock &&
     status --control /run/camex/moved.sock | grep -q "udp port 5803"
 check $? "after the reload it answers on the new path only"
+# A path that cannot be had: the working socket stays, a later reload works
+printf '[server]\ncontrol_socket=/proc/camex/no.sock\n' > "$BUILD_CTX/mv.conf"
+docker cp "$BUILD_CTX/mv.conf" "$P-srv:/etc/mv.conf" >/dev/null
+docker exec "$P-srv" sh -c 'kill -HUP $(cat /run/mv.pid)'
+sleep 2
+status --control /run/camex/moved.sock | grep -q "udp port 5803"
+check $? "a reload to a path that cannot be had keeps the working socket"
+printf '[server]\ncontrol_socket=/run/camex/again.sock\n' > "$BUILD_CTX/mv.conf"
+docker cp "$BUILD_CTX/mv.conf" "$P-srv:/etc/mv.conf" >/dev/null
+docker exec "$P-srv" sh -c 'kill -HUP $(cat /run/mv.pid)'
+sleep 2
+status --control /run/camex/again.sock | grep -q "udp port 5803" &&
+    ! docker exec "$P-srv" test -e /run/camex/moved.sock
+check $? "the next reload moves it"
 
 if [ "$FAILS" -ne 0 ]; then
     echo "FAIL: $FAILS check(s) failed"
