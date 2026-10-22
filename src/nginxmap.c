@@ -127,8 +127,8 @@ static int parse_addr(const char *a, uint32_t *out)
     return 1;
 }
 
-/* host:port for --default: a host name or an IPv4 address, a port
- * 1..65535 */
+/* <IPv4 address>:<port> for --default: the example config proxies to the
+ * map's value without a resolver, so a host name would not resolve */
 static int valid_target(const char *t)
 {
     const char *colon = strrchr(t, ':');
@@ -147,7 +147,7 @@ static int valid_target(const char *t)
     if (colon[1] == '\0' || *end != '\0' || port < 1L || port > 65535L) {
         return 0;
     }
-    return parse_addr(host, &a) || valid_hostname(host);
+    return parse_addr(host, &a);
 }
 
 static int cmp_entry(const void *a, const void *b)

@@ -284,7 +284,7 @@ sudo ./camex \
 | `--format <fmt>`           |        | 与 `--status` 一起使用：`table`（默认）、`json`（同 `--json`）或 `nginx-map`，见[客户端前面的 nginx](#客户端前面的-nginx)                     |
 | `--domain <name>`          |        | 与 `--format nginx-map` 一起使用：客户端 ID 之后的域名                                                                                        |
 | `--upstream-port <port>`   |        | 与 `--format nginx-map` 一起使用：客户端的 Web 端口（默认 80）                                                                                |
-| `--default <host:port>`    |        | 与 `--format nginx-map` 一起使用：没有在线客户端的名称转到何处（默认无，即 nginx 的离线页面）                                                 |
+| `--default <ip:port>`      |        | 与 `--format nginx-map` 一起使用：没有在线客户端的名称转到何处（默认无，即 nginx 的离线页面）                                                 |
 | `--client-isolation`       |        | 服务器：丢弃客户端之间的数据包（或在 `[server]` 中设置 `client_isolation=yes`），见[安全模型](#安全模型)                                      |
 | `--bind-dev <iface>`       | `-d`   | 将套接字绑定到指定网络接口（`SO_BINDTODEVICE`）                                                                                               |
 | `--transport <proto>`      | `-R`   | 传输协议：`udp`（默认）或 `tcp`                                                                                                               |
@@ -384,7 +384,7 @@ map $host $camex_upstream {
 
 - 主机名为小写的客户端 ID 加上 `--domain`；不是有效主机名标签（字母、数字和 `-`，
   最多 63 个）的 ID 会被跳过并给出警告。`--upstream-port` 设置客户端的 Web 端口
-  （80），`--default <host:port>` 设置没有在线客户端的名称的目标。输出经过排序，
+  （80），`--default <ip:port>` 设置没有在线客户端的名称的目标。输出经过排序，
   状态不变时文件内容相同；若某个正在运行的服务器没有应答，则不输出任何内容且退出码
   为 1，同步脚本会保留原来的 map（已停止的服务器遗留的套接字会被跳过）。
 - `examples/nginx-camex.conf` 是 server 块：`proxy_pass` 到 map 中的目标、

@@ -304,6 +304,9 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
             config->client_isolation = 1U;
             break;
         case 'F':
+            /* The last --format (or --json) wins */
+            config->status_nginx_map = 0U;
+            config->status_json = 0U;
             if (strcmp(optarg, "nginx-map") == 0) {
                 config->status_nginx_map = 1U;
             } else if (strcmp(optarg, "json") == 0) {
@@ -341,6 +344,7 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
             break;
         case 'J':
             config->status_json = 1U;
+            config->status_nginx_map = 0U;
             break;
         case 'C':
             if (copy_option(config->control_path,
@@ -551,7 +555,7 @@ void print_usage(const char *progname)
            " client ID\n");
     printf("      --upstream-port <port>  With nginx-map: the clients'"
            " web port (default: 80)\n");
-    printf("      --default <host:port>  With nginx-map: where unknown"
+    printf("      --default <ip:port>  With nginx-map: where unknown"
            " names go\n\n");
 
     printf("Common options:\n");

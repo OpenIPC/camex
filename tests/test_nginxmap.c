@@ -158,10 +158,9 @@ int main(void)
           "a default without a port refused");
     CHECK(fmt("", "d.lan", 80, "host:70000", &n, warn, sizeof(warn)) == NULL,
           "a default port above 65535 refused");
-    m = fmt("", "d.lan", 80, "offline.example.lan:8099", &n, warn,
-            sizeof(warn));
-    CHECK(m != NULL, "a host name default accepted");
-    free(m);
+    CHECK(fmt("", "d.lan", 80, "offline.example.lan:8099", &n, warn,
+              sizeof(warn)) == NULL,
+          "a host name default refused (no resolver in the example)");
 
     if (failures != 0) {
         printf("test_nginxmap: %d FAILED\n", failures);

@@ -15,6 +15,8 @@
 # 4. A client that goes away is gone from the map after the next sync, and
 #    its name gets the offline page.
 # 5. A socket left behind by a killed server does not stop the sync.
+# 6. A reload that failed (nginx not running) is tried again by the next
+#    sync, although the map did not change.
 #
 # Usage: ./test-e2e-nginx-map.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
@@ -175,6 +177,22 @@ out=$(sync)
 echo "$out" | grep -q "camex-udp-5899.sock: no server listens there, skipped" &&
     [ "$(get cam-a.$DOMAIN)" = "I am CAM-A" ]
 check $? "the sync skips it and the map still follows the live server"
+
+echo "== 6. a reload that fails is tried again"
+# nginx that cannot reload (not running yet): the map is written but not
+# counted as applied, so the next run reloads although it did not change
+docker exec "$P-srv" sh -c 'printf "#!/bin/sh\n[ \"\$1\" = \"-s\" ] && exit 1\nexec /usr/sbin/nginx \"\$@\"\n" > /usr/local/bin/nginx-down && chmod +x /usr/local/bin/nginx-down'
+client CAM-C
+wait_registered CAM-C
+sleep 2
+out=$(docker exec -e DOMAIN="$DOMAIN" -e NGINX_BIN=nginx-down "$P-srv" camex-nginx-sync.sh 2>&1)
+echo "$out" | grep -q "nginx did not reload" &&
+    docker exec "$P-srv" grep -q "cam-c" /etc/nginx/camex-map.conf
+check $? "the failed reload is reported and the new map kept"
+before=$(reloads)
+sync >/dev/null
+[ "$(reloads)" -gt "$before" ] && [ "$(get cam-c.$DOMAIN)" = "I am CAM-C" ]
+check $? "the next run reloads nginx although the map did not change"
 
 if [ "$FAILS" -ne 0 ]; then
     echo "FAIL: $FAILS check(s) failed"

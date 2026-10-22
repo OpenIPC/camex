@@ -285,7 +285,7 @@ sudo ./camex \
 | `--format <fmt>`           |       | With `--status`: `table` (default), `json` (same as `--json`) or `nginx-map`, see [nginx in front of the clients](#nginx-in-front-of-the-clients) |
 | `--domain <name>`          |       | With `--format nginx-map`: the domain after the client ID                                                                                         |
 | `--upstream-port <port>`   |       | With `--format nginx-map`: the clients' web port (default: 80)                                                                                    |
-| `--default <host:port>`    |       | With `--format nginx-map`: where names of no live client go (default: none, nginx's offline page)                                                 |
+| `--default <ip:port>`      |       | With `--format nginx-map`: where names of no live client go (default: none, nginx's offline page)                                                 |
 | `--client-isolation`       |       | Server: drop packets from one client to another (or `client_isolation=yes` in `[server]`), see [Security Model](#security-model)                  |
 | `--bind-dev <iface>`       | `-d`  | Bind socket to a specific network interface (`SO_BINDTODEVICE`)                                                                                   |
 | `--transport <proto>`      | `-R`  | Transport protocol: `udp` (default) or `tcp`                                                                                                      |
@@ -399,7 +399,7 @@ map $host $camex_upstream {
 - The host is the client ID in lower case plus `--domain`; an ID that is not a
   valid host name label (letters, digits and `-`, up to 63) is left out with a
   warning. `--upstream-port` sets the clients' web port (80), `--default
-  <host:port>` a target for names with no live client. The output is sorted, so
+  <ip:port>` a target for names with no live client. The output is sorted, so
   an unchanged state gives an identical file; when a running server does not
   answer, nothing is printed and the exit code is 1, and the sync script keeps
   the old map (a socket left behind by a server that is gone is skipped).

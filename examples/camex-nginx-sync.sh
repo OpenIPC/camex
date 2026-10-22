@@ -14,7 +14,7 @@
 # Settings (environment):
 #   DOMAIN         the domain after the client ID (cam.example.lan)
 #   UPSTREAM_PORT  the clients' web port (80)
-#   DEFAULT        where unknown names go, host:port (empty: nginx's
+#   DEFAULT        where unknown names go, <IPv4>:<port> (empty: nginx's
 #                  offline page in nginx-camex.conf)
 #   CONTROL        one server's control socket (empty: every server)
 #   MAP            the map file nginx includes (/etc/nginx/camex-map.conf)
@@ -59,10 +59,33 @@ unlock() {
     rmdir "$LOCK" 2>/dev/null
 }
 
+# The map nginx last accepted and reloaded: a map counts as applied only
+# then, so a failed reload (nginx not running yet, say) is tried again by
+# the next run even though the file did not change
+APPLIED="$MAP.applied"
+
+# Interrupted between replacing the map and a reload: put back what was
+# there, drop the temporary files and the lock
+cleanup() {
+    if [ -n "${replaced-}" ]; then
+        if [ -f "${prev-}" ]; then
+            mv "$prev" "$MAP"
+        else
+            rm -f "$MAP"
+        fi
+    fi
+    rm -f "${tmp-}" "${prev-}"
+    unlock
+}
+
 sync_once() {
     lock || return 1
+    trap 'cleanup; exit 1' INT TERM HUP
+    replaced=
     sync_locked
     rc=$?
+    replaced=
+    trap - INT TERM HUP
     unlock
     return $rc
 }
@@ -79,7 +102,8 @@ sync_locked() {
         log "no map (a server did not answer); $MAP left as it is"
         return 1
     fi
-    if [ -f "$MAP" ] && cmp -s "$tmp" "$MAP"; then
+    if [ -f "$MAP" ] && cmp -s "$tmp" "$MAP" && [ -f "$APPLIED" ] &&
+       cmp -s "$tmp" "$APPLIED"; then
         rm -f "$tmp"
         return 0
     fi
@@ -94,17 +118,28 @@ sync_locked() {
         log "cannot write $MAP; left as it is"
         return 1
     fi
-    if "$NGINX_BIN" -t >/dev/null 2>&1 && "$NGINX_BIN" -s reload; then
+    replaced=1
+    if ! "$NGINX_BIN" -t >/dev/null 2>&1; then
+        log "nginx rejected the new map; the previous one is back"
+    elif ! "$NGINX_BIN" -s reload; then
+        log "nginx did not reload (is it running? start it, e.g. systemctl" \
+            "start nginx); the map is kept and the next run reloads again"
+        replaced=
+        rm -f "$prev" "$APPLIED"
+        return 1
+    else
+        replaced=
         rm -f "$prev"
+        cp -p "$MAP" "$APPLIED" 2>/dev/null
         clients=$(grep -c '^    "' "$MAP")
         log "map updated: $clients clients, nginx reloaded"
         return 0
     fi
+    replaced=
     if [ -f "$prev" ]; then
         mv "$prev" "$MAP" || log "cannot put back $MAP from $prev"
-        log "nginx rejected the new map; the previous one is back"
     else
-        log "nginx rejected the new map; there was no previous one"
+        rm -f "$MAP"
     fi
     return 1
 }
