@@ -4,6 +4,18 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.4.0 — 2026-10-22
+
+- Server: `client_isolation=yes` in `[server]` (or `--client-isolation`) drops packets
+  from one client to another (#83). Such a packet is delivered inside camex and never
+  reaches the server's tunnel interface, so a firewall there could not stop it; any
+  client with the key could reach every other one. Traffic between the clients and
+  the server is unchanged. The default stays `no`; a reload applies a change.
+  `camex --status` shows whether it is on and counts the dropped packets, in total
+  and per client. The README now says which traffic the tunnel interface sees.
+- Tests: `test-e2e-isolation.sh` checks both settings, a reload each way and the
+  command-line option.
+
 ## 3.3.0 — 2026-10-22
 
 - Server: `camex --status` lists the connected clients of every server on the host

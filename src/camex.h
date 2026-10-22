@@ -66,6 +66,7 @@ typedef struct {
     char control_path[108];    /* control socket (#82): "" default, "none" */
     uint8_t status_query;      /* --status: ask the server(s), then exit */
     uint8_t status_json;       /* --json */
+    uint8_t client_isolation;  /* --client-isolation (#83) */
 } camex_config_t;
 
 /* Global state shared across modules */

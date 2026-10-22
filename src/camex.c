@@ -1130,6 +1130,11 @@ void camex_run(void)
         (void)control_open(current_config.control_path,
                            current_config.transport, current_config.port);
 #endif
+        if (current_config.client_isolation ||
+            server_db.globals.client_isolation) {
+            log_message(LOG_INFO, "Client isolation: packets between "
+                        "clients are dropped (#83)");
+        }
         log_message(LOG_INFO, "Server started. Press Ctrl+C to stop.");
         while (running) {
             size_t si;
@@ -1275,6 +1280,13 @@ void camex_run(void)
                         server_revalidate_keys();
                         server_revalidate_unknown_clients();
                         server_revalidate_profile_addresses();
+                        if (!current_config.client_isolation &&
+                            saved_db.globals.client_isolation !=
+                                server_db.globals.client_isolation) {
+                            log_message(LOG_INFO, "Client isolation: %s",
+                                        server_db.globals.client_isolation
+                                            ? "on" : "off");
+                        }
 #ifndef _WIN32
                         /* A changed control_socket= (#82); --control on
                          * the command line stays */
