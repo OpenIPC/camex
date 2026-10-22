@@ -89,9 +89,10 @@ a network you trust**, such as a company LAN where the cameras and their
 firmware are under your control. Know what it allows:
 
 - any device with the key can connect and get an address;
-- a device with the key can register under **another camera's ID**: when that
-  camera is offline it gets the camera's name in the nginx map, and users who
-  open that name reach the impostor;
+- a device with the key can register under **another camera's ID**: it takes
+  over that ID's session and address (also while the camera is online, as a
+  reconnect would), so the camera's name in the nginx map leads users to the
+  impostor;
 - the key is on every camera, so one stolen camera exposes it.
 
 Per-client keys change that: give each camera its own `psk=` in a `[client ID]`
