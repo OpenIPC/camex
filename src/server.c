@@ -900,49 +900,183 @@ static int server_register_allowed(const uint8_t *key, char *client_id,
     return 0;
 }
 
-/* At most SERVER_HANDSHAKES_PER_SEC INIT messages per second */
-static int server_handshake_budget(void)
-{
-    static time_t window = 0;
-    static unsigned int count = 0U;
+/*
+ * Handshake budgets (#9, #16, #75) and their fair shares (#78). Every INIT
+ * that passes mac1 costs X25519 operations and key trials, and every
+ * client knows the server's public key, so the per-second budgets are
+ * shared out by source:
+ *  - a known source (the address and port of a client that sent
+ *    authenticated data within CAMEX_CLIENT_TIMEOUT, as a rekey does) may
+ *    use all of them, and its own key is tried first;
+ *  - other sources together use at most SERVER_UNKNOWN_SHARE of each, so
+ *    a flood from unknown sources does not stop live clients' rekeys;
+ *  - one source address at most SERVER_SRC_SHARE, one /24 at most
+ *    SERVER_NET_SHARE of each; the key trial shares are at least one and
+ *    two keystores' worth, so a handshake can always reach every key.
+ * Sources of the current second are kept in a small table; when it is
+ * full, the sources not in it share one entry per kind.
+ */
+#define SERVER_UNKNOWN_SHARE(n) ((n) / 4U * 3U)
+#define SERVER_SRC_SHARE(n)     ((n) / 8U)
+#define SERVER_NET_SHARE(n)     ((n) / 4U)
+#define SERVER_SRC_SLOTS  512U
+#define SERVER_SRC_PROBES 8U
 
-    if (window != g_now) {
-        window = g_now;
-        count = 0U;
+typedef struct {
+    uint32_t key;          /* source address or its /24, host order */
+    uint8_t is_net;
+    time_t window;         /* second the counts belong to */
+    unsigned int handshakes;
+    size_t trials;
+} server_share_t;
+
+typedef struct {
+    server_share_t *addr;  /* both NULL for a known source */
+    server_share_t *net;
+} server_source_t;
+
+static server_share_t server_shares[SERVER_SRC_SLOTS];
+static server_share_t server_share_rest[2];   /* addresses, /24s */
+static time_t budget_window = 0;
+static unsigned int budget_handshakes = 0U;   /* all sources */
+static unsigned int budget_unknown_handshakes = 0U;
+static size_t budget_trials = 0U;
+static size_t budget_unknown_trials = 0U;
+
+static void server_budget_window(void)
+{
+    if (budget_window != g_now) {
+        budget_window = g_now;
+        budget_handshakes = 0U;
+        budget_unknown_handshakes = 0U;
+        budget_trials = 0U;
+        budget_unknown_trials = 0U;
     }
-    if (count >= SERVER_HANDSHAKES_PER_SEC) {
+}
+
+/* The share entry of key for this second, or the entry of those not in
+ * the table */
+static server_share_t *server_share_of(uint32_t key, uint8_t is_net)
+{
+    uint32_t h = slotidx_hash_u32(key ^ (is_net ? 0x9e3779b9U : 0U));
+    server_share_t *free_slot = NULL;
+    server_share_t *s;
+    uint32_t p;
+
+    for (p = 0U; p < SERVER_SRC_PROBES; ++p) {
+        s = &server_shares[(h + p) % SERVER_SRC_SLOTS];
+        if (s->window != g_now) {
+            if (free_slot == NULL) {
+                free_slot = s;
+            }
+        } else if (s->key == key && s->is_net == is_net) {
+            return s;
+        }
+    }
+    s = free_slot != NULL ? free_slot : &server_share_rest[is_net];
+    if (s->window != g_now || s == free_slot) {
+        s->key = key;
+        s->is_net = is_net;
+        s->window = g_now;
+        s->handshakes = 0U;
+        s->trials = 0U;
+    }
+    return s;
+}
+
+/* The live client at from, or NULL: its handshakes are rekeys */
+static server_client_t *server_known_source(const struct sockaddr_in *from)
+{
+    server_client_t *c = server_find_by_addr(from);
+
+    if (c == NULL || !c->registered || !c->cur.valid ||
+        c->last_data == 0 || g_now - c->last_data > CAMEX_CLIENT_TIMEOUT) {
+        return NULL;
+    }
+    return c;
+}
+
+static void server_source_for(const struct sockaddr_in *from, int known,
+                              server_source_t *src)
+{
+    uint32_t a = ntohl(from->sin_addr.s_addr);
+
+    server_budget_window();
+    src->addr = known ? NULL : server_share_of(a, 0U);
+    src->net = known ? NULL : server_share_of(a & 0xFFFFFF00U, 1U);
+}
+
+/* One more INIT within the budgets: 0, -1 when all handshakes of this
+ * second are taken, -2 when those of unknown sources are, -3 when this
+ * source's or its /24's share is */
+static int server_handshake_budget(const server_source_t *src)
+{
+    if (budget_handshakes >= SERVER_HANDSHAKES_PER_SEC) {
         return -1;
     }
-    count++;
+    if (src->addr != NULL) {
+        if (budget_unknown_handshakes >=
+            SERVER_UNKNOWN_SHARE(SERVER_HANDSHAKES_PER_SEC)) {
+            return -2;
+        }
+        if (src->addr->handshakes >=
+                SERVER_SRC_SHARE(SERVER_HANDSHAKES_PER_SEC) ||
+            src->net->handshakes >=
+                SERVER_NET_SHARE(SERVER_HANDSHAKES_PER_SEC)) {
+            return -3;
+        }
+        src->addr->handshakes++;
+        src->net->handshakes++;
+        budget_unknown_handshakes++;
+    }
+    budget_handshakes++;
     return 0;
 }
 
-/* Key trials allowed per second: SERVER_KEY_TRIALS_PER_SEC, or twice the
- * keystore when it is larger (one handshake may have to try every key) */
+/* Key trials allowed per second: SERVER_KEY_TRIALS_PER_SEC, or four times
+ * the keystore when it is larger (one handshake may have to try every
+ * key, and unknown sources must not take the whole budget with one or
+ * two) */
 static size_t server_key_trials_limit(void)
 {
     size_t limit = SERVER_KEY_TRIALS_PER_SEC;
 
-    if (server_keystore_count * 2U > limit) {
-        limit = server_keystore_count * 2U;
+    if (server_keystore_count * 4U > limit) {
+        limit = server_keystore_count * 4U;
     }
     return limit;
 }
 
-/* One more key trial within server_key_trials_limit(), or -1 */
-static int server_key_trial_budget(void)
+static size_t server_trial_share(int is_net)
 {
-    static time_t window = 0;
-    static size_t count = 0U;
+    size_t limit = server_key_trials_limit();
+    size_t share = is_net ? SERVER_NET_SHARE(limit) : SERVER_SRC_SHARE(limit);
+    size_t floor = server_keystore_count * (is_net ? 2U : 1U);
 
-    if (window != g_now) {
-        window = g_now;
-        count = 0U;
-    }
-    if (count >= server_key_trials_limit()) {
+    return share > floor ? share : floor;
+}
+
+/* One more key trial within the budgets, as server_handshake_budget() */
+static int server_key_trial_budget(const server_source_t *src)
+{
+    size_t limit = server_key_trials_limit();
+
+    if (budget_trials >= limit) {
         return -1;
     }
-    count++;
+    if (src->addr != NULL) {
+        if (budget_unknown_trials >= SERVER_UNKNOWN_SHARE(limit)) {
+            return -2;
+        }
+        if (src->addr->trials >= server_trial_share(0) ||
+            src->net->trials >= server_trial_share(1)) {
+            return -3;
+        }
+        src->addr->trials++;
+        src->net->trials++;
+        budget_unknown_trials++;
+    }
+    budget_trials++;
     return 0;
 }
 
@@ -1149,6 +1283,11 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     char peer[64];
     size_t resp_len;
     size_t i;
+    size_t n;
+    long own;
+    server_client_t *known;
+    server_source_t src;
+    int budget;
     int fresh = 0;
     uint32_t pending_before = 0U;
     uint32_t ip_before = 0U;
@@ -1175,9 +1314,24 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
             return -1;
         }
     }
-    if (server_handshake_budget() != 0) {
+    known = server_known_source(from);
+    server_source_for(from, known != NULL, &src);
+    budget = server_handshake_budget(&src);
+    if (budget == -1) {
         log_peer(LOG_WARNING, "Dropped handshake from %s: more than %u "
                  "handshakes per second", peer, SERVER_HANDSHAKES_PER_SEC);
+        return -1;
+    }
+    if (budget == -2) {
+        log_peer(LOG_WARNING, "Dropped handshake from %s: unknown sources "
+                 "used their share of %u handshakes per second (the rest "
+                 "is kept for live clients)", peer,
+                 SERVER_UNKNOWN_SHARE(SERVER_HANDSHAKES_PER_SEC));
+        return -1;
+    }
+    if (budget == -3) {
+        log_peer(LOG_WARNING, "Dropped handshake from %s: its address or "
+                 "its /24 used its share of handshakes per second", peer);
         return -1;
     }
 
@@ -1192,17 +1346,46 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     /* Any keystore key may authenticate message 1; the payload then has
      * to name a client that key belongs to (#5) */
     memset(&hs, 0, sizeof(hs));
-    for (i = 0U; i < server_keystore_count; ++i) {
+    /* A live client's own key goes first (#78): its rekeys cost one trial
+     * however large the keystore is */
+    own = known != NULL ? config_ks_find(known->psk_key) : -1L;
+    for (n = 0U; n < server_keystore_count + (own > 0L ? 1U : 0U); ++n) {
+        if (own > 0L) {
+            i = n == 0U ? (size_t)own : n - 1U;
+            if (n != 0U && i == (size_t)own) {
+                continue;
+            }
+        } else {
+            i = n;
+        }
         if (server_keystore[i].locked) {
             continue;
         }
         /* The global key (entry 0, owner "") is always tried: clients
          * that use it are not starved by per-client key trials */
-        if ((i != 0U || server_keystore[i].owner[0] != '\0') &&
-            server_key_trial_budget() != 0) {
+        if (i != 0U || server_keystore[i].owner[0] != '\0') {
+            budget = server_key_trial_budget(&src);
+        } else {
+            budget = 0;
+        }
+        if (budget == -1) {
             log_peer(LOG_WARNING, "Dropped handshake from %s: more than "
                      "%u key trials per second (per-client keys are tried "
                      "in turn)", peer, (unsigned)server_key_trials_limit());
+            break;
+        }
+        if (budget == -2) {
+            log_peer(LOG_WARNING, "Dropped handshake from %s: unknown "
+                     "sources used their share of %u key trials per second "
+                     "(the rest is kept for live clients)", peer,
+                     (unsigned)SERVER_UNKNOWN_SHARE(
+                         server_key_trials_limit()));
+            break;
+        }
+        if (budget == -3) {
+            log_peer(LOG_WARNING, "Dropped handshake from %s: its address "
+                     "or its /24 used its share of key trials per second",
+                     peer);
             break;
         }
         hs = base;

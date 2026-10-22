@@ -16,7 +16,8 @@
  * second). With HOLD=1 in the environment the sockets stay open and are never
  * read again (a client that stops reading), until the process is killed;
  * with GO_FILE=<path> as well, the sending side is closed (FIN) once that
- * file exists. RCVBUF=<bytes> sets a small receive buffer.
+ * file exists. RCVBUF=<bytes> sets a small receive buffer. NOWAIT=1 only
+ * sends each INIT and does not wait for the reply (a flood, #78).
  *
  */
 
@@ -182,6 +183,7 @@ static void handshake(const char *host, const char *port, int tcp,
         len += V2_MAC_LEN;
     }
     if (len > 0U && send_packet(fd, tcp, pkt, len) == 0 &&
+        getenv("NOWAIT") == NULL &&
         (n = recv_packet(fd, tcp, pkt, sizeof(pkt))) > 0 &&
         v2_packet_type(pkt, (size_t)n) == V2_TYPE_RESP &&
         v2_read_u32(pkt + 9) == idx &&

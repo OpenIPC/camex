@@ -666,6 +666,11 @@ int config_ks_is_global(const uint8_t *key)
     return key != NULL && ks_find_key(key, "", (size_t)-1) >= 0;
 }
 
+long config_ks_find(const uint8_t *key)
+{
+    return key != NULL ? ks_find_key(key, NULL, (size_t)-1) : -1L;
+}
+
 /* Wipe the psk= texts of the profiles: the keystore holds the keys */
 static void wipe_profile_psks(void)
 {

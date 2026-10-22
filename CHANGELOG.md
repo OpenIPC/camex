@@ -4,6 +4,21 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.2.0 — 2026-10-22
+
+- Server: the handshake budgets are shared out by source (#78). Every client knows the
+  server's public key, so anyone with it could send handshakes that no key opens and
+  use up the 200 handshakes and the key trials a second for everybody; with a large
+  keystore two such handshakes were enough. Unknown sources together now get at most
+  3/4 of each budget, one address at most 1/8 and one `/24` at most 1/4 (but always
+  enough to try every key once). A live client rekeying from its address keeps the
+  rest, and its own key is tried first, so its rekeys cost one key trial. The key
+  trial budget is four times the keystore when that is above 51200 (was twice).
+  Cameras behind one NAT address now (re)connect at up to 25 a second; the others
+  retry.
+- Tests: `test-e2e-fair-budget.sh` floods bogus handshakes from one address and from
+  eight `/24`s; other clients register and a live client keeps rekeying (fails before).
+
 ## 3.1.1 — 2026-10-22
 
 - Server: a live auto-mode client keeps its address until it confirms the new one

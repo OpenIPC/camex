@@ -94,7 +94,8 @@ set +e   # checks below report failures themselves
 v2() {      # v2 <server> <who>...: handshakes as given (auto:<id>[@<ip>] or
             # manual:<ip>), one socket each; prints "<who> <result or ->"
     local srv="$1"; shift
-    docker run --rm --network "$NET_NAME" -e PACE_MS=6 --ulimit nofile=4096 \
+    # All from one address: under its share of 25 handshakes a second (#78)
+    docker run --rm --network "$NET_NAME" -e PACE_MS=45 --ulimit nofile=4096 \
         --entrypoint /usr/local/bin/v2tool "$IMAGE" \
         "$srv" 5800 "$SERVER_PUBKEY" "$PSK" udp "$@"
 }
