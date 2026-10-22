@@ -16,8 +16,10 @@
 #    configuration, an unlisted one gets nothing.
 # 3. A reload that switches to allow_unknown_clients=no ends the sessions
 #    of unlisted auto clients.
-# 4. A client that goes silent expires (CAMEX_CLIENT_TIMEOUT=5 here) and its
-#    address is handed out again; while it is live, nobody else gets it.
+# 4. A client that goes silent expires (CAMEX_CLIENT_TIMEOUT=5 here); its
+#    address stays leased to its ID (#81): another client asking for it gets
+#    another one, and the client gets it back; while it is live, nobody
+#    else gets it.
 # 5. auto_pool= and max_clients= (#75): a /16 pool serves more than 256
 #    clients with unique addresses and the pool's prefix; a real client in
 #    a slot above 256 carries traffic both ways; max_clients= sets the
@@ -156,7 +158,7 @@ sleep 2
 docker logs "$P-srv3" 2>&1 | grep -q "Ended session of client GUEST"
 check $? "after the reload to \"no\" the unlisted client's session ends"
 
-echo "== 4. an expired client's address is handed out again"
+echo "== 4. an expired client's address stays its own (#81)"
 # CAMEX_CLIENT_TIMEOUT=5 (a test setting; normally 120 s) expires clients
 # that are silent for 5 s; "auto:ID@IP" asks for that address
 docker run -d --name "$P-srv4" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
@@ -178,8 +180,12 @@ for _ in $(seq 1 15); do
 done
 check $expired "the silent client expires"
 atk "$P-srv4" LATER@10.200.0.2 > "$BUILD_CTX/later.txt"
-grep -q "^LATER@10.200.0.2 10.200.0.2/24$" "$BUILD_CTX/later.txt"
-check $? "after the expiry .2 is handed out again ($(cut -d' ' -f2 "$BUILD_CTX/later.txt"))"
+grep -q "^LATER@10.200.0.2 10.200.0.[0-9]*/24$" "$BUILD_CTX/later.txt" &&
+    ! grep -q " 10.200.0.2/24$" "$BUILD_CTX/later.txt"
+check $? "after the expiry .2 stays leased: another client gets $(cut -d' ' -f2 "$BUILD_CTX/later.txt")"
+atk "$P-srv4" OLD > "$BUILD_CTX/old2.txt"
+grep -q "^OLD 10.200.0.2/24$" "$BUILD_CTX/old2.txt"
+check $? "the expired client gets .2 back ($(cut -d' ' -f2 "$BUILD_CTX/old2.txt"))"
 
 srv_conf() {    # srv_conf <name> <config text> [camex args...]: server with a config
     local name="$1" conf="$2"; shift 2
