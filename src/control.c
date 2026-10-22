@@ -34,6 +34,7 @@
 #define CONTROL_CONNS   4
 #define CONTROL_TIMEOUT 10
 #define CONTROL_CMD_MAX 64
+#define CONTROL_END     ".\n"   /* last line of every answer */
 
 void control_default_path(char *buf, size_t size, int transport, int port)
 {
@@ -82,12 +83,19 @@ static int stale_socket(const char *path, struct stat *st)
     if (fd < 0) {
         return 0;
     }
+    /* Non-blocking: a live server with a full backlog must not hold up
+     * this one's start; only a refused connection means stale */
+    if (set_nonblock(fd) != 0) {
+        close(fd);
+        return 0;
+    }
     memset(&sa, 0, sizeof(sa));
     sa.sun_family = AF_UNIX;
     snprintf(sa.sun_path, sizeof(sa.sun_path), "%s", path);
     rc = connect(fd, (struct sockaddr *)&sa, sizeof(sa));
+    rc = rc != 0 && errno == ECONNREFUSED;
     close(fd);
-    return rc != 0 && errno == ECONNREFUSED;
+    return rc;
 }
 
 int control_open(const char *path, int transport, int port)
@@ -280,6 +288,20 @@ static void control_answer(control_conn_t *c)
             len = sizeof(err) - 1U;
         }
     }
+    if (c->out != NULL) {
+        /* The end marker: the client tells a whole answer from one that
+         * was cut off */
+        char *grown = realloc(c->out, len + sizeof(CONTROL_END));
+
+        if (grown == NULL) {
+            free(c->out);
+            c->out = NULL;
+        } else {
+            c->out = grown;
+            memcpy(c->out + len, CONTROL_END, sizeof(CONTROL_END));
+            len += sizeof(CONTROL_END) - 1U;
+        }
+    }
     if (c->out == NULL) {
         control_conn_close(c);
         return;
@@ -366,10 +388,11 @@ void control_handle(const fd_set *readset, const fd_set *writeset)
     }
 }
 
-/* Client side: send cmd to path, copy the answer to out (NULL: stdout).
- * 0, or -1 with a message on stderr. */
-static int control_ask(const char *path, const char *cmd, FILE *out,
-                       char **buf, size_t *buf_len)
+/* Client side: send cmd to path; the whole answer, without its end
+ * marker, in *buf (malloc'd, NUL-terminated). 0, or -1 with a message on
+ * stderr (no answer, a cut-off one, an error). */
+static int control_ask(const char *path, const char *cmd, char **buf,
+                       size_t *buf_len)
 {
     struct sockaddr_un sa;
     char chunk[4096];
@@ -413,28 +436,46 @@ static int control_ask(const char *path, const char *cmd, FILE *out,
         return -1;
     }
     while ((n = recv(fd, chunk, sizeof(chunk), 0)) > 0) {
-        if (out != NULL) {
-            fwrite(chunk, 1U, (size_t)n, out);
-        } else {
-            char *grown = realloc(*buf, *buf_len + (size_t)n + 1U);
+        char *grown = realloc(*buf, *buf_len + (size_t)n + 1U);
 
-            if (grown == NULL) {
-                close(fd);
-                return -1;
-            }
-            *buf = grown;
-            memcpy(*buf + *buf_len, chunk, (size_t)n);
-            *buf_len += (size_t)n;
-            (*buf)[*buf_len] = '\0';
+        if (grown == NULL) {
+            close(fd);
+            return -1;
         }
+        *buf = grown;
+        memcpy(*buf + *buf_len, chunk, (size_t)n);
+        *buf_len += (size_t)n;
+        (*buf)[*buf_len] = '\0';
     }
+    close(fd);
     if (n < 0) {
         fprintf(stderr, "camex: %s: %s\n", path,
                 (errno == EAGAIN || errno == EWOULDBLOCK)
                     ? "no answer (timeout)" : strerror(errno));
+        return -1;
     }
-    close(fd);
-    return n < 0 ? -1 : 0;
+    /* Whole answers end with the marker line; anything else was cut off
+     * (the server busy, stopping, or out of memory) */
+    {
+        size_t m = sizeof(CONTROL_END) - 1U;
+
+        if (*buf_len == 0U) {
+            fprintf(stderr, "camex: %s: no answer (server busy?)\n", path);
+            return -1;
+        }
+        if (*buf_len < m || memcmp(*buf + *buf_len - m, CONTROL_END, m) != 0 ||
+            (*buf_len > m && (*buf)[*buf_len - m - 1U] != '\n')) {
+            fprintf(stderr, "camex: %s: the answer was cut off\n", path);
+            return -1;
+        }
+        *buf_len -= m;
+        (*buf)[*buf_len] = '\0';
+        if (strncmp(*buf, "ERROR", 5) == 0) {
+            fprintf(stderr, "camex: %s: %s", path, *buf);
+            return -1;
+        }
+    }
+    return 0;
 }
 
 typedef char control_path_t[108];
@@ -525,8 +566,7 @@ int control_status(const char *path, int json)
             char *buf = NULL;
             size_t len = 0U;
 
-            if (control_ask(paths[i], cmd, NULL, &buf, &len) == 0 &&
-                buf != NULL) {
+            if (control_ask(paths[i], cmd, &buf, &len) == 0) {
                 while (len > 0U && (buf[len - 1U] == '\n' ||
                                     buf[len - 1U] == '\r')) {
                     buf[--len] = '\0';
@@ -539,9 +579,14 @@ int control_status(const char *path, int json)
             if (n > 1) {
                 printf("%s== %s\n", i > 0 ? "\n" : "", paths[i]);
             }
-            if (control_ask(paths[i], cmd, stdout, NULL, NULL) == 0) {
+            char *buf = NULL;
+            size_t len = 0U;
+
+            if (control_ask(paths[i], cmd, &buf, &len) == 0) {
+                fwrite(buf, 1U, len, stdout);
                 ok++;
             }
+            free(buf);
         }
     }
     if (json) {
