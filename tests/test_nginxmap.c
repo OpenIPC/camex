@@ -120,13 +120,37 @@ int main(void)
           "a record with extra fields is ignored");
     free(m);
 
-    /* An ID that is an nginx map keyword stays a quoted host */
-    m = fmt("default 10.0.0.3\n", "", 80, "127.0.0.1:8099", &n, warn,
+    /* An ID that is an nginx map keyword stays a host: nginx drops the
+     * quotes, so the key needs map's backslash */
+    m = fmt("default 10.0.0.3\ninclude 10.0.0.4\nhostnames 10.0.0.5\n"
+            "volatile 10.0.0.6\n", "", 80, "127.0.0.1:8099", &n, warn,
             sizeof(warn));
-    CHECK(m != NULL && n == 1U &&
+    CHECK(m != NULL && n == 4U &&
               strstr(m, "    default 127.0.0.1:8099;\n") != NULL &&
-              strstr(m, "    \"default\" 10.0.0.3:80;\n") != NULL,
-          "an ID named default is a quoted key, the fallback stays one");
+              strstr(m, "    \"\\default\" 10.0.0.3:80;\n") != NULL &&
+              strstr(m, "    \"\\include\" 10.0.0.4:80;\n") != NULL &&
+              strstr(m, "    \"\\hostnames\" 10.0.0.5:80;\n") != NULL &&
+              strstr(m, "    \"\\volatile\" 10.0.0.6:80;\n") != NULL,
+          "map keywords as IDs get a backslash, the fallback stays one");
+    free(m);
+    m = fmt("default 10.0.0.3\n", "d.lan", 80, NULL, &n, warn, sizeof(warn));
+    CHECK(m != NULL && strstr(m, "    \"default.d.lan\" 10.0.0.3:80;\n"),
+          "with a domain the key is no keyword: no backslash");
+    free(m);
+
+    /* An ID with non-ASCII bytes: left out, the warning shows them as ? */
+    memset(warn, 0, sizeof(warn));
+    m = fmt("cam\xc3\xa9 10.0.0.1\n", "d.lan", 80, NULL, &n, warn,
+            sizeof(warn));
+    CHECK(m != NULL && n == 0U && strstr(warn, "client ID cam?? is not") &&
+              strchr(warn, '\xc3') == NULL,
+          "a non-ASCII ID is reported with ? for its bytes");
+    free(m);
+
+    /* The default is written out anew */
+    m = fmt("", NULL, 80, "127.000.0.1:08099", &n, warn, sizeof(warn));
+    CHECK(m != NULL && strstr(m, "    default 127.0.0.1:8099;\n") != NULL,
+          "the default is normalised");
     free(m);
 
     /* A host longer than 253 characters is left out */
@@ -161,6 +185,16 @@ int main(void)
     CHECK(fmt("", "d.lan", 80, "offline.example.lan:8099", &n, warn,
               sizeof(warn)) == NULL,
           "a host name default refused (no resolver in the example)");
+    CHECK(fmt("", "d.lan", 80, "1. 2.3.4:80", &n, warn, sizeof(warn)) == NULL,
+          "a default with a blank in the address refused");
+    CHECK(fmt("", "d.lan", 80, "1.2.3.4: 80", &n, warn, sizeof(warn)) == NULL,
+          "a default with a blank before the port refused");
+    CHECK(fmt("", "d.lan", 80, "1.+2.3.4:80", &n, warn, sizeof(warn)) == NULL,
+          "a default with a signed number refused");
+    CHECK(fmt("", "d.lan", 80, "1.2.3.4:+80", &n, warn, sizeof(warn)) == NULL,
+          "a default with a signed port refused");
+    CHECK(fmt("", "d.lan", 80, "1.2.3.4:080000", &n, warn, sizeof(warn)) == NULL,
+          "a default port with too many digits refused");
 
     if (failures != 0) {
         printf("test_nginxmap: %d FAILED\n", failures);

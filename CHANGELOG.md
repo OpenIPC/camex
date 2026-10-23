@@ -4,24 +4,28 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
-## 3.5.0 — 2026-10-22
+## 3.5.0 — 2026-10-23
 
 - `camex --status --format nginx-map [--domain …] [--upstream-port …] [--default …]`
   prints an nginx `map` of the live clients: `<client ID>.<domain>` → `<tunnel
   address>:<port>`, sorted, lower case; IDs that are not host name labels are left
-  out with a warning, host keys are quoted, `--default` is `<IPv4>:<port>`; no output and exit code 1 when a running
+  out with a warning, host keys are quoted (an ID that is one of map's own words —
+  `default`, `include`, `hostnames`, `volatile` — gets map's `\` as well), `--default`
+  is `<IPv4>:<port>`, digits only, and written out normalised; no output and exit code 1 when a running
   server does not answer, a socket left by a server that is gone is skipped (#84).
   The server answers a new control command, `CLIENTS`.
 - `examples/camex-nginx-sync.sh` writes the map when it changed, checks and reloads
   nginx and puts the old map back if nginx rejects it, one run at a time; a map counts
   as applied only after a reload, so a failed reload (nginx not running yet) is tried
-  again; an interrupted run puts the old map back; `camex-nginx-sync.service` and
+  again; an interrupted run puts the old map back; runs take turns through `flock`, so a
+  slow run keeps its turn and a killed one leaves no lock behind; `camex-nginx-sync.service` and
   `.timer` run it every 10 seconds. `examples/nginx-camex.conf`: a server block that
   opens each client's web UI by name, with WebSocket, no buffering and an offline page.
 - `--format table|json` as another way to write `--json`.
 - Tests: `test_nginxmap` (the formatter) and `test-e2e-nginx-map.sh` (nginx in front of
   two clients: pages by name, the offline page, no reload without a change, an
-  invalid ID, a client that goes away).
+  invalid ID, a client that goes away, a run waiting for another, IDs that are map
+  keywords).
 
 ## 3.4.0 — 2026-10-22
 

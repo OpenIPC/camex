@@ -24,6 +24,11 @@
 
 set -u
 
+if ! command -v flock >/dev/null 2>&1; then
+    echo "camex-nginx-sync: needs flock (util-linux or busybox)" >&2
+    exit 2
+fi
+
 DOMAIN=${DOMAIN-cam.example.lan}
 UPSTREAM_PORT=${UPSTREAM_PORT:-80}
 DEFAULT=${DEFAULT-}
@@ -37,26 +42,26 @@ log() {
 }
 
 # One sync at a time: a second one waits, so a rollback never undoes
-# another run's map. mkdir is atomic; a lock older than 5 minutes is
-# taken as left behind by a run that was killed.
+# another run's map. flock(1) (util-linux, busybox): the kernel drops the
+# lock when its holder exits, so a killed run leaves nothing behind and a
+# slow one keeps it for as long as it runs. The programs it starts do not
+# inherit the lock's descriptor (9>&-).
 LOCK="$MAP.lock"
 lock() {
-    tries=0
-    until mkdir "$LOCK" 2>/dev/null; do
-        if [ -n "$(find "$LOCK" -maxdepth 0 -mmin +5 2>/dev/null)" ]; then
-            rmdir "$LOCK" 2>/dev/null
-            continue
-        fi
-        tries=$((tries + 1))
-        if [ "$tries" -ge 60 ]; then
-            log "another sync holds $LOCK; giving up"
-            return 1
-        fi
-        sleep 1
-    done
+    # (checked with true first: a failed redirection of exec ends sh)
+    if ! true 2>/dev/null >>"$LOCK"; then
+        log "cannot open $LOCK"
+        return 1
+    fi
+    exec 9>>"$LOCK"
+    if ! flock -w 60 9; then
+        exec 9>&-
+        log "another sync holds $LOCK; giving up"
+        return 1
+    fi
 }
 unlock() {
-    rmdir "$LOCK" 2>/dev/null
+    exec 9>&-
 }
 
 # The map nginx last accepted and reloaded: a map counts as applied only
@@ -97,7 +102,7 @@ sync_locked() {
     [ -n "$DOMAIN" ] && set -- "$@" --domain "$DOMAIN"
     [ -n "$DEFAULT" ] && set -- "$@" --default "$DEFAULT"
     [ -n "$CONTROL" ] && set -- "$@" --control "$CONTROL"
-    if ! "$CAMEX" "$@" > "$tmp"; then
+    if ! "$CAMEX" "$@" > "$tmp" 9>&-; then
         rm -f "$tmp"
         log "no map (a server did not answer); $MAP left as it is"
         return 1
@@ -119,10 +124,10 @@ sync_locked() {
         return 1
     fi
     replaced=1
-    if ! check=$("$NGINX_BIN" -t 2>&1); then
+    if ! check=$("$NGINX_BIN" -t 2>&1 9>&-); then
         log "nginx rejected the new map; the previous one is back:"
         printf '%s\n' "$check" >&2
-    elif ! { replaced=; "$NGINX_BIN" -s reload; }; then
+    elif ! { replaced=; "$NGINX_BIN" -s reload 9>&-; }; then
         # (replaced cleared first: once nginx was told to reload, an
         # interrupted run keeps the new map and the next run settles it)
         log "nginx did not reload (is it running? start it, e.g. systemctl" \

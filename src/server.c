@@ -2737,9 +2737,10 @@ char *server_clients_list(size_t *len)
             continue;
         }
         /* One record a line, two fields: an ID with a blank or a control
-         * byte would read as another record */
+         * byte would read as another record. Other bytes pass, so that
+         * camex can warn that such an ID is not a host name */
         for (q = c->client_id; *q != '\0'; ++q) {
-            if ((unsigned char)*q <= 0x20U || (unsigned char)*q >= 0x7fU) {
+            if ((unsigned char)*q <= 0x20U || (unsigned char)*q == 0x7fU) {
                 break;
             }
         }

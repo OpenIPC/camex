@@ -112,13 +112,15 @@ static int valid_hostname(const char *name)
     return 1;
 }
 
-/* A dotted IPv4 address: four numbers 0..255, nothing else */
+/* A dotted IPv4 address: four numbers 0..255, nothing else (digits and
+ * dots only: sscanf alone would take blanks and signs) */
 static int parse_addr(const char *a, uint32_t *out)
 {
     unsigned int b[4];
     int used = 0;
 
-    if (sscanf(a, "%3u.%3u.%3u.%3u%n", &b[0], &b[1], &b[2], &b[3],
+    if (strspn(a, "0123456789.") != strlen(a) ||
+        sscanf(a, "%3u.%3u.%3u.%3u%n", &b[0], &b[1], &b[2], &b[3],
                &used) != 4 || a[used] != '\0' || !isdigit((unsigned char)a[0]) ||
         b[0] > 255U || b[1] > 255U || b[2] > 255U || b[3] > 255U) {
         return 0;
@@ -128,8 +130,9 @@ static int parse_addr(const char *a, uint32_t *out)
 }
 
 /* <IPv4 address>:<port> for --default: the example config proxies to the
- * map's value without a resolver, so a host name would not resolve */
-static int valid_target(const char *t)
+ * map's value without a resolver, so a host name would not resolve. The
+ * map gets it written out anew (norm), never the text as given */
+static int valid_target(const char *t, char *norm, size_t size)
 {
     const char *colon = strrchr(t, ':');
     char host[MAP_HOST_MAX + 1];
@@ -143,11 +146,41 @@ static int valid_target(const char *t)
     }
     memcpy(host, t, (size_t)(colon - t));
     host[colon - t] = '\0';
-    port = strtol(colon + 1, &end, 10);
-    if (colon[1] == '\0' || *end != '\0' || port < 1L || port > 65535L) {
+    if (colon[1] == '\0' || strlen(colon + 1) > 5U ||
+        strspn(colon + 1, "0123456789") != strlen(colon + 1)) {
         return 0;
     }
-    return parse_addr(host, &a);
+    port = strtol(colon + 1, &end, 10);
+    if (*end != '\0' || port < 1L || port > 65535L || !parse_addr(host, &a)) {
+        return 0;
+    }
+    snprintf(norm, size, "%u.%u.%u.%u:%ld", (unsigned)(a >> 24),
+             (unsigned)((a >> 16) & 255U), (unsigned)((a >> 8) & 255U),
+             (unsigned)(a & 255U), port);
+    return 1;
+}
+
+/* A key that is one of map's own parameters: nginx drops the quotes before
+ * map reads it, so only a leading backslash keeps it a host (nginx docs) */
+static int map_reserved(const char *h)
+{
+    return strcmp(h, "default") == 0 || strcmp(h, "hostnames") == 0 ||
+           strcmp(h, "include") == 0 || strcmp(h, "volatile") == 0;
+}
+
+/* A client ID for a warning: control and non-ASCII bytes as '?', so an ID
+ * cannot drive the terminal */
+static const char *warn_id(char *buf, size_t size, const char *id)
+{
+    size_t i;
+
+    for (i = 0U; id[i] != '\0' && i + 1U < size; ++i) {
+        unsigned char ch = (unsigned char)id[i];
+
+        buf[i] = (ch < 0x20U || ch >= 0x7fU) ? '?' : (char)ch;
+    }
+    buf[i] = '\0';
+    return buf;
 }
 
 static int cmp_entry(const void *a, const void *b)
@@ -170,16 +203,18 @@ char *nginx_map_format(const char *lines, const char *domain, int port,
     size_t dlen = domain != NULL ? strlen(domain) : 0U;
     const char *p = lines != NULL ? lines : "";
     map_buf_t out = { NULL, 0U, 0U, 0 };
+    char dnorm[32] = "";
 
     *count = 0U;
     if ((dlen > 0U && !valid_hostname(domain)) || port < 1 || port > 65535 ||
-        (dflt != NULL && dflt[0] != '\0' && !valid_target(dflt))) {
+        (dflt != NULL && dflt[0] != '\0' &&
+         !valid_target(dflt, dnorm, sizeof(dnorm)))) {
         return NULL;
     }
     while (*p != '\0') {
         const char *eol = strchr(p, '\n');
         size_t ll = eol != NULL ? (size_t)(eol - p) : strlen(p);
-        char line[128], id[64], addr[32], extra[2], label[64];
+        char line[128], id[64], addr[32], extra[2], label[64], shown[64];
         size_t k;
         uint32_t a;
 
@@ -196,7 +231,8 @@ char *nginx_map_format(const char *lines, const char *domain, int port,
                 if (!valid_label(label, k)) {
                     if (warn != NULL) {
                         fprintf(warn, "camex: client ID %s is not a host "
-                                "name label: left out of the map\n", id);
+                                "name label: left out of the map\n",
+                                warn_id(shown, sizeof(shown), id));
                     }
                 } else if (dlen > 0U && k + 1U + dlen > MAP_HOST_MAX) {
                     if (warn != NULL) {
@@ -243,8 +279,8 @@ char *nginx_map_format(const char *lines, const char *domain, int port,
 
     buf_printf(&out, "# camex --status --format nginx-map: generated, do "
                "not edit\nmap $host $camex_upstream {\n");
-    if (dflt != NULL && dflt[0] != '\0') {
-        buf_printf(&out, "    default %s;\n", dflt);
+    if (dnorm[0] != '\0') {
+        buf_printf(&out, "    default %s;\n", dnorm);
     }
     for (i = 0U; i < n; ++i) {
         /* The same ID on two servers: the lower address is kept */
@@ -255,9 +291,11 @@ char *nginx_map_format(const char *lines, const char *domain, int port,
             }
             continue;
         }
-        /* Quoted: an ID such as "default" or "include" stays a host */
-        buf_printf(&out, "    \"%s\" %s:%d;\n", e[i].host, e[i].addr_text,
-                   port);
+        /* Quoted; an ID such as "default" or "include" also needs the
+         * backslash to stay a host (without --domain) */
+        buf_printf(&out, "    \"%s%s\" %s:%d;\n",
+                   map_reserved(e[i].host) ? "\\" : "", e[i].host,
+                   e[i].addr_text, port);
         (*count)++;
     }
     buf_printf(&out, "}\n");

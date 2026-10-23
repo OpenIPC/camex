@@ -194,6 +194,36 @@ sync >/dev/null
 [ "$(reloads)" -gt "$before" ] && [ "$(get cam-c.$DOMAIN)" = "I am CAM-C" ]
 check $? "the next run reloads nginx although the map did not change"
 
+echo "== 7. one sync at a time"
+# A run that holds the lock (a slow server, say): the next one waits for it
+# instead of taking the lock by age, then does its work
+client CAM-D
+wait_registered CAM-D
+sleep 2
+docker exec -d "$P-srv" flock /etc/nginx/camex-map.conf.lock sleep 4
+sleep 1
+t0=$(date +%s)
+sync >/dev/null
+t1=$(date +%s)
+[ $((t1 - t0)) -ge 3 ] && [ "$(get cam-d.$DOMAIN)" = "I am CAM-D" ]
+check $? "the second run waited for the lock ($((t1 - t0)) s) and applied its map"
+
+echo "== 8. IDs that are map keywords, no domain"
+# Without a domain the keys are bare IDs: default, include, hostnames and
+# volatile must stay hosts, not map's own parameters
+for id in default include; do client "$id"; done
+wait_registered default include
+sleep 2
+out=$(docker exec -e DOMAIN= -e NGINX_BIN=nginx-counting "$P-srv" camex-nginx-sync.sh 2>&1)
+sleep 1
+echo "$out" | sed 's/^/      /'
+docker exec "$P-srv" grep -q '^    "\\default" ' /etc/nginx/camex-map.conf &&
+    docker exec "$P-srv" nginx -t >/dev/null 2>&1
+check $? "the map has them and nginx -t accepts it"
+[ "$(get default)" = "I am default" ] && [ "$(get include)" = "I am include" ] &&
+    get nobody | grep -q "is offline"
+check $? "each one gets its own page, an unknown name still the offline page"
+
 if [ "$FAILS" -ne 0 ]; then
     echo "FAIL: $FAILS check(s) failed"
     exit 1
