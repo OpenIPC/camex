@@ -282,9 +282,29 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install MinGW
+        # apt sometimes hangs on the runner (#93): fail instead of waiting.
+        # Takes ~20 s; the limit leaves room for every try below: 2 commands
+        # x (3 tries x 180 s + 2 recoveries x (60 s + 10 s)) = 23 min
+        timeout-minutes: 25
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ${{ matrix.mingw-pkg }}
+          # Each apt command is cut off after 3 minutes and tried 3 times; an
+          # interrupted try leaves dpkg half done, so it is finished first
+          # (itself cut off after a minute).
+          # man-db's trigger alone can take minutes: skipped.
+          sudo rm -f /var/lib/man-db/auto-update
+          apt_try() {
+            for try in 1 2 3; do
+              sudo timeout 180 apt-get -o DPkg::Lock::Timeout=60 \
+                -o Acquire::Retries=3 -o Acquire::http::Timeout=30 "$@" && return 0
+              echo "apt-get $1: failed or timed out (try $try of 3)"
+              [ "$try" -lt 3 ] || break
+              sudo timeout 60 dpkg --configure -a || true
+              sleep 10
+            done
+            return 1
+          }
+          apt_try update -qq
+          apt_try install -y -qq ${{ matrix.mingw-pkg }}
 
       - name: Build (${{ matrix.cc }})
         run: |
@@ -343,12 +363,33 @@ jobs:
           }
 
       - name: Install Wine
+        # apt sometimes hangs on the runner (#93): fail instead of waiting.
+        # Takes ~1 min; the limit covers update and the first package set
+        # with every try (23 min), a later set fails fast when it is missing
+        timeout-minutes: 30
         run: |
+          # As in Install MinGW: each apt command cut off after 3 minutes and
+          # tried 3 times, man-db's trigger skipped
+          sudo rm -f /var/lib/man-db/auto-update
+          apt_try() {
+            for try in 1 2 3; do
+              sudo timeout 180 apt-get -o DPkg::Lock::Timeout=60 \
+                -o Acquire::Retries=3 -o Acquire::http::Timeout=30 "$@" && return 0
+              echo "apt-get $1: failed or timed out (try $try of 3)"
+              [ "$try" -lt 3 ] || break
+              sudo timeout 60 dpkg --configure -a || true
+              sleep 10
+            done
+            return 1
+          }
           sudo dpkg --add-architecture i386
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends wine wine32 wine64 2>/dev/null || \
-            sudo apt-get install -y -qq --no-install-recommends wine wine64 2>/dev/null || \
-            sudo apt-get install -y -qq --no-install-recommends wine 2>/dev/null || true
+          apt_try update -qq
+          # The package set differs between Ubuntu releases: the first one
+          # that installs; none at all fails the step
+          for pkgs in "wine wine32 wine64" "wine wine64" "wine"; do
+            # shellcheck disable=SC2086
+            apt_try install -y -qq --no-install-recommends $pkgs 2>/dev/null && break
+          done
 
       - name: Smoke test (--help and --version)
         run: |
