@@ -161,6 +161,32 @@ static void reset_tun_backend(void)
     tun_persistent = 0;
 }
 
+#if !defined(__APPLE__)
+#ifdef O_CLOEXEC
+#define TUN_OPEN_CLOEXEC O_CLOEXEC  /* no child keeps camex.ko busy */
+#else
+#define TUN_OPEN_CLOEXEC 0
+#endif
+
+/* A kernel without IPv6 has no such file: nothing to turn off */
+static void tun_disable_ipv6(const char *ifname)
+{
+    char path[64];
+    int fd;
+
+    snprintf(path, sizeof(path), "/proc/sys/net/ipv6/conf/%s/disable_ipv6",
+             ifname);
+    fd = open(path, O_WRONLY | TUN_OPEN_CLOEXEC);
+    if (fd < 0) {
+        return;
+    }
+    if (write(fd, "1", 1) != 1) {
+        log_message(LOG_DEBUG, "Could not turn IPv6 off on %s", ifname);
+    }
+    close(fd);
+}
+#endif
+
 static void close_tun_creation(int sock, int fd)
 {
     if (sock >= 0) {
@@ -550,13 +576,13 @@ int tun_create_device(const char *local_ip, const char *netmask,
     if (tun_dev_override != NULL && tun_dev_override[0] != '\0') {
         devpath_used = tun_dev_override;
         log_message(LOG_INFO, "TUN device override: %s", devpath_used);
-        fd = open(devpath_used, O_RDWR);
+        fd = open(devpath_used, O_RDWR | TUN_OPEN_CLOEXEC);
         if (fd < 0) {
             print_errno_message(LOG_ERR, "open(tun_dev)");
             return -1;
         }
     } else {
-        fd = open(DEV_NET_TUN, O_RDWR);
+        fd = open(DEV_NET_TUN, O_RDWR | TUN_OPEN_CLOEXEC);
         if (fd >= 0) {
             copy_ifreq_name(&ifr, "tun%d");
             ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
@@ -571,10 +597,11 @@ int tun_create_device(const char *local_ip, const char *netmask,
         }
 
         if (fd < 0) {
-            fd = open(DEV_CAMEX, O_RDWR);
+            fd = open(DEV_CAMEX, O_RDWR | TUN_OPEN_CLOEXEC);
             if (fd < 0) {
                 log_message(LOG_ERR,
-                    "No TUN backend: /dev/net/tun and /dev/camex both failed");
+                    "No TUN backend: /dev/net/tun and /dev/camex both failed; "
+                    "load tun.ko or camex.ko");
                 return -1;
             }
             devpath_used = DEV_CAMEX;
@@ -633,6 +660,10 @@ int tun_create_device(const char *local_ip, const char *netmask,
     if (ioctl(sock, SIOCSIFMTU, &cfg) < 0) {
         print_errno_message(LOG_WARNING, "ioctl(SIOCSIFMTU)");
     }
+
+    /* IPv4 only: no link-local address, router solicitations or MLD
+     * reports from the interface into the tunnel (#103) */
+    tun_disable_ipv6(tun_name);
 
     copy_ifreq_name(&cfg, tun_name);
     if (ioctl(sock, SIOCGIFFLAGS, &cfg) < 0) {

@@ -538,6 +538,39 @@ jobs:
             make -C "$K" M=/tmp/m modules
             test -f /tmp/m/camex.ko'
 
+  kmod-vm:
+    name: Kernel module VM test (camex.ko + client)
+    needs: [linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download x86_64 binary
+        uses: actions/download-artifact@v7
+        with:
+          name: camex-x86_64
+          path: build-musl/
+
+      # camex.ko in a QEMU guest (kmodtest), then the camex client over
+      # /dev/camex against a server in the container: address, route, IPv6
+      # off, traffic both ways, clean after SIGTERM (#99, #103)
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm || true
+
+      - name: Run the VM test
+        env:
+          CAMEX_BINARY: build-musl/camex-x86_64
+        run: |
+          chmod +x build-musl/camex-x86_64
+          docker/test-kmod-vm.sh ubuntu:24.04
+
   # ------------------------------------------------------------- consolidated
   sizes:
     name: Collect sizes
