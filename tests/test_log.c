@@ -9,27 +9,41 @@
 #include "log.h"
 
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 int main(void)
 {
-    log_limit_t limit = { 0, 0U, 0U };
+    log_limit_t limit;
     int failures = 0;
-    unsigned int i;
-    long start = (long)time(NULL);
+    unsigned int i, tries;
+    long before, after;
+
+    memset(&limit, 0, sizeof(limit));
 
     /* A burst within one second: LOG_LIMIT_BURST logged, the rest counted.
-     * Retry if the burst happened to cross a second boundary. */
-    for (;;) {
+     * Retry when the burst crossed a second boundary (#90): the second
+     * before the first message and after the last one must be the same.
+     * Checking the window after the burst is not enough: a burst that
+     * starts at the end of a second ends in a new window that looks fine
+     * but holds one message less. Under qemu on a loaded host a burst can
+     * cross a boundary more than once in a row, hence several tries. */
+    for (tries = 0U; tries < 20U; ++tries) {
         limit.window = 0;
         limit.count = 0U;
         limit.suppressed = 0U;
+        before = (long)time(NULL);
         for (i = 0U; i < 20U; ++i) {
             log_limited(&limit, LOG_DEBUG, "dropped packet %u", i);
         }
-        if (limit.window == (long)time(NULL) || (long)time(NULL) - start > 3) {
+        after = (long)time(NULL);
+        if (before == after && limit.window == before) {
             break;
         }
+    }
+    if (tries == 20U) {
+        fprintf(stderr, "FAIL: every burst crossed a second boundary\n");
+        ++failures;
     }
     if (limit.count != LOG_LIMIT_BURST ||
         limit.suppressed != 20U - LOG_LIMIT_BURST ||
