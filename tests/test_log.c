@@ -9,17 +9,14 @@
 #include "log.h"
 
 #include <stdio.h>
-#include <string.h>
 #include <time.h>
 
 int main(void)
 {
-    log_limit_t limit;
+    log_limit_t limit = { 0 };   /* every member its zero value */
     int failures = 0;
     unsigned int i, tries;
     long before, after;
-
-    memset(&limit, 0, sizeof(limit));
 
     /* A burst within one second: LOG_LIMIT_BURST logged, the rest counted.
      * Retry when the burst crossed a second boundary (#90): the second
