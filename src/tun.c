@@ -161,8 +161,95 @@ static void reset_tun_backend(void)
     tun_persistent = 0;
 }
 
+#if !defined(__APPLE__)
+#ifdef O_CLOEXEC
+#define TUN_OPEN_CLOEXEC O_CLOEXEC  /* no child keeps camex.ko busy */
+#else
+#define TUN_OPEN_CLOEXEC 0
+#endif
+
+/* What disable_ipv6 was before we set it ('0'), to put back when the
+ * interface outlives us (#103); 0 = nothing to put back */
+static char tun_ipv6_was = 0;
+
+static int tun_ipv6_path(char *path, size_t size, const char *ifname)
+{
+    return snprintf(path, size, "/proc/sys/net/ipv6/conf/%s/disable_ipv6",
+                    ifname) < (int)size;
+}
+
+/* IPv4 only: no link-local address, router solicitations or MLD reports
+ * from the interface into the tunnel. A kernel without IPv6 has no such
+ * file: nothing to turn off */
+static void tun_disable_ipv6(const char *ifname)
+{
+    char path[64];
+    char cur = 0;
+    int fd;
+
+    tun_ipv6_was = 0;
+    if (!tun_ipv6_path(path, sizeof(path), ifname)) {
+        return;
+    }
+    fd = open(path, O_RDONLY | TUN_OPEN_CLOEXEC);
+    if (fd < 0) {
+        if (errno != ENOENT) {
+            log_message(LOG_WARNING, "IPv6 stays on on %s: %s: %s", ifname,
+                        path, strerror(errno));
+        }
+        return;
+    }
+    if (read(fd, &cur, 1) != 1) {
+        /* Unknown before: changing it could not be undone, leave it */
+        log_message(LOG_WARNING, "IPv6 stays on on %s: %s: unreadable",
+                    ifname, path);
+        close(fd);
+        return;
+    }
+    close(fd);
+    if (cur == '1') {
+        return;     /* already off */
+    }
+    fd = open(path, O_WRONLY | TUN_OPEN_CLOEXEC);
+    if (fd < 0 || write(fd, "1", 1) != 1) {
+        log_message(LOG_WARNING, "IPv6 stays on on %s: %s: %s", ifname, path,
+                    strerror(errno));
+    } else if (cur == '0') {
+        tun_ipv6_was = cur;
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+}
+
+/* Puts disable_ipv6 back as we found it: an interface that outlives us is
+ * left as it was (a /dev/net/tun interface goes away anyway) */
+static void tun_restore_ipv6(void)
+{
+    char path[64];
+    int fd;
+
+    if (tun_ipv6_was == 0 || tun_name[0] == '\0' ||
+        !tun_ipv6_path(path, sizeof(path), tun_name)) {
+        tun_ipv6_was = 0;
+        return;
+    }
+    fd = open(path, O_WRONLY | TUN_OPEN_CLOEXEC);
+    if (fd >= 0) {
+        if (write(fd, &tun_ipv6_was, 1) != 1) {
+            log_message(LOG_DEBUG, "disable_ipv6 of %s not put back", tun_name);
+        }
+        close(fd);
+    }
+    tun_ipv6_was = 0;
+}
+#endif
+
 static void close_tun_creation(int sock, int fd)
 {
+#if !defined(__APPLE__)
+    tun_restore_ipv6();
+#endif
     if (sock >= 0) {
         close(sock);
     }
@@ -546,17 +633,20 @@ int tun_create_device(const char *local_ip, const char *netmask,
     if (local_ip == NULL || netmask == NULL || mtu <= 0) {
         return -1;
     }
+    /* A failure before tun_disable_ipv6() must not put back a value saved
+     * for an earlier interface */
+    tun_ipv6_was = 0;
 
     if (tun_dev_override != NULL && tun_dev_override[0] != '\0') {
         devpath_used = tun_dev_override;
         log_message(LOG_INFO, "TUN device override: %s", devpath_used);
-        fd = open(devpath_used, O_RDWR);
+        fd = open(devpath_used, O_RDWR | TUN_OPEN_CLOEXEC);
         if (fd < 0) {
             print_errno_message(LOG_ERR, "open(tun_dev)");
             return -1;
         }
     } else {
-        fd = open(DEV_NET_TUN, O_RDWR);
+        fd = open(DEV_NET_TUN, O_RDWR | TUN_OPEN_CLOEXEC);
         if (fd >= 0) {
             copy_ifreq_name(&ifr, "tun%d");
             ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
@@ -571,10 +661,11 @@ int tun_create_device(const char *local_ip, const char *netmask,
         }
 
         if (fd < 0) {
-            fd = open(DEV_CAMEX, O_RDWR);
+            fd = open(DEV_CAMEX, O_RDWR | TUN_OPEN_CLOEXEC);
             if (fd < 0) {
                 log_message(LOG_ERR,
-                    "No TUN backend: /dev/net/tun and /dev/camex both failed");
+                    "No TUN backend: /dev/net/tun and /dev/camex both failed; "
+                    "load tun.ko or camex.ko");
                 return -1;
             }
             devpath_used = DEV_CAMEX;
@@ -633,6 +724,8 @@ int tun_create_device(const char *local_ip, const char *netmask,
     if (ioctl(sock, SIOCSIFMTU, &cfg) < 0) {
         print_errno_message(LOG_WARNING, "ioctl(SIOCSIFMTU)");
     }
+
+    tun_disable_ipv6(tun_name);     /* IPv4 only (#103) */
 
     copy_ifreq_name(&cfg, tun_name);
     if (ioctl(sock, SIOCGIFFLAGS, &cfg) < 0) {
@@ -741,7 +834,9 @@ void tun_close_device(void)
 #if !defined(__APPLE__)
     if (tun_fd >= 0 && tun_persistent && tun_name[0] != '\0') {
         tun_release_persistent();
+        tun_restore_ipv6();
     }
+    tun_ipv6_was = 0;   /* nothing saved outlives this interface */
 #endif
     if (tun_fd >= 0) {
         close((int)tun_fd);
