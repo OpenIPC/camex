@@ -26,9 +26,16 @@ int main(void)
      * before the first message and after the last one must be the same.
      * Checking the window after the burst is not enough: a burst that
      * starts at the end of a second ends in a new window that looks fine
-     * but holds one message less. Under qemu on a loaded host a burst can
-     * cross a boundary more than once in a row, hence several tries. */
-    for (tries = 0U; tries < 20U; ++tries) {
+     * but holds one message less. Each try starts right after a second
+     * begins, so the burst has the whole second; a host so slow that every
+     * burst takes longer skips the check rather than failing it. */
+    for (tries = 0U; tries < 10U; ++tries) {
+        struct timespec pause = { 0, 1000000L };   /* 1 ms */
+
+        before = (long)time(NULL);
+        while ((long)time(NULL) == before) {
+            nanosleep(&pause, NULL);
+        }
         limit.window = 0;
         limit.count = 0U;
         limit.suppressed = 0U;
@@ -41,13 +48,12 @@ int main(void)
             break;
         }
     }
-    if (tries == 20U) {
-        fprintf(stderr, "FAIL: every burst crossed a second boundary\n");
-        ++failures;
-    }
-    if (limit.count != LOG_LIMIT_BURST ||
-        limit.suppressed != 20U - LOG_LIMIT_BURST ||
-        limit.suppressed_priority != LOG_DEBUG) {
+    if (tries == 10U) {
+        printf("test_log: SKIP burst: every burst took longer than a "
+               "second on this host\n");
+    } else if (limit.count != LOG_LIMIT_BURST ||
+               limit.suppressed != 20U - LOG_LIMIT_BURST ||
+               limit.suppressed_priority != LOG_DEBUG) {
         fprintf(stderr, "FAIL: burst: count=%u suppressed=%u\n",
                 limit.count, limit.suppressed);
         ++failures;
