@@ -129,6 +129,10 @@ jobs:
         run: ./docker/test-e2e-isolation.sh
         if: matrix.target == 'x86_64'
 
+      - name: E2E test (nginx map of the clients, issue #84)
+        run: ./docker/test-e2e-nginx-map.sh
+        if: matrix.target == 'x86_64'
+
       - name: Cache toolchain
         uses: actions/cache@v6
         with:

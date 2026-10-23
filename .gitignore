@@ -11,6 +11,7 @@ tests/test_packet
 tests/test_noise
 tests/test_keys
 tests/test_session
+tests/test_nginxmap
 tests/v2tool
 tests/test_log
 

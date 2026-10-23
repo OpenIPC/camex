@@ -15,6 +15,7 @@
 #include "camex.h"
 #include "log.h"
 #include "server.h"
+#include "nginxmap.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -335,9 +336,11 @@ static void control_answer(control_conn_t *c)
         c->out = server_status(0, &len);
     } else if (strcmp(c->cmd, "STATUS JSON") == 0) {
         c->out = server_status(1, &len);
+    } else if (strcmp(c->cmd, "CLIENTS") == 0) {
+        c->out = server_clients_list(&len);
     } else {
         static const char err[] = "ERROR unknown command (STATUS, "
-                                  "STATUS JSON)\n";
+                                  "STATUS JSON, CLIENTS)\n";
 
         c->out = malloc(sizeof(err));
         if (c->out != NULL) {
@@ -507,7 +510,8 @@ static int control_ask(const char *path, const char *cmd, char **buf,
                     : (err == ECONNREFUSED || err == ENOENT)
                           ? " (is the server running?)" : "");
         close(fd);
-        return -1;
+        /* -2: nobody listens there (a server that is gone) */
+        return (err == ECONNREFUSED || err == ENOENT) ? -2 : -1;
     }
 #ifdef MSG_NOSIGNAL
     if (send(fd, cmd, strlen(cmd), MSG_NOSIGNAL) != (ssize_t)strlen(cmd)) {
@@ -680,7 +684,92 @@ int control_status(const char *path, int json)
     return ok == n ? 0 : 1;
 }
 
+int control_nginx_map(const char *path, const char *domain, int port,
+                      const char *dflt)
+{
+    control_path_t one;
+    control_path_t *paths = &one;
+    control_path_t *listed = NULL;
+    char *all = NULL, *map;
+    size_t all_len = 0U, count = 0U;
+    int n, i;
+
+    if (path != NULL && path[0] != '\0') {
+        n = 1;
+        snprintf(one, sizeof(one), "%s", path);
+    } else {
+        n = control_list(&listed);
+        paths = listed;
+        if (n <= 0) {
+            free(listed);
+            fprintf(stderr, "camex: no server control socket in %s (is a "
+                    "server running? --control <path> for another one)\n",
+                    CAMEX_CONTROL_DIR);
+            return 1;
+        }
+    }
+    /* Every running server must answer: a map without one server's
+     * clients would send their names to the offline page */
+    for (i = 0; i < n; ++i) {
+        char *buf = NULL;
+        size_t len = 0U;
+        char *grown;
+
+        int rc = control_ask(paths[i], "CLIENTS\n", &buf, &len);
+
+        /* A socket left behind by a server that is gone (found in the
+         * directory, not named with --control) has no clients: skip it */
+        if (rc == -2 && listed != NULL) {
+            fprintf(stderr, "camex: %s: no server listens there, skipped\n",
+                    paths[i]);
+            free(buf);
+            continue;
+        }
+        if (rc != 0) {
+            free(buf);
+            free(all);
+            free(listed);
+            return 1;
+        }
+        grown = realloc(all, all_len + len + 1U);
+        if (grown == NULL) {
+            free(buf);
+            free(all);
+            free(listed);
+            return 1;
+        }
+        all = grown;
+        memcpy(all + all_len, buf, len);
+        all_len += len;
+        all[all_len] = '\0';
+        free(buf);
+    }
+    free(listed);
+    map = nginx_map_format(all, domain, port, dflt, stderr, &count);
+    free(all);
+    if (map == NULL) {
+        fprintf(stderr, "camex: cannot build the map (check --domain, "
+                "--upstream-port and --default)\n");
+        return 1;
+    }
+    fputs(map, stdout);
+    fflush(stdout);
+    free(map);
+    return 0;
+}
+
 #else  /* _WIN32 */
+
+int control_nginx_map(const char *path, const char *domain, int port,
+                      const char *dflt)
+{
+    (void)path;
+    (void)domain;
+    (void)port;
+    (void)dflt;
+    fprintf(stderr, "camex: --status is not available on Windows\n");
+    return 1;
+}
 
 int control_status(const char *path, int json)
 {

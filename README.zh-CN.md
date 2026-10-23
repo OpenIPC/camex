@@ -281,6 +281,10 @@ sudo ./camex \
 | `--status`                 |        | 列出本机所有服务器的已连接客户端后退出（以服务器的用户运行，通常为 root）                                                                     |
 | `--json`                   |        | 与 `--status` 一起使用：以 JSON 输出，便于脚本处理                                                                                            |
 | `--control <path>`         |        | 服务器：`--status` 使用的控制套接字（默认 `/run/camex/camex-<transport>-<port>.sock`，`none` 为关闭）；与 `--status` 一起使用：只查询该服务器 |
+| `--format <fmt>`           |        | 与 `--status` 一起使用：`table`（默认）、`json`（同 `--json`）或 `nginx-map`，见[客户端前面的 nginx](#客户端前面的-nginx)                     |
+| `--domain <name>`          |        | 与 `--format nginx-map` 一起使用：客户端 ID 之后的域名                                                                                        |
+| `--upstream-port <port>`   |        | 与 `--format nginx-map` 一起使用：客户端的 Web 端口（默认 80）                                                                                |
+| `--default <ip:port>`      |        | 与 `--format nginx-map` 一起使用：没有在线客户端的名称转到何处（默认无，即 nginx 的离线页面）                                                 |
 | `--client-isolation`       |        | 服务器：丢弃客户端之间的数据包（或在 `[server]` 中设置 `client_isolation=yes`），见[安全模型](#安全模型)                                      |
 | `--bind-dev <iface>`       | `-d`   | 将套接字绑定到指定网络接口（`SO_BINDTODEVICE`）                                                                                               |
 | `--transport <proto>`      | `-R`   | 传输协议：`udp`（默认）或 `tcp`                                                                                                               |
@@ -357,6 +361,39 @@ CAM-C  10.200.0.4       gone 6m40s
 （首次握手的 Unix 时间）、`connected_s`（当前连接）、`last_packet_s`（首个数据包之前为 `null`）、`last_handshake_s`、`handshakes`、
 `rx_packets`、`rx_bytes`、`tx_packets`、`tx_bytes`、`isolation_drops`；每个保留地址包含 `id`、
 `address`、`gone_s` 和 `previous`（客户端上一会话的地址为 `true`）。
+
+### 客户端前面的 nginx
+
+服务器所在主机上的 nginx 可以按名称打开每个客户端的 Web 界面，
+`http://<客户端 ID>.cam.example.lan/` → `http://<其隧道地址>:80/`，无需维护地址
+列表：`camex --status --format nginx-map` 输出包含在线客户端的 nginx `map`，
+`examples/camex-nginx-sync.sh` 将其写入 nginx 引用的文件，并在内容变化时重新加载
+nginx。
+
+```sh
+sudo camex --status --format nginx-map --domain cam.example.lan
+```
+
+```
+# camex --status --format nginx-map: generated, do not edit
+map $host $camex_upstream {
+    "cam-a.cam.example.lan" 10.200.0.2:80;
+    "cam-b.cam.example.lan" 10.200.0.3:80;
+}
+```
+
+- 主机名为小写的客户端 ID 加上 `--domain`；不是有效主机名标签（字母、数字和 `-`，
+  最多 63 个）的 ID 会被跳过并给出警告。`--upstream-port` 设置客户端的 Web 端口
+  （80），`--default <ip:port>` 设置没有在线客户端的名称的目标。输出经过排序，
+  状态不变时文件内容相同；若某个正在运行的服务器没有应答，则不输出任何内容且退出码
+  为 1，同步脚本会保留原来的 map（已停止的服务器遗留的套接字会被跳过）。
+- `examples/nginx-camex.conf` 是 server 块：`proxy_pass` 到 map 中的目标、
+  WebSocket、不缓冲、较短的连接超时，以及没有在线客户端的名称的“离线”页面。
+  `examples/camex-nginx-sync.sh`（POSIX sh）可运行一次或使用 `--loop <秒>`；
+  `camex-nginx-sync.service` 和 `.timer` 每 10 秒运行一次。地址是稳定的（#81），
+  因此只有在客户端上线或离开时 map 才会变化。
+- 脚本的设置：`DOMAIN`、`UPSTREAM_PORT`、`DEFAULT`、`CONTROL`、`MAP`
+  （`/etc/nginx/camex-map.conf`）、`CAMEX`、`NGINX_BIN`。
 
 ### 自动地址池与客户端数量
 
