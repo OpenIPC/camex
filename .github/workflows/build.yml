@@ -284,19 +284,27 @@ jobs:
       - name: Install MinGW
         # apt sometimes hangs on the runner (#93): fail instead of waiting.
         # Takes ~20 s; the limit leaves room for every try below: 2 commands
-        # x (3 tries x 180 s + 2 recoveries x (60 s + 10 s)) = 23 min
-        timeout-minutes: 25
+        # x (3 tries x 300 s + 2 recoveries x (60 s + 10 s)) = 35 min
+        timeout-minutes: 36
         run: |
-          # Each apt command is cut off after 3 minutes and tried 3 times; an
-          # interrupted try leaves dpkg half done, so it is finished first
-          # (itself cut off after a minute).
+          # Each apt command is cut off after 5 minutes (a slow mirror still
+          # gets through; a cut-off download resumes on the next try) and
+          # tried 3 times; an interrupted try leaves dpkg half done, so it is
+          # finished first (itself cut off after a minute). install runs with
+          # -q, not -qq: the log shows each download and dpkg step, so a hang
+          # shows where it is (#95).
           # man-db's trigger alone can take minutes: skipped.
           sudo rm -f /var/lib/man-db/auto-update
           apt_try() {
             for try in 1 2 3; do
-              sudo timeout 180 apt-get -o DPkg::Lock::Timeout=60 \
-                -o Acquire::Retries=3 -o Acquire::http::Timeout=30 "$@" && return 0
+              sudo env DEBIAN_FRONTEND=noninteractive timeout 300 apt-get \
+                -o DPkg::Lock::Timeout=60 -o Acquire::Retries=3 \
+                -o Acquire::http::Timeout=30 "$@" && return 0
               echo "apt-get $1: failed or timed out (try $try of 3)"
+              # Where it stopped (#95): the last dpkg actions and what of
+              # apt and dpkg is still running
+              sudo tail -n 5 /var/log/dpkg.log 2>/dev/null || true
+              ps -C apt-get,dpkg,http,https,gpgv,store -o pid,etime,args || true
               [ "$try" -lt 3 ] || break
               sudo timeout 60 dpkg --configure -a || true
               sleep 10
@@ -304,7 +312,7 @@ jobs:
             return 1
           }
           apt_try update -qq
-          apt_try install -y -qq ${{ matrix.mingw-pkg }}
+          apt_try install -y -q ${{ matrix.mingw-pkg }}
 
       - name: Build (${{ matrix.cc }})
         run: |
@@ -365,17 +373,22 @@ jobs:
       - name: Install Wine
         # apt sometimes hangs on the runner (#93): fail instead of waiting.
         # Takes ~1 min; the limit covers update and the first package set
-        # with every try (23 min), a later set fails fast when it is missing
-        timeout-minutes: 30
+        # with every try (35 min), a later set fails fast when it is missing
+        timeout-minutes: 40
         run: |
-          # As in Install MinGW: each apt command cut off after 3 minutes and
-          # tried 3 times, man-db's trigger skipped
+          # As in Install MinGW: each apt command cut off after 5 minutes and
+          # tried 3 times, install with -q, man-db's trigger skipped
           sudo rm -f /var/lib/man-db/auto-update
           apt_try() {
             for try in 1 2 3; do
-              sudo timeout 180 apt-get -o DPkg::Lock::Timeout=60 \
-                -o Acquire::Retries=3 -o Acquire::http::Timeout=30 "$@" && return 0
+              sudo env DEBIAN_FRONTEND=noninteractive timeout 300 apt-get \
+                -o DPkg::Lock::Timeout=60 -o Acquire::Retries=3 \
+                -o Acquire::http::Timeout=30 "$@" && return 0
               echo "apt-get $1: failed or timed out (try $try of 3)"
+              # Where it stopped (#95): the last dpkg actions and what of
+              # apt and dpkg is still running
+              sudo tail -n 5 /var/log/dpkg.log 2>/dev/null || true
+              ps -C apt-get,dpkg,http,https,gpgv,store -o pid,etime,args || true
               [ "$try" -lt 3 ] || break
               sudo timeout 60 dpkg --configure -a || true
               sleep 10
@@ -388,7 +401,7 @@ jobs:
           # that installs; none at all fails the step
           for pkgs in "wine wine32 wine64" "wine wine64" "wine"; do
             # shellcheck disable=SC2086
-            apt_try install -y -qq --no-install-recommends $pkgs 2>/dev/null && break
+            apt_try install -y -q --no-install-recommends $pkgs && break
           done
 
       - name: Smoke test (--help and --version)
