@@ -314,7 +314,7 @@ jobs:
               # takes the next mirror and resumes the partial downloads
               M=/etc/apt/apt-mirrors.txt
               if grep -q 'azure\.archive' "$M" 2>/dev/null &&
-                 [ "$(grep -vc 'azure\.archive' "$M")" -gt 0 ]; then
+                 [ "$(grep -v 'azure\.archive' "$M" | grep -c '://')" -gt 0 ]; then
                 sudo sed -i '/azure\.archive/d' "$M"
                 echo "apt mirrors now:"; cat "$M"
               fi
@@ -411,7 +411,7 @@ jobs:
               # takes the next mirror and resumes the partial downloads
               M=/etc/apt/apt-mirrors.txt
               if grep -q 'azure\.archive' "$M" 2>/dev/null &&
-                 [ "$(grep -vc 'azure\.archive' "$M")" -gt 0 ]; then
+                 [ "$(grep -v 'azure\.archive' "$M" | grep -c '://')" -gt 0 ]; then
                 sudo sed -i '/azure\.archive/d' "$M"
                 echo "apt mirrors now:"; cat "$M"
               fi
