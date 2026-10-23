@@ -352,10 +352,15 @@ jobs:
       matrix:
         arch: [x86_64, i686]
         include:
+          # Only the Wine half each arch runs: wine64 for x86_64, wine32 (an
+          # i386 package) for i686; both together are ~286 MB, too much for
+          # a slow mirror (#97)
           - arch: x86_64
             winearch: win64
+            wine-pkg: wine64
           - arch: i686
             winearch: win32
+            wine-pkg: wine32
     steps:
       - name: Download camex-${{ matrix.arch }}.exe
         uses: actions/download-artifact@v7
@@ -376,7 +381,7 @@ jobs:
       - name: Install Wine
         # apt sometimes hangs on the runner (#93): fail instead of waiting.
         # Takes ~1 min; the limit covers update and the first package set
-        # with every try (35 min), a later set fails fast when it is missing
+        # with every try (35 min), the fallback fails fast when it is missing
         timeout-minutes: 40
         run: |
           # As in Install MinGW: each apt command cut off after 5 minutes and
@@ -398,11 +403,14 @@ jobs:
             done
             return 1
           }
-          sudo dpkg --add-architecture i386
+          # i386 packages only for wine32: the x86_64 job skips their indexes
+          if [ "${{ matrix.wine-pkg }}" = wine32 ]; then
+            sudo dpkg --add-architecture i386
+          fi
           apt_try update -qq
           # The package set differs between Ubuntu releases: the first one
           # that installs; none at all fails the step
-          for pkgs in "wine wine32 wine64" "wine wine64" "wine"; do
+          for pkgs in "wine ${{ matrix.wine-pkg }}" "wine"; do
             # shellcheck disable=SC2086
             apt_try install -y -q --no-install-recommends $pkgs && break
           done
@@ -412,7 +420,8 @@ jobs:
           export WINEARCH=${{ matrix.winearch }} WINEPREFIX="${RUNNER_TEMP}/.wine-${{ matrix.arch }}"
           # Create a clean prefix for this architecture
           wineboot --init 2>&1 | grep -v "^[0-9a-f]\{4\}:err:" | grep -v '^[0-9a-f]\{4\}:fixme:' || true
-          echo "Using Wine: $(wine --version 2>&1 | head -1)  WINEARCH=${WINEARCH}"
+          # (stdout only: the x86_64 job has no wine32, and Wine says so on stderr)
+          echo "Using Wine: $(wine --version 2>/dev/null)  WINEARCH=${WINEARCH}"
           echo "=== camex-${{ matrix.arch }}.exe --version ==="
           wine camex-${{ matrix.arch }}.exe --version 2>&1 | grep -v "^[0-9a-f]\{4\}:err:"
           echo ""
