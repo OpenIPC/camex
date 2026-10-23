@@ -192,7 +192,8 @@ route other traffic.
 
    The script writes `camex --status --format nginx-map` to the map only when
    it changed, runs `nginx -t` and reloads nginx, and puts the previous map back
-   if nginx rejects the new one; runs never overlap. When a running server does
+   if nginx rejects the new one; runs never overlap (it needs `flock`, from
+   util-linux or busybox). When a running server does
    not answer it leaves the map as it is (a socket left behind by a server that
    is gone is skipped).
 
