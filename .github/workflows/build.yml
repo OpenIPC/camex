@@ -605,7 +605,7 @@ jobs:
   # ----------------------------------------------------------------- release
   release:
     name: Release "latest"
-    needs: [linux, smoke, android, windows, wine-smoke, macos]
+    needs: [linux, smoke, android, windows, wine-smoke, macos, kmod-vm]
     runs-on: ubuntu-latest
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/master'
     permissions:

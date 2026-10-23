@@ -200,7 +200,11 @@ static void tun_disable_ipv6(const char *ifname)
         return;
     }
     if (read(fd, &cur, 1) != 1) {
-        cur = 0;
+        /* Unknown before: changing it could not be undone, leave it */
+        log_message(LOG_WARNING, "IPv6 stays on on %s: %s: unreadable",
+                    ifname, path);
+        close(fd);
+        return;
     }
     close(fd);
     if (cur == '1') {

@@ -16,7 +16,7 @@ release, rebuilt from every push to `master`; this file is the change history.
 - Tests: `docker/test-kmod-vm.sh` with `CAMEX_BINARY=<static camex>` also runs the
   client in the QEMU guest over the real `camex.ko` against a server in the container:
   address and route from the server, IPv6 off, ping both ways, the interface left down
-  without address and route and with its IPv6 setting back after SIGTERM. In CI as "Kernel module VM test".
+  without address and route and with its IPv6 setting back after SIGTERM. In CI as "Kernel module VM test"; the release waits for it.
 
 ## 3.5.1 — 2026-10-23
 
