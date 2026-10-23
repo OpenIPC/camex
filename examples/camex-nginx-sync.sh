@@ -144,7 +144,8 @@ sync_locked() {
             return 1
         fi
         clients=$(grep -c '^    "' "$MAP")
-        log "map updated: $clients clients, nginx reloaded"
+        [ "$clients" = 1 ] && noun=client || noun=clients
+        log "map updated: $clients $noun, nginx reloaded"
         return 0
     fi
     replaced=
