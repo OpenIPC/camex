@@ -8,6 +8,10 @@
 # and outlives the client. Here a persistent tun interface named camex
 # (ip tuntap add) stands in for it: /dev/camex is the tun clone device,
 # so the client sets up the interface by name as it does with camex.ko.
+# The fd is not attached to the interface (no TUNSETIFF on an override
+# path, as with camex.ko): this test covers the interface's life cycle
+# only, not packets. Traffic over the real camex.ko: the QEMU test
+# (docker/test-kmod-vm.sh with CAMEX_BINARY) and the device test.
 #
 # 1. The client brings camex up with its address and the tunnel route.
 # 2. After SIGTERM camex is still there (it is not ours to delete), but
@@ -96,7 +100,9 @@ wait_addr() {       # wait_addr <ifname>: until it has an IPv4 address
 
 stop_client() {     # stop_client <name>: SIGTERM, wait until it is gone
     local _
-    cli "pkill -TERM -f '^camex .*--name $1 '"
+    # pkill must find the client: one that is already gone did not get
+    # the signal, and its clean-up would not be tested
+    cli "pkill -TERM -f '^camex .*--name $1 '" || return 1
     for _ in $(seq 1 10); do
         cli "pgrep -f '^camex .*--name $1 ' >/dev/null" || return 0
         sleep 1
