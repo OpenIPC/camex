@@ -268,13 +268,16 @@ jobs:
           - arch: x86_64
             cc: x86_64-w64-mingw32-gcc
             strip: x86_64-w64-mingw32-strip
-            mingw-pkg: gcc-mingw-w64-x86-64
+            # Only the win32 compiler, which the build uses: the
+            # gcc-mingw-w64-* metapackages also pull the posix one, ~48 MB
+            # more from a mirror that can be slow (#95)
+            mingw-pkg: gcc-mingw-w64-x86-64-win32
             pe-type: PE32+
             wintun-arch: amd64
           - arch: i686
             cc: i686-w64-mingw32-gcc
             strip: i686-w64-mingw32-strip
-            mingw-pkg: gcc-mingw-w64-i686
+            mingw-pkg: gcc-mingw-w64-i686-win32
             pe-type: PE32
             wintun-arch: x86
     steps:
