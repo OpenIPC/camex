@@ -629,6 +629,9 @@ int tun_create_device(const char *local_ip, const char *netmask,
     if (local_ip == NULL || netmask == NULL || mtu <= 0) {
         return -1;
     }
+    /* A failure before tun_disable_ipv6() must not put back a value saved
+     * for an earlier interface */
+    tun_ipv6_was = 0;
 
     if (tun_dev_override != NULL && tun_dev_override[0] != '\0') {
         devpath_used = tun_dev_override;
@@ -829,6 +832,7 @@ void tun_close_device(void)
         tun_release_persistent();
         tun_restore_ipv6();
     }
+    tun_ipv6_was = 0;   /* nothing saved outlives this interface */
 #endif
     if (tun_fd >= 0) {
         close((int)tun_fd);
