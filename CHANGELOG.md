@@ -8,14 +8,15 @@ release, rebuilt from every push to `master`; this file is the change history.
 
 - Linux: IPv6 is turned off on the tunnel interface (`disable_ipv6`) before it comes
   up, so it no longer sends router solicitations or MLD reports into the tunnel, where
-  the server dropped them (#103).
+  the server dropped them (#103). An interface that outlives the client (`camex.ko`)
+  gets its previous setting back on exit; a setting that cannot be changed is logged.
 - `/dev/net/tun` and `/dev/camex` are opened with `O_CLOEXEC`: a child process cannot
   keep `camex.ko` (one open at a time) busy.
 - Without either device the error says what to do: "load tun.ko or camex.ko".
 - Tests: `docker/test-kmod-vm.sh` with `CAMEX_BINARY=<static camex>` also runs the
   client in the QEMU guest over the real `camex.ko` against a server in the container:
   address and route from the server, IPv6 off, ping both ways, the interface left down
-  without address and route after SIGTERM. In CI as "Kernel module VM test".
+  without address and route and with its IPv6 setting back after SIGTERM. In CI as "Kernel module VM test".
 
 ## 3.5.1 — 2026-10-23
 

@@ -88,9 +88,12 @@ if [ -n "$PUB" ]; then
     ip link set eth0 up
     ip addr add 10.0.2.15/24 dev eth0
     ip route add default via 10.0.2.2
-    # kmodtest left 10.9.0.1/24 on camex: start from a clean interface
+    # kmodtest left 10.9.0.1/24 on camex: start from a clean interface,
+    # IPv6 on as camex.ko creates it
     ip addr flush dev camex
     ip link set camex down
+    V6=/proc/sys/net/ipv6/conf/camex/disable_ipv6
+    [ -f $V6 ] && echo 0 > $V6
     /camex --mode client --auto --name VMTEST --server-host 10.0.2.2 --port 5800 \
         --server-pubkey "$PUB" --psk vm-test --tun-dev /dev/camex --keepalive 2 \
         > /tmp/log 2>&1 &
@@ -104,8 +107,8 @@ if [ -n "$PUB" ]; then
         echo "FAIL: client: no address on camex"
     ip route | grep -q "10.200.0.0/24 dev camex" &&
         echo "ok: client: route 10.200.0.0/24 dev camex" || echo "FAIL: client: no route"
-    if [ -f /proc/sys/net/ipv6/conf/camex/disable_ipv6 ]; then
-        [ "$(cat /proc/sys/net/ipv6/conf/camex/disable_ipv6)" = 1 ] &&
+    if [ -f $V6 ]; then
+        [ "$(cat $V6)" = 1 ] &&
             echo "ok: client: IPv6 off on camex" || echo "FAIL: client: IPv6 on camex"
     else
         echo "ok: client: no IPv6 in this kernel"
@@ -127,6 +130,10 @@ if [ -n "$PUB" ]; then
         echo "ok: client: no address on camex after SIGTERM"
     ip route | grep -q "dev camex" && echo "FAIL: client: route left on camex" ||
         echo "ok: client: no route on camex after SIGTERM"
+    if [ -f $V6 ]; then
+        [ "$(cat $V6)" = 0 ] && echo "ok: client: IPv6 setting of camex put back" ||
+            echo "FAIL: client: IPv6 left off on camex"
+    fi
     sed 's/^/guest-log: /' /tmp/log | grep -iE "backend|config|interface|error|warn"
 fi
 poweroff -f

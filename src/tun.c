@@ -168,27 +168,84 @@ static void reset_tun_backend(void)
 #define TUN_OPEN_CLOEXEC 0
 #endif
 
-/* A kernel without IPv6 has no such file: nothing to turn off */
+/* What disable_ipv6 was before we set it ('0'), to put back when the
+ * interface outlives us (#103); 0 = nothing to put back */
+static char tun_ipv6_was = 0;
+
+static int tun_ipv6_path(char *path, size_t size, const char *ifname)
+{
+    return snprintf(path, size, "/proc/sys/net/ipv6/conf/%s/disable_ipv6",
+                    ifname) < (int)size;
+}
+
+/* IPv4 only: no link-local address, router solicitations or MLD reports
+ * from the interface into the tunnel. A kernel without IPv6 has no such
+ * file: nothing to turn off */
 static void tun_disable_ipv6(const char *ifname)
+{
+    char path[64];
+    char cur = 0;
+    int fd;
+
+    tun_ipv6_was = 0;
+    if (!tun_ipv6_path(path, sizeof(path), ifname)) {
+        return;
+    }
+    fd = open(path, O_RDONLY | TUN_OPEN_CLOEXEC);
+    if (fd < 0) {
+        if (errno != ENOENT) {
+            log_message(LOG_WARNING, "IPv6 stays on on %s: %s: %s", ifname,
+                        path, strerror(errno));
+        }
+        return;
+    }
+    if (read(fd, &cur, 1) != 1) {
+        cur = 0;
+    }
+    close(fd);
+    if (cur == '1') {
+        return;     /* already off */
+    }
+    fd = open(path, O_WRONLY | TUN_OPEN_CLOEXEC);
+    if (fd < 0 || write(fd, "1", 1) != 1) {
+        log_message(LOG_WARNING, "IPv6 stays on on %s: %s: %s", ifname, path,
+                    strerror(errno));
+    } else if (cur == '0') {
+        tun_ipv6_was = cur;
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+}
+
+/* Puts disable_ipv6 back as we found it: an interface that outlives us is
+ * left as it was (a /dev/net/tun interface goes away anyway) */
+static void tun_restore_ipv6(void)
 {
     char path[64];
     int fd;
 
-    snprintf(path, sizeof(path), "/proc/sys/net/ipv6/conf/%s/disable_ipv6",
-             ifname);
-    fd = open(path, O_WRONLY | TUN_OPEN_CLOEXEC);
-    if (fd < 0) {
+    if (tun_ipv6_was == 0 || tun_name[0] == '\0' ||
+        !tun_ipv6_path(path, sizeof(path), tun_name)) {
+        tun_ipv6_was = 0;
         return;
     }
-    if (write(fd, "1", 1) != 1) {
-        log_message(LOG_DEBUG, "Could not turn IPv6 off on %s", ifname);
+    fd = open(path, O_WRONLY | TUN_OPEN_CLOEXEC);
+    if (fd >= 0) {
+        if (write(fd, &tun_ipv6_was, 1) != 1) {
+            log_message(LOG_DEBUG, "disable_ipv6 of %s not put back", tun_name);
+        }
+        close(fd);
     }
-    close(fd);
+    tun_ipv6_was = 0;
 }
 #endif
 
 static void close_tun_creation(int sock, int fd)
 {
+#if !defined(__APPLE__)
+    tun_restore_ipv6();
+#endif
     if (sock >= 0) {
         close(sock);
     }
@@ -661,9 +718,7 @@ int tun_create_device(const char *local_ip, const char *netmask,
         print_errno_message(LOG_WARNING, "ioctl(SIOCSIFMTU)");
     }
 
-    /* IPv4 only: no link-local address, router solicitations or MLD
-     * reports from the interface into the tunnel (#103) */
-    tun_disable_ipv6(tun_name);
+    tun_disable_ipv6(tun_name);     /* IPv4 only (#103) */
 
     copy_ifreq_name(&cfg, tun_name);
     if (ioctl(sock, SIOCGIFFLAGS, &cfg) < 0) {
@@ -772,6 +827,7 @@ void tun_close_device(void)
 #if !defined(__APPLE__)
     if (tun_fd >= 0 && tun_persistent && tun_name[0] != '\0') {
         tun_release_persistent();
+        tun_restore_ipv6();
     }
 #endif
     if (tun_fd >= 0) {
