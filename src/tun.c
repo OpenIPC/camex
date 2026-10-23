@@ -667,29 +667,44 @@ static void tun_release_persistent(void)
 {
     struct ifreq cfg;
     struct sockaddr_in *sin;
+    int down = 0, unaddressed = 0;
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
 
     if (sock < 0) {
         print_errno_message(LOG_WARNING, "socket(AF_INET, SOCK_DGRAM)");
+        log_message(LOG_WARNING, "Interface %s left as it is", tun_name);
         return;
     }
     copy_ifreq_name(&cfg, tun_name);
-    if (ioctl(sock, SIOCGIFFLAGS, &cfg) == 0) {
+    if (ioctl(sock, SIOCGIFFLAGS, &cfg) < 0) {
+        print_errno_message(LOG_WARNING, "ioctl(SIOCGIFFLAGS)");
+    } else {
         cfg.ifr_flags &= ~(IFF_UP | IFF_RUNNING);
         if (ioctl(sock, SIOCSIFFLAGS, &cfg) < 0) {
             print_errno_message(LOG_WARNING, "ioctl(SIOCSIFFLAGS)");
+        } else {
+            down = 1;
         }
     }
-    /* Setting 0.0.0.0 removes the address */
+    /* Setting 0.0.0.0 removes the address (none left: nothing to do) */
     copy_ifreq_name(&cfg, tun_name);
     sin = (struct sockaddr_in *)&cfg.ifr_addr;
     sin->sin_family = AF_INET;
     sin->sin_addr.s_addr = htonl(INADDR_ANY);
-    if (ioctl(sock, SIOCSIFADDR, &cfg) < 0 && errno != EADDRNOTAVAIL) {
+    if (ioctl(sock, SIOCSIFADDR, &cfg) == 0 || errno == EADDRNOTAVAIL) {
+        unaddressed = 1;
+    } else {
         print_errno_message(LOG_WARNING, "ioctl(SIOCSIFADDR 0.0.0.0)");
     }
     close(sock);
-    log_message(LOG_INFO, "Interface %s down, address removed", tun_name);
+    if (down && unaddressed) {
+        log_message(LOG_INFO, "Interface %s down, address removed", tun_name);
+    } else {
+        log_message(LOG_WARNING, "Interface %s: %s", tun_name,
+                    down ? "down, but its address is still there"
+                         : unaddressed ? "address removed, but it is still up"
+                                       : "still up with its address");
+    }
 }
 #endif
 
