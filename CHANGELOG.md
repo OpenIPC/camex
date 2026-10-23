@@ -4,6 +4,17 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.5.1 — 2026-10-23
+
+- Client with `camex.ko` (`--tun-dev /dev/camex`, or any device but `/dev/net/tun`):
+  the interface belongs to the module and stays after the client, so on exit the
+  client now brings it down and removes its address; with them go the tunnel
+  network's route and any route through the interface (#99). Before, `camex` kept
+  `UP`, the address and the route until `rmmod`. A device passed in from outside
+  (a TUN provider, `CAMEX_TUN_FD`) is left as it is.
+- Tests: `test-e2e-persistent-tun.sh` (a persistent tun interface standing in for
+  `camex.ko`: clean after SIGTERM, reused by the next client; `/dev/net/tun` unchanged).
+
 ## 3.5.0 — 2026-10-23
 
 - `camex --status --format nginx-map [--domain …] [--upstream-port …] [--default …]`
