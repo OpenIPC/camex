@@ -134,6 +134,8 @@ check $? "nginx -t accepts the configuration"
 check $? "each name gets its own client's page"
 get nobody.$DOMAIN | grep -q "is offline"
 check $? "an unknown name gets the offline page"
+! get "<b>x.$DOMAIN" | grep -q "<b>"
+check $? "the offline page does not echo the Host header"
 
 echo "== 2. a sync without a change"
 before=$(reloads)
