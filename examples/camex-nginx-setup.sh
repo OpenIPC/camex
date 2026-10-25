@@ -97,6 +97,20 @@ if [ ${#DOMAIN} -gt 253 ] ||
     exit 2
 fi
 [ "$INDEX" = none ] && INDEX=
+# The paths go into sed and nginx's configuration: plain ones only
+for v in "$INDEX" "$NGINX_CONF" "$CONF"; do
+    case "$v" in
+        *[!A-Za-z0-9/._-]*)
+            echo "camex-nginx-setup: use a path of letters, digits and" \
+                 "/ . _ - only: $v" >&2
+            exit 2 ;;
+    esac
+done
+case "$INDEX" in
+    ''|/*) ;;
+    *) echo "camex-nginx-setup: --index needs an absolute path: $INDEX" >&2
+       exit 2 ;;
+esac
 if [ -z "$DRY" ] && [ "$(id -u)" != 0 ]; then
     echo "camex-nginx-setup: run it as root (or with --dry-run)" >&2
     exit 2
@@ -112,6 +126,21 @@ for p in "$CAMEX" "$NGINX_BIN"; do
     command -v "$p" >/dev/null 2>&1 || problem "$p is not installed"
 done
 [ "$PROBLEMS" -eq 0 ] || exit 1
+
+# nginx set up by hand already (docs/nginx.md: nginx-camex.conf): a second
+# file with the same names would let nginx pick either, perhaps the one
+# without the user's allow/deny/auth_basic. Update that file instead
+others=$(grep -lsE "^[[:space:]]*include[[:space:]]+$MAP;" \
+             /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/* 2>/dev/null |
+         grep -vxF "$NGINX_CONF")
+if [ -n "$others" ]; then
+    for f in $others; do
+        problem "nginx already has a camex configuration: $f. Run with" \
+                "--nginx-conf $f to update it (edits there are kept without" \
+                "--force), or remove it"
+    done
+    exit 1
+fi
 
 TMP=$(mktemp -d) || exit 1
 trap 'rm -rf "$TMP"' EXIT INT TERM HUP
@@ -142,8 +171,11 @@ install_file() {
 
 # 1. nginx: the example's domain and page directory replaced
 idir=$(dirname "${INDEX:-/var/lib/camex-nginx/index.html}")
+ifile=$(basename "${INDEX:-/var/lib/camex-nginx/index.html}")
 sed -e "s/openipc\.click/$DOMAIN/g" -e "s|/var/lib/camex-nginx|$idir|g" \
-    "$SRC/nginx-camex.conf" > "$TMP/nginx.conf"
+    -e "s|try_files /index\.html |try_files /$ifile |" \
+    "$SRC/nginx-camex.conf" > "$TMP/nginx.conf" ||
+    { problem "cannot make the nginx configuration"; exit 1; }
 if [ -z "$INDEX" ]; then
     # No start page: only the cameras' server block
     awk '/^# The start page\. It lists every connected device/ {exit} {print}' \
@@ -216,10 +248,15 @@ else
             }' "$CONF" > "$TMP/camex.conf"
         if [ -n "$DRY" ]; then
             say "would set domain=$DOMAIN in [server] of $CONF"
-        elif cp -p "$CONF" "$CONF.bak" && cat "$TMP/camex.conf" > "$CONF"; then
+        # Through a copy next to it (its owner and mode), renamed in one
+        # step: a failed write leaves the file as it was
+        elif cp -p "$CONF" "$CONF.bak" && cp -p "$CONF" "$CONF.tmp.$$" &&
+             cat "$TMP/camex.conf" > "$CONF.tmp.$$" &&
+             mv -f "$CONF.tmp.$$" "$CONF"; then
             say "set domain=$DOMAIN in [server] of $CONF (previous: $CONF.bak)"
         else
-            problem "cannot write $CONF"
+            rm -f "$CONF.tmp.$$"
+            problem "cannot write $CONF (left as it was)"
         fi
     fi
 fi
@@ -232,7 +269,11 @@ if [ -z "$pids" ]; then
     problem "no camex server answers: start it with --config $CONF"
 else
     for p in $pids; do
-        run kill -HUP "$p" && say "reloaded the camex server (pid $p)"
+        if run kill -HUP "$p"; then
+            say "reloaded the camex server (pid $p)"
+        else
+            problem "cannot reload the camex server (pid $p): restart it"
+        fi
     done
     [ -n "$DRY" ] || sleep 1
 fi
@@ -248,7 +289,11 @@ if ! "$NGINX_BIN" -t >/dev/null 2>&1; then
 else
     if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] &&
        systemctl is-active --quiet nginx; then
-        systemctl reload nginx && say "reloaded nginx"
+        if systemctl reload nginx; then
+            say "reloaded nginx"
+        else
+            problem "systemctl reload nginx failed"
+        fi
     elif "$NGINX_BIN" -s reload 2>/dev/null; then
         say "reloaded nginx"
     else

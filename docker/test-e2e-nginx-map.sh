@@ -303,11 +303,11 @@ err=$(docker exec "$P-srv" camex --status --format nginx-map --domain other.test
 echo "$err" | grep -q -- "--domain other.test differs from the server's domain= $DOMAIN: other.test used"
 check $? "--domain that differs from domain= is used, with a warning"
 docker exec "$P-srv" sh -c 'echo "[server]" > /tmp/bad.conf; echo "domain=bad_domain" >> /tmp/bad.conf'
-docker exec "$P-srv" timeout 5 camex --mode server --port 5898 \
+out=$(docker exec "$P-srv" timeout 5 camex --mode server --port 5898 \
     --local-cidr 10.202.0.1/24 $SERVER_KEY_ARGS --psk "$PSK" \
-    --config /tmp/bad.conf > /dev/null 2>&1
+    --config /tmp/bad.conf 2>&1)
 rc=$?
-[ $rc -ne 0 ] && [ $rc -ne 124 ]
+[ $rc -ne 0 ] && [ $rc -ne 124 ] && echo "$out" | grep -q "Invalid domain=: bad_domain"
 check $? "a server refuses a file with a domain= that is no host name"
 
 echo "== 8. IDs that are map keywords, no domain"
@@ -349,6 +349,14 @@ echo "$out" | sed 's/^/      /'
 check $? "--check fails on it and says why"
 
 echo "== 10. camex-nginx-setup.sh on a clean host (#106)"
+# Where nginx was set up by hand (nginx-camex.conf), the setup does not
+# add a second configuration with the same names
+out=$(docker exec "$P-srv" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
+rc=$?
+[ $rc -ne 0 ] &&
+    echo "$out" | grep -q "nginx already has a camex configuration: /etc/nginx/conf.d/nginx-camex.conf" &&
+    ! docker exec "$P-srv" test -e /etc/nginx/conf.d/camex.conf
+check $? "an existing camex configuration of nginx is named, nothing added"
 # A new container: the server with camex.conf, nginx with no camex config
 # yet, no sync script; the setup puts it all in place
 docker run -d --name "$P-new" --network "$NET_NAME" --cap-add NET_ADMIN \
@@ -386,6 +394,16 @@ rc=$?
 [ $rc -eq 0 ] && ! docker exec "$P-new" grep -q "^# edited" /etc/nginx/conf.d/camex.conf &&
     docker exec "$P-new" grep -q "^# edited" /etc/nginx/conf.d/camex.conf.bak
 check $? "--force replaces it and keeps the old one as .bak"
+out=$(docker exec "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" \
+    --index /var/lib/camex-nginx/start.html --force 2>&1)
+rc=$?
+[ $rc -eq 0 ] && docker exec "$P-new" grep -q "try_files /start.html " /etc/nginx/conf.d/camex.conf &&
+    docker exec "$P-new" curl -s -m 10 -H "Host: $DOMAIN" http://127.0.0.1/ | grep -q "Camex Devices"
+check $? "another page file name (--index .../start.html) is served"
+out=$(docker exec "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" \
+    --index '/var/lib/a&b/index.html' 2>&1)
+[ $? -ne 0 ] && echo "$out" | grep -q "use a path of letters, digits"
+check $? "a page path with characters sed would read is refused"
 out=$(docker exec "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain other.test 2>&1)
 rc=$?
 [ $rc -ne 0 ] && echo "$out" | grep -q "kept domain=$DOMAIN in /etc/camex/camex.conf"

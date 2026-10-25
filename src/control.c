@@ -800,7 +800,7 @@ static void control_domain(const char *path, const char *given, char *out,
     control_path_t *paths = &one;
     control_path_t *listed = NULL;
     char server[254] = "";
-    int n, i;
+    int n, i, differ = 0, none = 0;
 
     if (path != NULL && path[0] != '\0') {
         n = 1;
@@ -824,18 +824,27 @@ static void control_domain(const char *path, const char *given, char *out,
             if (len > 0U && camex_domain_valid(buf)) {
                 if (server[0] == '\0') {
                     snprintf(server, sizeof(server), "%s", buf);
-                } else if (strcasecmp(server, buf) != 0 &&
-                           (given == NULL || given[0] == '\0')) {
-                    fprintf(stderr, "camex: the servers have other domain= "
-                            "(%s and %s): %s used; --domain decides\n",
-                            server, buf, server);
+                } else if (strcasecmp(server, buf) != 0) {
+                    differ = 1;
                 }
+            } else {
+                none = 1;   /* no domain= (or a server older than 3.8.0) */
             }
         }
         free(buf);
     }
     control_quiet = 0;
     free(listed);
+    /* The servers disagree: all their clients get one domain */
+    if (differ) {
+        fprintf(stderr, "camex: the servers have different domain= (%s "
+                "and another): %s used for all their clients\n", server,
+                given != NULL && given[0] != '\0' ? given : server);
+    } else if (none && server[0] != '\0') {
+        fprintf(stderr, "camex: a server has no domain= while another has "
+                "%s: %s used for all their clients\n", server,
+                given != NULL && given[0] != '\0' ? given : server);
+    }
 
     if (given != NULL && given[0] != '\0') {
         if (server[0] != '\0' && strcasecmp(server, given) != 0) {

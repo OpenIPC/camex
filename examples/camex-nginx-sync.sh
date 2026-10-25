@@ -240,6 +240,23 @@ map_domain() {
     sed -n 's/^# domain: //p' "$1" 2>/dev/null | head -n 1
 }
 
+# nginx -T output (in $1) includes $MAP: compared as text, not a pattern
+includes_map() {
+    printf '%s\n' "$1" |
+        sed -e 's/[[:space:]][[:space:]]*/ /g' -e 's/^ //' -e 's/ $//' |
+        grep -qxF "include $MAP;"
+}
+
+# nginx's workers (not root) can reach file $1: every directory above it
+# lets others through
+reachable() {
+    p=$1
+    while [ "$p" != / ] && [ "$p" != . ]; do
+        p=$(dirname "$p")
+        [ -n "$(find "$p" -maxdepth 0 -perm -001 2>/dev/null)" ] || return 1
+    done
+}
+
 # A domain as an extended regular expression
 domain_re() {
     printf '%s' "$1" | sed 's/[.]/\\./g'
@@ -256,7 +273,7 @@ nginx_warnings() {
     esac
     conf=$("$NGINX_BIN" -T 2>/dev/null 9>&-) || return 0
     re=$(domain_re "$dom")
-    printf '%s\n' "$conf" | grep -qE "^[[:space:]]*include[[:space:]]+$MAP;" ||
+    includes_map "$conf" ||
         log "warning: nginx's configuration does not include $MAP"
     printf '%s\n' "$conf" | grep -E '^[[:space:]]*server_name[[:space:]]' |
         grep -qiE "[[:space:]](\*)?\.$re([[:space:];]|$)" ||
@@ -303,8 +320,7 @@ check_all() {
         fail "nginx -T fails: check the configuration with nginx -t"
     else
         ok "nginx accepts its configuration"
-        if printf '%s\n' "$conf" |
-           grep -qE "^[[:space:]]*include[[:space:]]+$MAP;"; then
+        if includes_map "$conf"; then
             ok "nginx includes the map $MAP"
         else
             fail "nginx does not include the map $MAP (nginx-camex.conf)"
@@ -338,10 +354,13 @@ check_all() {
             fail "the start page's directory $(dirname "$INDEX") is missing"
         elif [ ! -f "$INDEX" ]; then
             warn "no start page $INDEX yet: run the sync"
-        elif [ -n "$(find "$INDEX" -perm -004 2>/dev/null)" ]; then
-            ok "start page $INDEX"
-        else
+        elif [ -z "$(find "$INDEX" -perm -004 2>/dev/null)" ]; then
             fail "start page $INDEX is not readable for nginx"
+        elif ! reachable "$INDEX"; then
+            fail "nginx cannot reach $INDEX: a directory above it does not" \
+                 "let others through (chmod o+x)"
+        else
+            ok "start page $INDEX"
         fi
     else
         ok "no start page (INDEX= empty)"
