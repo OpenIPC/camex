@@ -66,4 +66,9 @@ int control_status(const char *path, int json);
 int control_nginx_map(const char *path, const char *domain, int port,
                       const char *dflt);
 
+/* camex --status --format nginx-index (#105): the same clients, with
+ * their name= from the server's file, as a start page (nginxmap.h).
+ * Exit code 1, and no page, when a server does not answer. */
+int control_nginx_index(const char *path, const char *domain);
+
 #endif /* CAMEX_CONTROL_H */

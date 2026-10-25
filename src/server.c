@@ -2490,6 +2490,31 @@ static const char *status_id(char *buf, size_t size, const char *id)
     return buf;
 }
 
+/* The client's name= (#105), or NULL */
+static const char *status_name(const char *client_id)
+{
+    const camex_server_profile_t *p = client_id[0] != '\0'
+                                          ? config_db_find_client(client_id)
+                                          : NULL;
+
+    return p != NULL && p->name[0] != '\0' ? p->name : NULL;
+}
+
+/* A name as a JSON string: valid UTF-8 without control characters (see
+ * camex_name_valid), so only '"' and '\\' need escaping */
+static void sb_json_name(status_buf_t *b, const char *s)
+{
+    sb_printf(b, "\"");
+    for (; *s != '\0'; ++s) {
+        if (*s == '"' || *s == '\\') {
+            sb_printf(b, "\\%c", *s);
+        } else {
+            sb_printf(b, "%c", *s);
+        }
+    }
+    sb_printf(b, "\"");
+}
+
 static const char *status_key(const server_client_t *c)
 {
     return c->client_id[0] != '\0' &&
@@ -2506,6 +2531,7 @@ char *server_status(int json, size_t *len)
     const char *transport = current_config.transport == CAMEX_TRANSPORT_TCP
                                 ? "tcp" : "udp";
     int id_w = 2, addr_w = 7, peer_w = 4;
+    int any_name = 0;   /* the table gets a NAME column (#105) */
     long pid;
 
 #ifdef _WIN32
@@ -2528,6 +2554,7 @@ char *server_status(int json, size_t *len)
             continue;
         }
         used++;
+        any_name |= status_name(c->client_id) != NULL;
         w = (int)strlen(c->client_id[0] != '\0' ? c->client_id : "-");
         id_w = w > id_w ? w : id_w;
         net_sockaddr_to_string(&c->addr, peer, sizeof(peer));
@@ -2568,10 +2595,10 @@ char *server_status(int json, size_t *len)
         }
         if (used > 0U) {
             sb_printf(&b, "\n%-*s  %-6s  %-6s  %-*s  %-*s  %-9s  %-9s  "
-                      "%-9s  %5s  %10s  %8s  %10s  %8s\n", id_w, "ID",
+                      "%-9s  %5s  %10s  %8s  %10s  %8s%s\n", id_w, "ID",
                       "MODE", "KEY", addr_w, "ADDRESS", peer_w, "PEER",
                       "CONNECTED", "LAST", "HANDSHAKE", "HS", "RX", "RX PKTS",
-                      "TX", "TX PKTS");
+                      "TX", "TX PKTS", any_name ? "  NAME" : "");
         }
     }
 
@@ -2602,6 +2629,12 @@ char *server_status(int json, size_t *len)
             sb_printf(&b, "%s{\"id\":", used > 0U ? "," : "");
             if (c->client_id[0] != '\0') {
                 sb_json_str(&b, c->client_id);
+            } else {
+                sb_printf(&b, "null");
+            }
+            sb_printf(&b, ",\"name\":");
+            if (status_name(c->client_id) != NULL) {
+                sb_json_name(&b, status_name(c->client_id));
             } else {
                 sb_printf(&b, "null");
             }
@@ -2643,6 +2676,7 @@ char *server_status(int json, size_t *len)
         } else {
             char addr[40], d1[32], d2[32], d3[32], rx[24], tx[24];
             char idbuf[CAMEX_CLIENT_ID_LEN];
+            const char *name = status_name(c->client_id);
 
             if (pend[0] != '\0') {
                 snprintf(addr, sizeof(addr), "%s -> %s", ip, pend);
@@ -2659,13 +2693,14 @@ char *server_status(int json, size_t *len)
             status_bytes(rx, sizeof(rx), c->rx_bytes);
             status_bytes(tx, sizeof(tx), c->tx_bytes);
             sb_printf(&b, "%-*s  %-6s  %-6s  %-*s  %-*s  %-9s  %-9s  %-9s  "
-                      "%5u  %10s  %8llu  %10s  %8llu\n", id_w,
+                      "%5u  %10s  %8llu  %10s  %8llu%s%s\n", id_w,
                       status_id(idbuf, sizeof(idbuf), c->client_id),
                       c->auto_client ? "auto" : "manual", status_key(c),
                       addr_w, addr, peer_w, peer, d1, d2, d3,
                       (unsigned)c->handshakes, rx,
                       (unsigned long long)c->rx_packets, tx,
-                      (unsigned long long)c->tx_packets);
+                      (unsigned long long)c->tx_packets,
+                      name != NULL ? "  " : "", name != NULL ? name : "");
         }
         used++;
     }
@@ -2719,12 +2754,14 @@ char *server_status(int json, size_t *len)
 }
 
 /* The live clients as "<client ID> <tunnel address>" lines, for the nginx
- * map (#84): clients with an ID and an address only */
-char *server_clients_list(size_t *len)
+ * map (#84): clients with an ID and an address only; with names, " <name>"
+ * follows for a client with name= (#105) */
+char *server_clients_list(int names, size_t *len)
 {
     status_buf_t b = { NULL, 0U, 0U, 0 };
     size_t i;
     char ip[16];
+    const char *name;
 
     sb_printf(&b, "%s", "");
     for (i = 0U; i < server_max_clients; ++i) {
@@ -2748,7 +2785,11 @@ char *server_clients_list(size_t *len)
             continue;
         }
         ip_text(ntohl(c->ip_be), ip, sizeof(ip));
-        sb_printf(&b, "%s %s\n", c->client_id, ip);
+        name = names ? status_name(c->client_id) : NULL;
+        /* The name is the rest of the line: it was checked to have no
+         * control characters when the file was loaded */
+        sb_printf(&b, "%s %s%s%s\n", c->client_id, ip,
+                  name != NULL ? " " : "", name != NULL ? name : "");
     }
     if (b.err || b.p == NULL) {
         free(b.p);

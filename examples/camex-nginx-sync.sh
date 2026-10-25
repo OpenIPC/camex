@@ -6,7 +6,10 @@
 #
 # Writes `camex --status --format nginx-map` to $MAP when it changed, then
 # checks and reloads nginx; on a failed check the previous map is put back.
-# A server that does not answer leaves the map as it is.
+# With INDEX set, also writes the start page of the clients (`camex
+# --status --format nginx-index`, #105) there when it changed; a static
+# file, so nginx needs no reload for it. A server that does not answer
+# leaves the map and the page as they are.
 #
 # Usage: camex-nginx-sync.sh            once (cron, a systemd timer)
 #        camex-nginx-sync.sh --loop 10  every 10 seconds
@@ -18,6 +21,9 @@
 #                  offline page in nginx-camex.conf)
 #   CONTROL        one server's control socket (empty: every server)
 #   MAP            the map file nginx includes (/etc/nginx/camex-map.conf)
+#   INDEX          the start page nginx serves on the bare domain, e.g.
+#                  /var/lib/camex-nginx/index.html (empty: no page); its
+#                  directory must exist
 #   CAMEX, NGINX_BIN  the programs (camex, nginx; not NGINX, which nginx
 #                  itself reads)
 #
@@ -34,6 +40,7 @@ UPSTREAM_PORT=${UPSTREAM_PORT:-80}
 DEFAULT=${DEFAULT-}
 CONTROL=${CONTROL-}
 MAP=${MAP:-/etc/nginx/camex-map.conf}
+INDEX=${INDEX-}
 CAMEX=${CAMEX:-camex}
 NGINX_BIN=${NGINX_BIN:-nginx}
 
@@ -79,7 +86,7 @@ cleanup() {
             rm -f "$MAP"
         fi
     fi
-    rm -f "${tmp-}" "${prev-}"
+    rm -f "${tmp-}" "${prev-}" "${itmp-}"
     unlock
 }
 
@@ -90,6 +97,7 @@ sync_once() {
     sync_locked
     rc=$?
     replaced=
+    sync_index || rc=1
     trap - INT TERM HUP
     unlock
     return $rc
@@ -155,6 +163,35 @@ sync_locked() {
         rm -f "$MAP"
     fi
     return 1
+}
+
+# The start page: replaced in one step (rename) when it changed, so nginx
+# never serves half of it
+sync_index() {
+    [ -n "$INDEX" ] || return 0
+    itmp="$INDEX.tmp.$$"
+    set -- --status --format nginx-index
+    [ -n "$DOMAIN" ] && set -- "$@" --domain "$DOMAIN"
+    [ -n "$CONTROL" ] && set -- "$@" --control "$CONTROL"
+    if ! "$CAMEX" "$@" > "$itmp" 9>&-; then
+        rm -f "$itmp"
+        log "no start page (a server did not answer); $INDEX left as it is"
+        return 1
+    fi
+    if [ -f "$INDEX" ] && cmp -s "$itmp" "$INDEX"; then
+        rm -f "$itmp"
+        return 0
+    fi
+    # nginx's workers read it: readable by all, whatever the umask
+    if ! { chmod 644 "$itmp" && mv -f "$itmp" "$INDEX"; }; then
+        rm -f "$itmp"
+        log "cannot write $INDEX; left as it is"
+        return 1
+    fi
+    devices=$(grep -c '^<tr class="dev">' "$INDEX")
+    [ "$devices" = 1 ] && noun=device || noun=devices
+    log "start page updated: $devices $noun"
+    return 0
 }
 
 if [ "${1-}" = "--loop" ]; then

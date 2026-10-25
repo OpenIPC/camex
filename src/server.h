@@ -154,8 +154,9 @@ int server_socket_create(const char *bind_ip, int port,
 char *server_status(int json, size_t *len);
 
 /* The live clients with an ID as "<client ID> <tunnel address>" lines,
- * for camex --status --format nginx-map (#84); malloc'd, NULL without
- * memory */
-char *server_clients_list(size_t *len);
+ * for camex --status --format nginx-map (#84); with names, followed by
+ * " <name>" for a client with name= (#105), for --format nginx-index.
+ * malloc'd, NULL without memory */
+char *server_clients_list(int names, size_t *len);
 
 #endif /* CAMEX_SERVER_H */

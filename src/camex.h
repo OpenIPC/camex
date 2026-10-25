@@ -68,6 +68,7 @@ typedef struct {
     uint8_t status_json;       /* --json */
     uint8_t client_isolation;  /* --client-isolation (#83) */
     uint8_t status_nginx_map;  /* --format nginx-map (#84) */
+    uint8_t status_nginx_index;   /* --format nginx-index (#105) */
     char map_domain[254];      /* --domain */
     int map_port;              /* --upstream-port (default 80) */
     char map_default[130];     /* --default */

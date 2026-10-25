@@ -4,6 +4,28 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.6.0 — 2026-10-25
+
+- nginx start page (#105): `camex --status --format nginx-index [--domain …]` prints a
+  static HTML page of the live clients, one row each with its name, ID and tunnel
+  address, the name linked to `//<client ID>.<domain>/`, in the look of OpenIPC/vectis's
+  page (brass panel, a lamp per device; the address column hidden on a phone). Sorted
+  by name, then ID, with no time in it, so an unchanged state gives an identical file.
+  IDs that are not a host name label and duplicates are handled as in the map.
+- Server: an optional `name=` in a `[client ID]` block, UTF-8 text up to 64 bytes
+  without control characters, display only (the host name still uses the ID). A file
+  with a name that is not valid, or with `name=` in `[defaults]`, is refused. `camex
+  --status` shows it in a NAME column (when a client has one), `--json` as `"name"`.
+- Control socket: a new `CLIENTS NAMES` command (`CLIENTS` is unchanged, so
+  `nginx-map` of 3.5.x keeps working against this server).
+- Examples: `camex-nginx-sync.sh` writes the page with `INDEX=` when it changed (no
+  nginx reload); `camex-nginx-sync.service` sets it with `StateDirectory=camex-nginx`;
+  `nginx-camex.conf` serves it on the bare domain, with commented `allow`/`deny` and
+  `auth_basic` lines. `docs/nginx.md`: "Start page", with screenshots (also in the README).
+- Tests: unit tests of the page and of names; the nginx e2e test checks the page on the
+  bare domain, its links, the escaped name, `--status`/`--json`, and that an unchanged
+  state leaves the file alone.
+
 ## 3.5.2 — 2026-10-23
 
 - Linux: IPv6 is turned off on the tunnel interface (`disable_ipv6`) before it comes

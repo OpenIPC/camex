@@ -283,8 +283,8 @@ sudo ./camex \
 | `--status`                 |        | Показать подключённых клиентов всех серверов на этой машине и выйти (от пользователя сервера, обычно root)                                                       |
 | `--json`                   |        | Вместе с `--status`: то же в JSON, для скриптов                                                                                                                  |
 | `--control <path>`         |        | Сервер: управляющий сокет для `--status` (по умолчанию `/run/camex/camex-<transport>-<port>.sock`, `none` — выключен); с `--status`: спросить только этот сервер |
-| `--format <fmt>`           |        | С `--status`: `table` (по умолчанию), `json` (как `--json`) или `nginx-map`, см. [nginx перед клиентами](#nginx-перед-клиентами)                                 |
-| `--domain <name>`          |        | С `--format nginx-map`: домен после ID клиента                                                                                                                   |
+| `--format <fmt>`           |        | С `--status`: `table` (по умолчанию), `json` (как `--json`), `nginx-map` или `nginx-index`, см. [nginx перед клиентами](#nginx-перед-клиентами)                  |
+| `--domain <name>`          |        | С `--format nginx-map` или `nginx-index`: домен после ID клиента                                                                                                 |
 | `--upstream-port <port>`   |        | С `--format nginx-map`: веб-порт клиентов (по умолчанию 80)                                                                                                      |
 | `--default <ip:port>`      |        | С `--format nginx-map`: куда идут имена без живого клиента (по умолчанию никуда — страница nginx «не в сети»)                                                    |
 | `--client-isolation`       |        | Сервер: отбрасывать пакеты от одного клиента другому (или `client_isolation=yes` в `[server]`), см. [Модель безопасности](#модель-безопасности)                  |
@@ -412,7 +412,18 @@ map $host $camex_upstream {
   `.timer` запускают его каждые 10 секунд. Адреса стабильны (#81), поэтому карта
   меняется, только когда клиенты приходят и уходят.
 - Настройки скрипта: `DOMAIN`, `UPSTREAM_PORT`, `DEFAULT`, `CONTROL`, `MAP`
-  (`/etc/nginx/camex-map.conf`), `CAMEX`, `NGINX_BIN`.
+  (`/etc/nginx/camex-map.conf`), `INDEX`, `CAMEX`, `NGINX_BIN`.
+- **Стартовая страница** (#105): `camex --status --format nginx-index --domain
+  cam.example.lan` печатает статическую HTML-страницу со всеми живыми
+  клиентами: имя и ссылка на `//<ID клиента>.cam.example.lan/`. Имя — это
+  `name=` в блоке `[client ID]` клиента на сервере (UTF-8, до 64 байт), а без
+  него — ID; `--status` и `--json` тоже его показывают. С `INDEX=` скрипт
+  синхронизации пишет страницу, когда она изменилась, а второй блок `server` в
+  `examples/nginx-camex.conf` отдаёт её на голом домене
+  (`http://cam.example.lan/`). На странице видны все устройства: ограничьте
+  доступ к ней так же, как к камерам.
+
+  ![Стартовая страница](docs/images/nginx-start-page.png)
 
 Развёртывание целиком — сервер и nginx на одной машине, один общий ключ или
 свой ключ у каждой камеры, камеры, межсетевой экран `nftables`, DNS, TLS и

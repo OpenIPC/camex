@@ -10,7 +10,9 @@ http://<camera ID>.cam.example.lan/   →   http://<its tunnel address>:80/
 ```
 
 Nobody keeps a list of addresses: nginx follows the server's live state through
-`camex --status --format nginx-map` and a small sync script.
+`camex --status --format nginx-map` and a small sync script. The bare domain,
+`http://cam.example.lan/`, opens a start page with every connected camera, its
+name and a link (see [Start page](#start-page)).
 
 ## Topology
 
@@ -34,7 +36,7 @@ Nobody keeps a list of addresses: nginx follows the server's live state through
   camera's tunnel address and proxies to it; a name with no live camera gets an
   "offline" page.
 - **camex-nginx-sync.sh**: rewrites nginx's map when cameras come or go and
-  reloads nginx.
+  reloads nginx, and keeps the start page current.
 
 Both run on the same host on purpose: nginx reaches the tunnel addresses
 through the server's own tunnel interface, and `camex --status` needs the
@@ -102,8 +104,12 @@ list to keep: one block per camera.
 
 ```ini
 [client 001a2b3c4d5e]
+name=Warehouse, entrance
 psk=hex:<this camera's 64 hex digits>
 ```
+
+`name=` is optional, with one shared key too: a block with only `name=` gives
+the camera a name on the start page and changes nothing else.
 
 ## Cameras
 
@@ -197,6 +203,11 @@ route other traffic.
    not answer it leaves the map as it is (a socket left behind by a server that
    is gone is skipped).
 
+5. **The start page** (optional): `INDEX=` in the service (set in the
+   example) makes the script write it, and `StateDirectory=` creates its
+   directory, `/var/lib/camex-nginx`. The second server block of the example
+   serves it on the bare domain. See [Start page](#start-page).
+
 The map looks like this:
 
 ```
@@ -207,6 +218,37 @@ map $host $camex_upstream {
 }
 ```
 
+## Start page
+
+`camex --status --format nginx-index --domain cam.example.lan` prints a static
+HTML page of the live cameras: one row each with its name, ID and tunnel
+address, the name linked to `//<camera ID>.cam.example.lan/` (no scheme, so the
+link works over HTTP and HTTPS alike).
+
+| Desktop                                    | Phone (the address column is hidden)                        |
+|--------------------------------------------|-------------------------------------------------------------|
+| ![Start page](images/nginx-start-page.png) | ![Start page on a phone](images/nginx-start-page-phone.png) |
+
+- **Names** come from the server's file: `name=` in the camera's `[client ID]`
+  block, UTF-8 text up to 64 bytes without control characters. A camera without
+  one is listed by its ID. A reload (`kill -HUP`) applies new names; the server
+  refuses to load a file with a name that is not valid. `camex --status` shows
+  the names in a NAME column, `--json` as `"name"`.
+- **Order**: by name (A–Z in any case alike), then by ID. The page holds no
+  time, so an unchanged state gives an identical file: the script replaces the
+  page only when cameras came, went or got another name, and nginx's
+  `Last-Modified` tells when that was. The page itself reloads every 30 seconds.
+- **The same rules as the map**: IDs that are not a host name label are left
+  out with a warning, of an ID on two servers the lower address is kept, and
+  when a running server does not answer nothing is printed and the old page
+  stays.
+- **Access**: the page lists every camera on the server. Let in only those who
+  may open the cameras: the example's start page block has commented `allow` /
+  `deny` and `auth_basic` lines.
+- The sync script needs a server of camex 3.6.0 or later for the page: an older
+  one answers the page's control command with an error, and the page is not
+  written (the map still is).
+
 ## Checks
 
 - **Who is connected**: `sudo camex --status` lists each camera with its ID,
@@ -215,6 +257,9 @@ map $host $camex_upstream {
 - **A camera directly**: `curl -sI http://10.200.0.2/` on the server host. No
   answer while `camex --status` lists the camera: the camera's web server, or
   the firewall's output chain.
+- **The start page**: `curl -s -H 'Host: cam.example.lan' http://127.0.0.1/`
+  on the server host; a 404 means the page file is missing: compare `INDEX=`
+  with the block's `root` and run the sync script by hand.
 - **Through nginx**: `curl -sI -H 'Host: 001a2b3c4d5e.cam.example.lan'
   http://127.0.0.1/`. The offline page means the name is not in the map:
   compare with `camex --status --format nginx-map --domain cam.example.lan`

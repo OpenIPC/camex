@@ -546,6 +546,26 @@ static int config_db_parse_file(const char *path, char *line,
             return -1;
         }
 
+        /* A display name for the start page (#105): the client's own, so
+         * not in [defaults] */
+        if (strcmp(content, "name") == 0) {
+            if (section != SECTION_CLIENT) {
+                log_message(LOG_ERR, "name= belongs in a [client ID] "
+                            "block");
+                fclose(fp);
+                return -1;
+            }
+            if (!camex_name_valid(equals + 1)) {
+                log_message(LOG_ERR, "Invalid name= for client %s: up to %u "
+                            "bytes of UTF-8 text without control characters",
+                            client->client_id, (unsigned)CAMEX_NAME_MAX);
+                fclose(fp);
+                return -1;
+            }
+            snprintf(client->name, sizeof(client->name), "%s", equals + 1);
+            continue;
+        }
+
         if (config_db_apply_kv(current, content, equals + 1) != 0) {
             fclose(fp);
             return -1;

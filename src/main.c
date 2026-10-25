@@ -306,14 +306,17 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         case 'F':
             /* The last --format (or --json) wins */
             config->status_nginx_map = 0U;
+            config->status_nginx_index = 0U;
             config->status_json = 0U;
             if (strcmp(optarg, "nginx-map") == 0) {
                 config->status_nginx_map = 1U;
+            } else if (strcmp(optarg, "nginx-index") == 0) {
+                config->status_nginx_index = 1U;
             } else if (strcmp(optarg, "json") == 0) {
                 config->status_json = 1U;
             } else if (strcmp(optarg, "table") != 0) {
-                log_message(LOG_ERR, "Invalid --format: %s (table, json or "
-                            "nginx-map)", optarg);
+                log_message(LOG_ERR, "Invalid --format: %s (table, json, "
+                            "nginx-map or nginx-index)", optarg);
                 return -1;
             }
             break;
@@ -345,6 +348,7 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         case 'J':
             config->status_json = 1U;
             config->status_nginx_map = 0U;
+            config->status_nginx_index = 0U;
             break;
         case 'C':
             if (copy_option(config->control_path,
@@ -551,8 +555,10 @@ void print_usage(const char *progname)
     printf("      --control <path> Ask only the server at this socket\n");
     printf("      --format nginx-map  An nginx map of the clients"
            " (<id>[.<domain>] -> <address>:<port>)\n");
-    printf("      --domain <name>  With nginx-map: the domain after the"
-           " client ID\n");
+    printf("      --format nginx-index  A start page of the clients"
+           " (HTML: name, ID, link)\n");
+    printf("      --domain <name>  With nginx-map and nginx-index: the"
+           " domain after the client ID\n");
     printf("      --upstream-port <port>  With nginx-map: the clients'"
            " web port (default: 80)\n");
     printf("      --default <ip:port>  With nginx-map: where unknown"
@@ -656,6 +662,9 @@ int main(int argc, char *argv[])
                                          config.map_port > 0 ? config.map_port
                                                              : 80,
                                          config.map_default)
+                 : config.status_nginx_index
+                     ? control_nginx_index(config.control_path,
+                                           config.map_domain)
                      : control_status(config.control_path,
                                       config.status_json);
 

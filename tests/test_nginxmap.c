@@ -3,7 +3,7 @@
  * Copyright (c) OpenIPC  https://openipc.org  MIT License
  *
  * test_nginxmap.c — the nginx map of camex --status --format nginx-map
- * (#84)
+ * (#84) and the start page of --format nginx-index (#105)
  *
  */
 
@@ -37,6 +37,127 @@ static char *fmt(const char *lines, const char *domain, int port,
         fclose(w);
     }
     return m;
+}
+
+static char *page(const char *lines, const char *domain, size_t *count,
+                  char *warn, size_t wsize)
+{
+    FILE *w = fmemopen(warn, wsize, "w");
+    char *m;
+
+    m = nginx_index_format(lines, domain, w, count);
+    if (w != NULL) {
+        fclose(w);
+    }
+    return m;
+}
+
+/* The start of a row on the start page, up to the name's cell */
+#define ROW "<tr class=\"dev\"><td class=\"lamp\"><span class=\"bulb\">" \
+            "</span></td><td>"
+
+/* The start page (#105) and the names on it */
+static void test_index(void)
+{
+    char warn[1024];
+    size_t n;
+    char *m, *a, *b;
+
+    /* Names: UTF-8 text, at most 64 bytes, no control characters */
+    CHECK(camex_name_valid("Warehouse, entrance"), "a plain name");
+    CHECK(camex_name_valid("\xd0\xa1\xd0\xba\xd0\xbb\xd0\xb0\xd0\xb4 <1> & \"x\""),
+          "Cyrillic and HTML characters are text");
+    CHECK(camex_name_valid("\xe4\xbb\x93\xe5\xba\x93 \xf0\x9f\x93\xb7"),
+          "CJK and a 4-byte character");
+    CHECK(!camex_name_valid(""), "an empty name refused");
+    CHECK(camex_name_valid("0123456789012345678901234567890123456789"
+                           "012345678901234567890123"), "64 bytes");
+    CHECK(!camex_name_valid("0123456789012345678901234567890123456789"
+                            "0123456789012345678901234"), "65 bytes refused");
+    CHECK(!camex_name_valid("a\tb"), "a tab refused");
+    CHECK(!camex_name_valid("a\x7f"), "DEL refused");
+    CHECK(!camex_name_valid("a\xc2\x85"), "C1 (NEL) refused");
+    CHECK(!camex_name_valid("a\xc0\xaf"), "an overlong form refused");
+    CHECK(!camex_name_valid("a\xe0\x80\xaf"), "a 3-byte overlong refused");
+    CHECK(!camex_name_valid("a\xed\xa0\x80"), "a surrogate refused");
+    CHECK(!camex_name_valid("a\xf4\x90\x80\x80"), "above U+10FFFF refused");
+    CHECK(!camex_name_valid("a\xd0"), "a cut sequence refused");
+    CHECK(!camex_name_valid("a\x80"), "a lone continuation byte refused");
+
+    /* No clients: a page that says so */
+    m = page("", "cam.example.lan", &n, warn, sizeof(warn));
+    CHECK(m != NULL && n == 0U && strstr(m, "<!doctype html>\n") == m &&
+              strstr(m, "<div class=\"empty\">No devices online</div>") != NULL &&
+              strstr(m, "<table>") == NULL && strstr(m, "</html>\n") != NULL,
+          "an empty page");
+    free(m);
+
+    /* Names, IDs as names, links, sorted by name in any case */
+    memset(warn, 0, sizeof(warn));
+    m = page("CAM-B 10.200.0.3 zoo gate\n"
+             "cam-c 10.200.0.4\n"
+             "Cam-A 10.200.0.2 Back <yard> & \"shed\"\n",
+             "cam.example.lan", &n, warn, sizeof(warn));
+    CHECK(m != NULL && n == 3U && strstr(m, "<div class=\"sub\">3 devices online</div>"),
+          "three devices");
+    CHECK(m != NULL && strstr(m,
+              ROW "<a href=\"//cam-a.cam.example.lan/\">Back &lt;yard&gt; "
+              "&amp; &quot;shed&quot;</a></td><td class=\"id\">cam-a</td>"
+              "<td class=\"addr\">10.200.0.2</td></tr>\n"
+              ROW "<a href=\"//cam-c.cam.example.lan/\">cam-c</a></td>"
+              "<td class=\"id\">cam-c</td><td class=\"addr\">10.200.0.4"
+              "</td></tr>\n"
+              ROW "<a href=\"//cam-b.cam.example.lan/\">zoo gate</a></td>"
+              "<td class=\"id\">cam-b</td><td class=\"addr\">10.200.0.3"
+              "</td></tr>\n") != NULL,
+          "escaped names, the ID without one, sorted by name");
+    CHECK(warn[0] == '\0', "no warnings");
+    free(m);
+
+    /* One device; no domain */
+    m = page("cam1 10.0.0.1\n", NULL, &n, warn, sizeof(warn));
+    CHECK(m != NULL && n == 1U && strstr(m, "<div class=\"sub\">1 device online</div>") &&
+              strstr(m, "<a href=\"//cam1/\">cam1</a>"),
+          "one device, a link without a domain");
+    free(m);
+
+    /* The same state in another order: an identical page */
+    a = page("x1 10.0.0.1 Same\nx2 10.0.0.2 same\n", "d.lan", &n, warn,
+             sizeof(warn));
+    b = page("x2 10.0.0.2 same\nx1 10.0.0.1 Same\n", "d.lan", &n, warn,
+             sizeof(warn));
+    CHECK(a != NULL && b != NULL && strcmp(a, b) == 0,
+          "order of the input does not matter");
+    CHECK(a != NULL && strstr(a, "//x1.d.lan/") < strstr(a, "//x2.d.lan/"),
+          "equal names in other case: a fixed order");
+    free(a);
+    free(b);
+
+    /* Bad IDs and duplicates as in the map */
+    memset(warn, 0, sizeof(warn));
+    m = page("bad_id 10.0.0.2 Name\ncam 10.0.0.9 First\n"
+             "CAM 10.0.0.10 Second\n", "d.lan", &n, warn, sizeof(warn));
+    CHECK(m != NULL && n == 1U && strstr(m, "bad") == NULL &&
+              strstr(m, ">First<") != NULL && strstr(m, "Second") == NULL,
+          "a bad ID left out, a duplicate keeps the lower address");
+    CHECK(strstr(warn, "bad_id is not a host name label: left out of the "
+                 "start page") != NULL && strstr(warn, "listed twice"),
+          "both reported");
+    free(m);
+
+    /* A name that is not valid text (not from a camex server): the ID */
+    memset(warn, 0, sizeof(warn));
+    m = page("cam 10.0.0.1 x\x01<script>\n", "d.lan", &n, warn,
+             sizeof(warn));
+    CHECK(m != NULL && n == 1U && strstr(m, "script") == NULL &&
+              strstr(m, ">cam</a>") != NULL &&
+              strstr(warn, "not valid text") != NULL,
+          "an invalid name is replaced by the ID");
+    free(m);
+
+    /* Bad domain */
+    CHECK(page("", "bad..domain", &n, warn, sizeof(warn)) == NULL,
+          "bad domain refused");
 }
 
 int main(void)
@@ -195,6 +316,8 @@ int main(void)
           "a default with a signed port refused");
     CHECK(fmt("", "d.lan", 80, "1.2.3.4:080000", &n, warn, sizeof(warn)) == NULL,
           "a default port with too many digits refused");
+
+    test_index();
 
     if (failures != 0) {
         printf("test_nginxmap: %d FAILED\n", failures);
