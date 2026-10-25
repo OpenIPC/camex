@@ -6,7 +6,8 @@ plugins {
 // versionCode MAJOR * 10000 + MINOR * 100 + PATCH. No version, no build.
 val camexVersion: String = run {
     val header = rootProject.file("../src/version.h")
-    val m = Regex("""#define\s+CAMEX_VERSION\s+"(\d+)\.(\d+)\.(\d+)"""")
+    // A real #define at the start of a line, not one in a comment
+    val m = Regex("""(?m)^#\s*define\s+CAMEX_VERSION\s+"(\d+)\.(\d+)\.(\d+)"\s*$""")
         .find(header.readText())
         ?: throw GradleException("no CAMEX_VERSION \"X.Y.Z\" in $header")
     m.groupValues.drop(1).joinToString(".")
