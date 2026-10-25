@@ -17,6 +17,7 @@
 /* Build the map from "<client ID> <tunnel address>" lines (the servers'
  * CLIENTS answers, one after the other):
  *
+ *   # domain: <domain> | (none)              (a comment, #106)
  *   map $host $camex_upstream {
  *       default <dflt>;                      (only with dflt)
  *       <id in lower case>[.<domain>] <address>:<port>;
@@ -29,6 +30,11 @@
  * for a bad domain, port or default. */
 char *nginx_map_format(const char *lines, const char *domain, int port,
                        const char *dflt, FILE *warn, size_t *count);
+
+/* A domain for the map and the page (--domain, domain= in [server],
+ * #106): host name labels separated by single dots, up to 253 characters.
+ * 1 if valid */
+int camex_domain_valid(const char *domain);
 
 /* The longest display name (name= in a [client ID] block, #105), in bytes */
 #define CAMEX_NAME_MAX 64

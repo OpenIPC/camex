@@ -15,7 +15,8 @@
 #        camex-nginx-sync.sh --loop 10  every 10 seconds
 #
 # Settings (environment):
-#   DOMAIN         the domain after the client ID (openipc.click)
+#   DOMAIN         the domain after the client ID; empty (the default):
+#                  domain= in [server] of the server's file (#106)
 #   UPSTREAM_PORT  the clients' web port (80)
 #   DEFAULT        where unknown names go, <IPv4>:<port> (empty: nginx's
 #                  offline page in nginx-camex.conf)
@@ -36,7 +37,7 @@ if ! command -v flock >/dev/null 2>&1; then
     exit 2
 fi
 
-DOMAIN=${DOMAIN-openipc.click}
+DOMAIN=${DOMAIN-}
 UPSTREAM_PORT=${UPSTREAM_PORT:-80}
 DEFAULT=${DEFAULT-}
 CONTROL=${CONTROL-}

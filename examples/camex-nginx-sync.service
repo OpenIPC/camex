@@ -11,7 +11,8 @@ After=camex.service nginx.service
 
 [Service]
 Type=oneshot
-Environment=DOMAIN=openipc.click
+# The domain comes from domain= in [server] of camex.conf (#106);
+# Environment=DOMAIN=... overrides it
 Environment=MAP=/etc/nginx/camex-map.conf
 # The start page of the clients (#105); empty: none. StateDirectory
 # creates /var/lib/camex-nginx
