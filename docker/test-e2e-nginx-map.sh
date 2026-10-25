@@ -177,6 +177,11 @@ sync >/dev/null
 check $? "nginx is not reloaded ($before -> $(reloads))"
 [ "$(docker exec "$P-srv" stat -c '%i %Y' "$INDEX")" = "$page_before" ]
 check $? "the start page is not rewritten"
+out=$(docker exec -e DOMAIN="$DOMAIN" -e NGINX_BIN=nginx-counting \
+    -e INDEX=/nonexistent/index.html "$P-srv" camex-nginx-sync.sh 2>&1)
+echo "$out" | grep -q "cannot write /nonexistent/index.html.tmp.* (does the directory of INDEX exist?)" &&
+    ! echo "$out" | grep -q "did not answer"
+check $? "a missing page directory is named, not blamed on the server"
 
 echo "== 3. an ID that is no host name"
 client bad_id

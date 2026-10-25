@@ -527,6 +527,11 @@ static int config_db_parse_file(const char *path, char *line,
             } else if (strcmp(content, "control_socket") == 0) {
                 rc = copy_option(g->control_socket, sizeof(g->control_socket),
                                  val, "control socket");
+            } else if (strcmp(content, "name") == 0) {
+                /* A client's display name (#105), as in [defaults] */
+                log_message(LOG_ERR, "name= belongs in a [client ID] "
+                            "block");
+                rc = -1;
             } else {
                 log_message(LOG_WARNING,
                             "Ignoring unknown [server] key: %s", content);

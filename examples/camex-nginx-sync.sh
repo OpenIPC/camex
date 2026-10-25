@@ -183,6 +183,13 @@ sync_locked() {
 index_build() {
     [ -n "$INDEX" ] || return 2
     itmp="$INDEX.tmp.$$"
+    # (checked with true first: a failed redirection must not be taken
+    # for a server that did not answer)
+    if ! true 2>/dev/null > "$itmp"; then
+        log "cannot write $itmp (does the directory of INDEX exist?);" \
+            "$INDEX left as it is"
+        return 1
+    fi
     set -- --status --format nginx-index
     [ -n "$DOMAIN" ] && set -- "$@" --domain "$DOMAIN"
     [ -n "$CONTROL" ] && set -- "$@" --control "$CONTROL"

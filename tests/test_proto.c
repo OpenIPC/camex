@@ -347,6 +347,7 @@ int main(void)
             "[client cam1]\nname=0123456789012345678901234567890123456789"
             "0123456789012345678901234\n",
             "[defaults]\nname=all\n",
+            "[server]\nname=all\n",
         };
         char path[] = "/tmp/test_proto_XXXXXX";
         int fd = mkstemp(path);
