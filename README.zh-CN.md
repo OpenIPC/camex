@@ -315,6 +315,8 @@ sudo ./camex --mode server --port 5800 --config /etc/camex/camex.conf
 `10.200.0.2`–`10.200.0.254`（跳过已占用的地址和 `[client ID]` 块中的地址；离开的
 客户端的地址仍按其 ID 保留，返回时会拿回该地址）。若只想为配置文件中列出的 ID 提供服务，请在 `[server]`
 块中设置 `allow_unknown_clients=no`。
+用于客户端前面的 nginx 时，`[server]` 中的 `domain=` 是客户端的域名，`[client ID]`
+块中的 `name=` 是显示名称（见[客户端前面的 nginx](#客户端前面的-nginx)）。
 
 修改配置文件后，向服务器发送 `kill -HUP`。正在运行的自动模式客户端会在下一次
 握手时（密钥更新，最多 10 分钟后，或重新连接）获取变更后的地址、网关、MTU 或
@@ -340,8 +342,8 @@ sudo camex --status --control /run/camex/camex-udp-5800.sock   # 只查询一个
 ```
 camex 3.3.0 server, udp port 5800, tunnel 10.200.0.1/24, pool 10.200.0.0/24, up 2h05m, clients 2, slots 2 of 256
 
-ID     MODE    KEY     ADDRESS          PEER                CONNECTED  LAST       HANDSHAKE     HS          RX   RX PKTS          TX   TX PKTS
-CAM-A  auto    global  10.200.0.2       203.0.113.7:50997   2h04m      3s         4m10s         13     1.2 MiB      9120     8.4 MiB     12480
+ID     MODE    KEY     ADDRESS          PEER                CONNECTED  LAST       HANDSHAKE     HS          RX   RX PKTS          TX   TX PKTS  NAME
+CAM-A  auto    global  10.200.0.2       203.0.113.7:50997   2h04m      3s         4m10s         13     1.2 MiB      9120     8.4 MiB     12480  Warehouse, entrance
 CAM-B  auto    own     10.200.0.3       198.51.100.4:41022  12m03s     1s         2m02s          2   310.5 KiB      2210     2.0 MiB      3105
 
 Addresses kept for clients that are gone (#81): 1
@@ -350,13 +352,14 @@ CAM-C  10.200.0.4       gone 6m40s
 
 在客户端确认新地址之前，`ADDRESS` 显示为 `旧 -> 新`。`LAST` 是距其最后一个数据包（含 keepalive；首个数据包之前为 `-`）的
 时间，`HANDSHAKE` 是距其最后一次密钥更新的时间，`HS` 是握手次数；`RX` 是从该客户端
-收到的隧道数据，`TX` 是发往它的数据，单位为字节和包数。保留的地址属于已离开的客户端：客户端返回时会拿回自己的地址。
+收到的隧道数据，`TX` 是发往它的数据，单位为字节和包数。`NAME`（客户端有名称时显示）
+是其 `[client ID]` 块中的 `name=`。保留的地址属于已离开的客户端：客户端返回时会拿回自己的地址。
 
 `--json` 输出 `{"servers":[...]}`，每个服务器一个对象：`version`、`pid`、
 `transport`、`port`、`tunnel`、`pool`、`started`（Unix 时间）、`uptime`、
 `client_isolation`、`isolation_drops`（#83）、
 `slots`（`used` 含尚未握手的 TCP 连接，以及 `max`）、`clients` 和 `leases`。每个客户端包含 `id`（无 ID 的手动
-客户端为 `null`）、`mode`（`auto` 或 `manual`）、`key`（`global` 或 `own`）、
+客户端为 `null`）、`name`（其 `name=`，没有时为 `null`）、`mode`（`auto` 或 `manual`）、`key`（`global` 或 `own`）、
 `address`、`pending` 和 `previous`（或 `null`）、`peer`、`transport`、`registered`
 （首次握手的 Unix 时间）、`connected_s`（当前连接）、`last_packet_s`（首个数据包之前为 `null`）、`last_handshake_s`、`handshakes`、
 `rx_packets`、`rx_bytes`、`tx_packets`、`tx_bytes`、`isolation_drops`；每个保留地址包含 `id`、
@@ -376,13 +379,15 @@ sudo camex --status --format nginx-map --domain openipc.click
 
 ```
 # camex --status --format nginx-map: generated, do not edit
+# domain: openipc.click
 map $host $camex_upstream {
     "cam-a.openipc.click" 10.200.0.2:80;
     "cam-b.openipc.click" 10.200.0.3:80;
 }
 ```
 
-- 主机名为小写的客户端 ID 加上 `--domain`；不是有效主机名标签（字母、数字和 `-`，
+- 主机名为小写的客户端 ID 加上域名：`--domain`，未给出时为服务器的 `domain=`
+  （由 `# domain:` 行注明）；不是有效主机名标签（字母、数字和 `-`，
   最多 63 个）的 ID 会被跳过并给出警告。`--upstream-port` 设置客户端的 Web 端口
   （80），`--default <ip:port>` 设置没有在线客户端的名称的目标。输出经过排序，
   状态不变时文件内容相同；若某个正在运行的服务器没有应答，则不输出任何内容且退出码
@@ -398,7 +403,8 @@ map $host $camex_upstream {
   并以同一域名安装 nginx 的 server 块、同步脚本及其 service 和 timer；
   `camex-nginx-sync.sh --check` 检查整个部署（服务器、域名、nginx、起始页、DNS）。
 - 脚本的设置：`DOMAIN`（默认取服务器的 `domain=`）、`UPSTREAM_PORT`、`DEFAULT`、`CONTROL`、`MAP`
-  （`/etc/nginx/camex-map.conf`）、`INDEX`、`CAMEX`、`NGINX_BIN`。
+  （`/etc/nginx/camex-map.conf`）、`INDEX`、`CHECK_DNS`（`no`：`--check` 不检查
+  DNS）、`CAMEX`、`NGINX_BIN`。
 - **起始页**（#105、#110）：`camex --status --format nginx-index --domain
   openipc.click` 输出一个静态 HTML 页面，客户端分两个标签页显示：**Configured**
   列出服务器文件中所有 `[client ID]` 块，未连接的以红色标出；**Auto** 列出来自自动

@@ -4,6 +4,18 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.8.1 — 2026-10-25
+
+- `camex --help`: `--domain` names its default (`domain=` in `[server]` of the server),
+  and `--format nginx-index` describes the page's tabs and values (#113).
+- Docs (#113):
+  - README (en/ru/zh-CN): `domain=` and `name=` under Server Configuration; the NAME
+    column of `--status` and `name` of `--json`; the map's `# domain:` line; the
+    domain's default; `CHECK_DNS`.
+  - `docs/nginx.md`: the map's `# domain:` line, the names in `--status`, and that
+    only camex 3.8.0 servers report `domain=` (with an older one, give `--domain`).
+  - `examples/README.md`: an nginx part with `camex-nginx-setup.sh` and `--check`.
+
 ## 3.8.0 — 2026-10-25
 
 - One domain, given once (#106): `domain=` in `[server]` of the server's file.

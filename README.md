@@ -318,6 +318,9 @@ and those of `[client ID]` blocks are skipped; a client that is gone keeps its
 address under its ID and gets it back, see
 [Denial of service limits](#denial-of-service-limits)). To serve only the IDs
 listed in the file, set `allow_unknown_clients=no` in the `[server]` block.
+For nginx in front of the clients, `domain=` in `[server]` is the clients'
+domain and `name=` in a `[client ID]` block a display name (see
+[nginx in front of the clients](#nginx-in-front-of-the-clients)).
 
 After a change to the file, `kill -HUP` the server. A running auto-mode client
 picks up a changed address, gateway, MTU or routes with its next handshake (a
@@ -346,8 +349,8 @@ sudo camex --status --control /run/camex/camex-udp-5800.sock   # one server
 ```
 camex 3.3.0 server, udp port 5800, tunnel 10.200.0.1/24, pool 10.200.0.0/24, up 2h05m, clients 2, slots 2 of 256
 
-ID     MODE    KEY     ADDRESS          PEER                CONNECTED  LAST       HANDSHAKE     HS          RX   RX PKTS          TX   TX PKTS
-CAM-A  auto    global  10.200.0.2       203.0.113.7:50997   2h04m      3s         4m10s         13     1.2 MiB      9120     8.4 MiB     12480
+ID     MODE    KEY     ADDRESS          PEER                CONNECTED  LAST       HANDSHAKE     HS          RX   RX PKTS          TX   TX PKTS  NAME
+CAM-A  auto    global  10.200.0.2       203.0.113.7:50997   2h04m      3s         4m10s         13     1.2 MiB      9120     8.4 MiB     12480  Warehouse, entrance
 CAM-B  auto    own     10.200.0.3       198.51.100.4:41022  12m03s     1s         2m02s          2   310.5 KiB      2210     2.0 MiB      3105
 
 Addresses kept for clients that are gone (#81): 1
@@ -358,7 +361,8 @@ CAM-C  10.200.0.4       gone 6m40s
 yet. `LAST` is the time since its last data packet (keepalives included; `-`
 before the first), `HANDSHAKE` since its last key renewal, `HS` the number of
 handshakes; `RX` is the tunnel data received from it, `TX` the data sent to it,
-in bytes and packets.
+in bytes and packets. `NAME`, shown when a client has one, is `name=` of its
+`[client ID]` block.
 The kept addresses are those of clients that are gone; each gets its address
 back when it returns.
 
@@ -367,7 +371,7 @@ back when it returns.
 `client_isolation`, `isolation_drops` (#83),
 `slots` (`used`, TCP connections before their handshake included, and `max`),
 `clients` and `leases`. Each client has `id` (`null`
-for a manual client without one), `mode` (`auto` or `manual`), `key` (`global`
+for a manual client without one), `name` (its `name=`, or `null`), `mode` (`auto` or `manual`), `key` (`global`
 or `own`), `address`, `pending` and `previous` (or `null`), `peer`,
 `transport`, `registered` (Unix time of its first handshake), `connected_s` (its
 current connection), `last_packet_s` (`null`
@@ -390,13 +394,15 @@ sudo camex --status --format nginx-map --domain openipc.click
 
 ```
 # camex --status --format nginx-map: generated, do not edit
+# domain: openipc.click
 map $host $camex_upstream {
     "cam-a.openipc.click" 10.200.0.2:80;
     "cam-b.openipc.click" 10.200.0.3:80;
 }
 ```
 
-- The host is the client ID in lower case plus `--domain`; an ID that is not a
+- The host is the client ID in lower case plus the domain: `--domain`, or
+  without it `domain=` of the server (the `# domain:` line names it); an ID that is not a
   valid host name label (letters, digits and `-`, up to 63) is left out with a
   warning. `--upstream-port` sets the clients' web port (80), `--default
   <ip:port>` a target for names with no live client. The output is sorted, so
@@ -417,7 +423,8 @@ map $host $camex_upstream {
   `camex-nginx-sync.sh --check` checks the whole setup (servers, domain, nginx,
   start page, DNS).
 - Settings of the script: `DOMAIN` (default: the server's `domain=`), `UPSTREAM_PORT`, `DEFAULT`, `CONTROL`, `MAP`
-  (`/etc/nginx/camex-map.conf`), `INDEX`, `CAMEX`, `NGINX_BIN`.
+  (`/etc/nginx/camex-map.conf`), `INDEX`, `CHECK_DNS` (`no`: `--check` skips
+  DNS), `CAMEX`, `NGINX_BIN`.
 - **Start page** (#105, #110): `camex --status --format nginx-index --domain
   openipc.click` prints a static HTML page of the clients in two tabs:
   **Configured**, every `[client ID]` block of the server's file with the

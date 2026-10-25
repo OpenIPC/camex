@@ -320,6 +320,9 @@ sudo ./camex --mode server --port 5800 --config /etc/camex/camex.conf
 [Ограничения против отказа в обслуживании](#ограничения-против-отказа-в-обслуживании)).
 Чтобы обслуживать только ID,
 перечисленные в файле, задайте `allow_unknown_clients=no` в блоке `[server]`.
+Для nginx перед клиентами `domain=` в `[server]` — домен клиентов, а `name=` в
+блоке `[client ID]` — отображаемое имя (см.
+[nginx перед клиентами](#nginx-перед-клиентами)).
 
 После изменения файла пошлите серверу `kill -HUP`. Работающий клиент в
 автоматическом режиме получает изменённые адрес, шлюз, MTU или маршруты при
@@ -349,8 +352,8 @@ sudo camex --status --control /run/camex/camex-udp-5800.sock   # один сер
 ```
 camex 3.3.0 server, udp port 5800, tunnel 10.200.0.1/24, pool 10.200.0.0/24, up 2h05m, clients 2, slots 2 of 256
 
-ID     MODE    KEY     ADDRESS          PEER                CONNECTED  LAST       HANDSHAKE     HS          RX   RX PKTS          TX   TX PKTS
-CAM-A  auto    global  10.200.0.2       203.0.113.7:50997   2h04m      3s         4m10s         13     1.2 MiB      9120     8.4 MiB     12480
+ID     MODE    KEY     ADDRESS          PEER                CONNECTED  LAST       HANDSHAKE     HS          RX   RX PKTS          TX   TX PKTS  NAME
+CAM-A  auto    global  10.200.0.2       203.0.113.7:50997   2h04m      3s         4m10s         13     1.2 MiB      9120     8.4 MiB     12480  Warehouse, entrance
 CAM-B  auto    own     10.200.0.3       198.51.100.4:41022  12m03s     1s         2m02s          2   310.5 KiB      2210     2.0 MiB      3105
 
 Addresses kept for clients that are gone (#81): 1
@@ -360,7 +363,8 @@ CAM-C  10.200.0.4       gone 6m40s
 `ADDRESS` показывает `старый -> новый`, пока клиент не подтвердил новый адрес.
 `LAST` — время с последнего пакета данных клиента (включая keepalive; `-` до
 первого), `HANDSHAKE` — с последнего обновления ключей, `HS` — число рукопожатий;
-`RX` — данные туннеля от клиента, `TX` — к нему, в байтах и пакетах. Сохранённые
+`RX` — данные туннеля от клиента, `TX` — к нему, в байтах и пакетах. `NAME`
+(если у клиента есть имя) — `name=` его блока `[client ID]`. Сохранённые
 адреса принадлежат ушедшим клиентам: вернувшись, клиент получает свой адрес.
 
 `--json` печатает `{"servers":[...]}`, по объекту на сервер: `version`, `pid`,
@@ -368,7 +372,7 @@ CAM-C  10.200.0.4       gone 6m40s
 `client_isolation`, `isolation_drops` (#83),
 `slots` (`used`, включая TCP-соединения до рукопожатия, и `max`), `clients` и
 `leases`. У клиента — `id` (`null` у ручного
-клиента без ID), `mode` (`auto` или `manual`), `key` (`global` или `own`),
+клиента без ID), `name` (его `name=` или `null`), `mode` (`auto` или `manual`), `key` (`global` или `own`),
 `address`, `pending` и `previous` (или `null`), `peer`, `transport`,
 `registered` (время Unix первого рукопожатия), `connected_s` (текущее
 подключение), `last_packet_s` (`null` до первого
@@ -391,13 +395,15 @@ sudo camex --status --format nginx-map --domain openipc.click
 
 ```
 # camex --status --format nginx-map: generated, do not edit
+# domain: openipc.click
 map $host $camex_upstream {
     "cam-a.openipc.click" 10.200.0.2:80;
     "cam-b.openipc.click" 10.200.0.3:80;
 }
 ```
 
-- Имя хоста — ID клиента в нижнем регистре плюс `--domain`; ID, который не
+- Имя хоста — ID клиента в нижнем регистре плюс домен: `--domain`, а без него
+  `domain=` сервера (его называет строка `# domain:`); ID, который не
   годится как метка имени хоста (буквы, цифры и `-`, до 63), пропускается с
   предупреждением. `--upstream-port` задаёт веб-порт клиентов (80), `--default
   <ip:port>` — куда отправлять имена без живого клиента. Вывод отсортирован,
@@ -419,7 +425,8 @@ map $host $camex_upstream {
   `camex-nginx-sync.sh --check` проверяет всю связку (серверы, домен, nginx,
   стартовую страницу, DNS).
 - Настройки скрипта: `DOMAIN` (по умолчанию — `domain=` сервера), `UPSTREAM_PORT`, `DEFAULT`, `CONTROL`, `MAP`
-  (`/etc/nginx/camex-map.conf`), `INDEX`, `CAMEX`, `NGINX_BIN`.
+  (`/etc/nginx/camex-map.conf`), `INDEX`, `CHECK_DNS` (`no`: `--check` не
+  проверяет DNS), `CAMEX`, `NGINX_BIN`.
 - **Стартовая страница** (#105, #110): `camex --status --format nginx-index
   --domain openipc.click` печатает статическую HTML-страницу с клиентами на двух
   вкладках: **Configured** — все блоки `[client ID]` из файла сервера, не

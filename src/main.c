@@ -555,10 +555,13 @@ void print_usage(const char *progname)
     printf("      --control <path> Ask only the server at this socket\n");
     printf("      --format nginx-map  An nginx map of the clients"
            " (<id>[.<domain>] -> <address>:<port>)\n");
-    printf("      --format nginx-index  A start page of the clients"
-           " (HTML: name, ID, link)\n");
+    printf("      --format nginx-index  A start page of the clients (HTML:"
+           " Configured and Auto tabs; name,\n"
+           "                       link, address, connection, traffic)\n");
     printf("      --domain <name>  With nginx-map and nginx-index: the"
-           " domain after the client ID\n");
+           " domain after the client ID\n"
+           "                       (default: domain= in [server] of the"
+           " server)\n");
     printf("      --upstream-port <port>  With nginx-map: the clients'"
            " web port (default: 80)\n");
     printf("      --default <ip:port>  With nginx-map: where unknown"
