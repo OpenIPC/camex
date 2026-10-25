@@ -190,9 +190,12 @@ domain=openipc.click
 The map and the start page take it from the running server (`camex --status`
 asks for it), and the sync script needs no setting of its own. `--domain` (or
 `DOMAIN=` for the script) still overrides it, with a warning when the two
-differ. A reload (`kill -HUP`) applies a new domain. The servers must be camex
-3.8.0 or later: an older one does not report a domain, so its clients get the
-domain of the others, with a warning (or bare IDs when no server reports one). The nginx configuration
+differ. A reload (`kill -HUP`) applies a new domain. Only camex 3.8.0 or later
+reports `domain=`. An older server reports none, so without `--domain` its
+clients get the domain of the others, with a warning, or bare IDs when no
+server reports one. With an older server, give the domain explicitly
+(`--domain`, or `DOMAIN=` for the script): the map and the start page work as
+before. The nginx configuration
 must name the same domain; the setup script below writes it there for you.
 
 **The quick way**: `examples/camex-nginx-setup.sh` does steps 3 to 5 below in

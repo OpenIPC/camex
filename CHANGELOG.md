@@ -13,7 +13,7 @@ release, rebuilt from every push to `master`; this file is the change history.
     column of `--status` and `name` of `--json`; the map's `# domain:` line; the
     domain's default; `CHECK_DNS`.
   - `docs/nginx.md`: the map's `# domain:` line, the names in `--status`, and that
-    `domain=` needs camex 3.8.0 servers.
+    only camex 3.8.0 servers report `domain=` (with an older one, give `--domain`).
   - `examples/README.md`: an nginx part with `camex-nginx-setup.sh` and `--check`.
 
 ## 3.8.0 — 2026-10-25
