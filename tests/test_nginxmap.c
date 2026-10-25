@@ -184,6 +184,40 @@ static void test_index(void)
           "one auto device, a link without a domain, the values");
     free(m);
 
+    /* Only configured devices: Configured opens, Auto says it is empty */
+    m = page(LIVE("cam1", "10.0.0.1", "1", "One") "O\tcam2\t-\tTwo\n",
+             "openipc.click", &n, warn, sizeof(warn));
+    CHECK(m != NULL && n == 1U && strstr(m, "id=\"tab-conf\" checked") &&
+              strstr(m, "Configured <b>2</b> &middot; <i>1 offline</i>") &&
+              strstr(m, "Auto <b>0</b>") &&
+              strstr(m, "No auto devices online") != NULL &&
+              strstr(m, ">One</a>") != NULL &&
+              strstr(m, "<span class=\"nm\">Two</span>") != NULL,
+          "a page of configured devices only");
+    free(m);
+
+    /* One ID on two servers: offline under a [client ID] block on one,
+     * live in the auto pool on the other: live, and still Configured */
+    m = page("O\tcam\t10.0.0.5\tGate\n" LIVE("cam", "10.0.0.9", "0", ""),
+             "openipc.click", &n, warn, sizeof(warn));
+    {
+        const char *conf = m != NULL
+                               ? strstr(m, "<div class=\"list list-conf\">")
+                               : NULL;
+        const char *aut = m != NULL
+                              ? strstr(m, "<div class=\"list list-auto\">")
+                              : NULL;
+        const char *row = m != NULL ? strstr(m, "//cam.openipc.click/")
+                                    : NULL;
+
+        CHECK(m != NULL && n == 1U && conf != NULL && aut != NULL &&
+                  row > conf && row < aut &&
+                  strstr(m, "Configured <b>1</b></label>") != NULL &&
+                  strstr(m, "Auto <b>0</b>") != NULL,
+              "a configured ID live as auto elsewhere stays Configured");
+    }
+    free(m);
+
     /* The same state in another order: an identical page */
     a = page(LIVE("x1", "10.0.0.1", "1", "Same")
              LIVE("x2", "10.0.0.2", "1", "same"), "openipc.click", &n, warn,

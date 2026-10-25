@@ -681,6 +681,8 @@ char *nginx_index_format(const char *lines, const char *domain, FILE *warn,
      * map */
     for (i = 0; i < n; ++i) {
         if (i > 0 && strcmp(e[i].host, e[kept - 1].host) == 0) {
+            /* A [client ID] block on any server makes it Configured */
+            e[kept - 1].conf |= e[i].conf;
             if (warn != NULL && e[i].live) {
                 fprintf(warn, "camex: %s is listed twice (two servers?): "
                         "only %s kept\n", e[i].host, e[kept - 1].addr_text);

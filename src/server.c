@@ -2753,6 +2753,14 @@ char *server_status(int json, size_t *len)
     return b.p;
 }
 
+/* Seconds since t, 0 when the clock went back past it */
+static double age_s(time_t t)
+{
+    double d = difftime(g_now, t);
+
+    return d > 0.0 ? d : 0.0;
+}
+
 /* An ID fit for a one-line, tab-separated record: no blank, control
  * byte or DEL in it */
 static int record_id_ok(const char *id)
@@ -2783,11 +2791,12 @@ char *server_clients_index(size_t *len)
         }
         ip_text(ntohl(c->ip_be), ip, sizeof(ip));
         name = status_name(c->client_id);
-        last = c->last_data != 0 ? difftime(g_now, c->last_data) : -1.0;
+        /* Ages from the wall clock: a step back must not make them
+         * negative (the record would not be read) */
+        last = c->last_data != 0 ? age_s(c->last_data) : -1.0;
         sb_printf(&b, "L\t%s\t%s\t%d\t%.0f\t", c->client_id, ip,
                   config_db_find_client(c->client_id) != NULL ? 1 : 0,
-                  c->session_since != 0 ? difftime(g_now, c->session_since)
-                                        : 0.0);
+                  c->session_since != 0 ? age_s(c->session_since) : 0.0);
         if (last < 0.0) {
             sb_printf(&b, "-");
         } else {
@@ -2796,7 +2805,7 @@ char *server_clients_index(size_t *len)
         /* The name is the last field: it has no control characters, so
          * no tab (checked when the file was loaded) */
         sb_printf(&b, "\t%.0f\t%u\t%llu\t%llu%s%s\n",
-                  c->last_hs != 0 ? difftime(g_now, c->last_hs) : 0.0,
+                  c->last_hs != 0 ? age_s(c->last_hs) : 0.0,
                   (unsigned)c->handshakes,
                   (unsigned long long)c->rx_bytes,
                   (unsigned long long)c->tx_bytes,
