@@ -310,7 +310,9 @@ probe() {
     case "${pb##*
 }" in
         301|302|307|308)
-            curl -sk -m 5 -H "Host: $1" https://127.0.0.1/ 2>/dev/null ;;
+            # The name as TLS's server name too (SNI), not only Host:
+            curl -sk -m 5 --resolve "$1:443:127.0.0.1" "https://$1/" \
+                2>/dev/null ;;
         *)
             printf '%s\n' "${pb%
 *}" ;;

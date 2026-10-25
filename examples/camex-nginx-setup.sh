@@ -204,9 +204,11 @@ install_file() {
         fi
         say "previous one kept as $bak"
     fi
-    mkdir -p "$(dirname "$2")" &&
-        cp "$1" "$2.tmp.$$" && chmod "$3" "$2.tmp.$$" && mv -f "$2.tmp.$$" "$2" ||
-        { rm -f "$2.tmp.$$"; problem "cannot write $2"; return 1; }
+    # mktemp: a new file nobody could have put a symlink at
+    nt=
+    mkdir -p "$(dirname "$2")" && nt=$(mktemp "$2.XXXXXX") &&
+        cp "$1" "$nt" && chmod "$3" "$nt" && mv -f "$nt" "$2" ||
+        { [ -n "$nt" ] && rm -f "$nt"; problem "cannot write $2"; return 1; }
     say "wrote: $2"
 }
 
@@ -270,6 +272,7 @@ else
     elif [ -n "$have" ] && [ -z "$FORCE" ]; then
         problem "kept domain=$have in $CONF (--force sets $DOMAIN)"
     else
+        ct=
         awk -v d="$DOMAIN" -v re="$SERVER_RE" '
             /^[[:space:]]*\[/ {
                 if (s && !done) { print "domain=" d; done = 1 }
@@ -290,13 +293,14 @@ else
         # Through a copy next to it (its owner and mode), renamed in one
         # step: a failed write leaves the file as it was
         elif cp -p "$CONF_REAL" "$CONF_REAL.bak" &&
-             cp -p "$CONF_REAL" "$CONF_REAL.tmp.$$" &&
-             cat "$TMP/camex.conf" > "$CONF_REAL.tmp.$$" &&
-             mv -f "$CONF_REAL.tmp.$$" "$CONF_REAL"; then
+             ct=$(mktemp "$CONF_REAL.XXXXXX") &&
+             cp -p "$CONF_REAL" "$ct" &&
+             cat "$TMP/camex.conf" > "$ct" &&
+             mv -f "$ct" "$CONF_REAL"; then
             say "set domain=$DOMAIN in [server] of $CONF_REAL" \
                 "(previous: $CONF_REAL.bak)"
         else
-            rm -f "$CONF_REAL.tmp.$$"
+            [ -n "${ct-}" ] && rm -f "$ct"
             problem "cannot write $CONF_REAL (left as it was)"
         fi
     fi
@@ -322,7 +326,9 @@ fi
 # 6. nginx, the timer, a first sync and the check
 if [ -n "$DRY" ]; then
     say "would check and reload nginx, enable the timer, run a sync and --check"
-    exit 0
+    [ "$PROBLEMS" -eq 0 ] && exit 0
+    say "$PROBLEMS problem(s), see above"
+    exit 1
 fi
 # nginx must load the file written here, not only some other one
 if [ -z "$DRY" ] && ! "$NGINX_BIN" -T 2>/dev/null |
@@ -354,10 +360,12 @@ if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] &&
         say "enabled camex-nginx-sync.timer" ||
         problem "cannot enable camex-nginx-sync.timer"
 fi
+# This version's sync script, also when an older one was kept installed
+# (it differs: reported above)
 INDEX=$INDEX MAP=$MAP CAMEX=$CAMEX NGINX_BIN=$NGINX_BIN \
-    "$BIN/camex-nginx-sync.sh" || problem "the first sync failed (see above)"
+    sh "$SRC/camex-nginx-sync.sh" || problem "the first sync failed (see above)"
 INDEX=$INDEX MAP=$MAP CAMEX=$CAMEX NGINX_BIN=$NGINX_BIN \
-    "$BIN/camex-nginx-sync.sh" --check || PROBLEMS=$((PROBLEMS + 1))
+    sh "$SRC/camex-nginx-sync.sh" --check || PROBLEMS=$((PROBLEMS + 1))
 
 if [ "$PROBLEMS" -eq 0 ]; then
     say "done: the cameras at <ID>.$DOMAIN${INDEX:+, the start page at $DOMAIN}"
