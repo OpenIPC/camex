@@ -379,20 +379,20 @@ the address of the client's previous session).
 ### nginx in front of the clients
 
 nginx on the server's host can open the web UI of every client by name,
-`http://<client ID>.cam.example.lan/` → `http://<its tunnel address>:80/`, with
+`http://<client ID>.openipc.click/` → `http://<its tunnel address>:80/`, with
 no list of addresses to keep: `camex --status --format nginx-map` prints an nginx
 `map` of the live clients, and `examples/camex-nginx-sync.sh` writes it to the
 file nginx includes and reloads nginx when it changed.
 
 ```sh
-sudo camex --status --format nginx-map --domain cam.example.lan
+sudo camex --status --format nginx-map --domain openipc.click
 ```
 
 ```
 # camex --status --format nginx-map: generated, do not edit
 map $host $camex_upstream {
-    "cam-a.cam.example.lan" 10.200.0.2:80;
-    "cam-b.cam.example.lan" 10.200.0.3:80;
+    "cam-a.openipc.click" 10.200.0.2:80;
+    "cam-b.openipc.click" 10.200.0.3:80;
 }
 ```
 
@@ -412,13 +412,13 @@ map $host $camex_upstream {
 - Settings of the script: `DOMAIN`, `UPSTREAM_PORT`, `DEFAULT`, `CONTROL`, `MAP`
   (`/etc/nginx/camex-map.conf`), `INDEX`, `CAMEX`, `NGINX_BIN`.
 - **Start page** (#105): `camex --status --format nginx-index --domain
-  cam.example.lan` prints a static HTML page with every live client, its name
-  and a link to `//<client ID>.cam.example.lan/`. The name is `name=` in the
+  openipc.click` prints a static HTML page with every live client, its name
+  and a link to `//<client ID>.openipc.click/`. The name is `name=` in the
   client's `[client ID]` block on the server (UTF-8, up to 64 bytes), or the ID
   without one; `--status` and `--json` show it too. With `INDEX=` the sync
   script writes the page when it changed, and the second server block of
   `examples/nginx-camex.conf` serves it on the bare domain
-  (`http://cam.example.lan/`). The page lists every device: limit who may open
+  (`http://openipc.click/`). The page lists every device: limit who may open
   it as for the cameras.
 
   ![Start page](docs/images/nginx-start-page.png)

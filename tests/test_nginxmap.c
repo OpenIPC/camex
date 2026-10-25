@@ -90,7 +90,7 @@ static void test_index(void)
     CHECK(!camex_name_valid("a\x80"), "a lone continuation byte refused");
 
     /* No clients: both lists say so, Configured opens */
-    m = page("", "cam.example.lan", &n, warn, sizeof(warn));
+    m = page("", "openipc.click", &n, warn, sizeof(warn));
     CHECK(m != NULL && n == 0U && strstr(m, "<!doctype html>\n") == m &&
               strstr(m, "<div class=\"sub\">0 online &middot; 0 configured"
                      "</div>") != NULL &&
@@ -113,7 +113,7 @@ static void test_index(void)
              LIVE("auto1", "10.200.0.9", "0", "")
              "O\tcam-d\t10.200.0.20\tDock\n"
              "O\tcam-e\t-\n",
-             "cam.example.lan", &n, warn, sizeof(warn));
+             "openipc.click", &n, warn, sizeof(warn));
     CHECK(m != NULL && n == 4U &&
               strstr(m, "<div class=\"sub\">4 online &middot; 5 configured"
                      "</div>") != NULL,
@@ -123,7 +123,7 @@ static void test_index(void)
                               "</b>") != NULL,
           "the tabs with their counts");
     CHECK(m != NULL && strstr(m,
-              ROW "<a href=\"//cam-a.cam.example.lan/\">Back &lt;yard&gt; "
+              ROW "<a href=\"//cam-a.openipc.click/\">Back &lt;yard&gt; "
               "&amp; &quot;shed&quot;</a></td><td class=\"id\">cam-a</td>"
               "<td class=\"addr\">10.200.0.2</td><td class=\"conn\">1m05s"
               "</td><td>2s ago</td><td class=\"hs\">30s ago &middot; 3</td>"
@@ -175,14 +175,14 @@ static void test_index(void)
 
     /* The same state in another order: an identical page */
     a = page(LIVE("x1", "10.0.0.1", "1", "Same")
-             LIVE("x2", "10.0.0.2", "1", "same"), "d.lan", &n, warn,
+             LIVE("x2", "10.0.0.2", "1", "same"), "openipc.click", &n, warn,
              sizeof(warn));
     b = page(LIVE("x2", "10.0.0.2", "1", "same")
-             LIVE("x1", "10.0.0.1", "1", "Same"), "d.lan", &n, warn,
+             LIVE("x1", "10.0.0.1", "1", "Same"), "openipc.click", &n, warn,
              sizeof(warn));
     CHECK(a != NULL && b != NULL && strcmp(a, b) == 0,
           "order of the input does not matter");
-    CHECK(a != NULL && strstr(a, "//x1.d.lan/") < strstr(a, "//x2.d.lan/"),
+    CHECK(a != NULL && strstr(a, "//x1.openipc.click/") < strstr(a, "//x2.openipc.click/"),
           "equal names in other case: a fixed order");
     free(a);
     free(b);
@@ -195,7 +195,7 @@ static void test_index(void)
              LIVE("CAM", "10.0.0.10", "1", "Second")
              "O\tcam2\t10.0.0.1\tOff\n"
              LIVE("cam2", "10.0.0.30", "1", "On"),
-             "d.lan", &n, warn, sizeof(warn));
+             "openipc.click", &n, warn, sizeof(warn));
     CHECK(m != NULL && n == 2U && strstr(m, "bad") == NULL &&
               strstr(m, ">First<") != NULL && strstr(m, "Second") == NULL &&
               strstr(m, ">On<") != NULL && strstr(m, "Off") == NULL,
@@ -208,10 +208,10 @@ static void test_index(void)
     /* The same ID and address with other names (two servers): the same
      * name is kept whatever the order */
     a = page(LIVE("cam", "10.0.0.9", "1", "Zulu")
-             LIVE("cam", "10.0.0.9", "1", "Alpha"), "d.lan", &n, warn,
+             LIVE("cam", "10.0.0.9", "1", "Alpha"), "openipc.click", &n, warn,
              sizeof(warn));
     b = page(LIVE("cam", "10.0.0.9", "1", "Alpha")
-             LIVE("cam", "10.0.0.9", "1", "Zulu"), "d.lan", &n, warn,
+             LIVE("cam", "10.0.0.9", "1", "Zulu"), "openipc.click", &n, warn,
              sizeof(warn));
     CHECK(a != NULL && b != NULL && strcmp(a, b) == 0 &&
               strstr(a, ">Alpha<") != NULL && strstr(a, "Zulu") == NULL,
@@ -221,7 +221,7 @@ static void test_index(void)
 
     /* A name that is not valid text (not from a camex server): the ID */
     memset(warn, 0, sizeof(warn));
-    m = page(LIVE("cam", "10.0.0.1", "1", "x\x01<script>"), "d.lan", &n,
+    m = page(LIVE("cam", "10.0.0.1", "1", "x\x01<script>"), "openipc.click", &n,
              warn, sizeof(warn));
     CHECK(m != NULL && n == 1U && strstr(m, "&lt;script") == NULL &&
               strstr(m, "x\x01") == NULL && strstr(m, ">cam</a>") != NULL &&
@@ -234,7 +234,7 @@ static void test_index(void)
     m = page("cam 10.0.0.1 Name\n"
              "L\tcam2\t10.0.0.2\t1\tx\t2\t30\t3\t2048\t1024\n"
              "L\tcam3\t10.0.0.3\t1\t60\n"
-             "O\tcam4\n", "d.lan", &n, warn, sizeof(warn));
+             "O\tcam4\n", "openipc.click", &n, warn, sizeof(warn));
     CHECK(m != NULL && n == 0U && strstr(m, "<tr class") == NULL,
           "malformed records are skipped");
     free(m);
@@ -252,7 +252,7 @@ int main(void)
 
     /* No clients: an empty map, with the default when given */
     memset(warn, 0, sizeof(warn));
-    m = fmt("", "cam.example.lan", 80, NULL, &n, warn, sizeof(warn));
+    m = fmt("", "openipc.click", 80, NULL, &n, warn, sizeof(warn));
     CHECK(m != NULL && n == 0U, "empty list gives a map");
     CHECK(m != NULL && strncmp(m, head, strlen(head)) == 0 &&
               strcmp(m + strlen(head), "}\n") == 0,
@@ -265,21 +265,21 @@ int main(void)
 
     /* Sorted, lower case, the domain and the port */
     m = fmt("CAM-B 10.200.0.3\nCam-A 10.200.0.2\ncam-c 10.200.0.4\n",
-            "cam.example.lan", 8080, NULL, &n, warn, sizeof(warn));
+            "openipc.click", 8080, NULL, &n, warn, sizeof(warn));
     CHECK(m != NULL && n == 3U, "three clients");
     CHECK(m != NULL && strcmp(m + strlen(head),
-                              "    \"cam-a.cam.example.lan\" 10.200.0.2:8080;\n"
-                              "    \"cam-b.cam.example.lan\" 10.200.0.3:8080;\n"
-                              "    \"cam-c.cam.example.lan\" 10.200.0.4:8080;\n"
+                              "    \"cam-a.openipc.click\" 10.200.0.2:8080;\n"
+                              "    \"cam-b.openipc.click\" 10.200.0.3:8080;\n"
+                              "    \"cam-c.openipc.click\" 10.200.0.4:8080;\n"
                               "}\n") == 0,
           "sorted, lower case, with domain and port");
     free(m);
 
     /* The same input in another order: an identical map */
     {
-        char *a = fmt("x1 10.0.0.1\nx2 10.0.0.2\n", "d.lan", 80, NULL, &n,
+        char *a = fmt("x1 10.0.0.1\nx2 10.0.0.2\n", "openipc.click", 80, NULL, &n,
                       warn, sizeof(warn));
-        char *b = fmt("x2 10.0.0.2\nx1 10.0.0.1\n", "d.lan", 80, NULL, &n,
+        char *b = fmt("x2 10.0.0.2\nx1 10.0.0.1\n", "openipc.click", 80, NULL, &n,
                       warn, sizeof(warn));
 
         CHECK(a != NULL && b != NULL && strcmp(a, b) == 0,
@@ -291,8 +291,8 @@ int main(void)
     /* IDs that are not host labels are left out with a warning */
     memset(warn, 0, sizeof(warn));
     m = fmt("good 10.0.0.1\nbad_id 10.0.0.2\n-dash 10.0.0.3\n"
-            "dot.ted 10.0.0.4\n", "d.lan", 80, NULL, &n, warn, sizeof(warn));
-    CHECK(m != NULL && n == 1U && strstr(m, "\"good.d.lan\" 10.0.0.1:80;") &&
+            "dot.ted 10.0.0.4\n", "openipc.click", 80, NULL, &n, warn, sizeof(warn));
+    CHECK(m != NULL && n == 1U && strstr(m, "\"good.openipc.click\" 10.0.0.1:80;") &&
               strstr(m, "bad_id") == NULL && strstr(m, "dash") == NULL &&
               strstr(m, "dot") == NULL,
           "invalid IDs are left out");
@@ -302,9 +302,9 @@ int main(void)
 
     /* The same ID twice (two servers): the lower address, a warning */
     memset(warn, 0, sizeof(warn));
-    m = fmt("cam 10.0.0.9\nCAM 10.0.0.10\n", "d.lan", 80, NULL, &n, warn,
+    m = fmt("cam 10.0.0.9\nCAM 10.0.0.10\n", "openipc.click", 80, NULL, &n, warn,
             sizeof(warn));
-    CHECK(m != NULL && n == 1U && strstr(m, "\"cam.d.lan\" 10.0.0.9:80;") &&
+    CHECK(m != NULL && n == 1U && strstr(m, "\"cam.openipc.click\" 10.0.0.9:80;") &&
               strstr(m, "10.0.0.10") == NULL,
           "a duplicate keeps the numerically lower address");
     CHECK(strstr(warn, "listed twice") != NULL, "a duplicate is reported");
@@ -318,7 +318,7 @@ int main(void)
     free(m);
 
     /* A record with more than two fields is not used */
-    m = fmt("victim 1.2.3.4 10.0.0.7\nok 10.0.0.8\n", "d.lan", 80, NULL, &n,
+    m = fmt("victim 1.2.3.4 10.0.0.7\nok 10.0.0.8\n", "openipc.click", 80, NULL, &n,
             warn, sizeof(warn));
     CHECK(m != NULL && n == 1U && strstr(m, "victim") == NULL &&
               strstr(m, "1.2.3.4") == NULL,
@@ -338,14 +338,14 @@ int main(void)
               strstr(m, "    \"\\volatile\" 10.0.0.6:80;\n") != NULL,
           "map keywords as IDs get a backslash, the fallback stays one");
     free(m);
-    m = fmt("default 10.0.0.3\n", "d.lan", 80, NULL, &n, warn, sizeof(warn));
-    CHECK(m != NULL && strstr(m, "    \"default.d.lan\" 10.0.0.3:80;\n"),
+    m = fmt("default 10.0.0.3\n", "openipc.click", 80, NULL, &n, warn, sizeof(warn));
+    CHECK(m != NULL && strstr(m, "    \"default.openipc.click\" 10.0.0.3:80;\n"),
           "with a domain the key is no keyword: no backslash");
     free(m);
 
     /* An ID with non-ASCII bytes: left out, the warning shows them as ? */
     memset(warn, 0, sizeof(warn));
-    m = fmt("cam\xc3\xa9 10.0.0.1\n", "d.lan", 80, NULL, &n, warn,
+    m = fmt("cam\xc3\xa9 10.0.0.1\n", "openipc.click", 80, NULL, &n, warn,
             sizeof(warn));
     CHECK(m != NULL && n == 0U && strstr(warn, "client ID cam?? is not") &&
               strchr(warn, '\xc3') == NULL,
@@ -377,28 +377,28 @@ int main(void)
     /* Bad parameters */
     CHECK(fmt("", "bad..domain", 80, NULL, &n, warn, sizeof(warn)) == NULL,
           "bad domain refused");
-    CHECK(fmt("", "d.lan", 0, NULL, &n, warn, sizeof(warn)) == NULL,
+    CHECK(fmt("", "openipc.click", 0, NULL, &n, warn, sizeof(warn)) == NULL,
           "bad port refused");
-    CHECK(fmt("", "d.lan", 80, "x;y", &n, warn, sizeof(warn)) == NULL,
+    CHECK(fmt("", "openipc.click", 80, "x;y", &n, warn, sizeof(warn)) == NULL,
           "a default with ; refused");
-    CHECK(fmt("", "d.lan", 80, ":80", &n, warn, sizeof(warn)) == NULL,
+    CHECK(fmt("", "openipc.click", 80, ":80", &n, warn, sizeof(warn)) == NULL,
           "a default without a host refused");
-    CHECK(fmt("", "d.lan", 80, "foo:bar", &n, warn, sizeof(warn)) == NULL,
+    CHECK(fmt("", "openipc.click", 80, "foo:bar", &n, warn, sizeof(warn)) == NULL,
           "a default without a port refused");
-    CHECK(fmt("", "d.lan", 80, "host:70000", &n, warn, sizeof(warn)) == NULL,
+    CHECK(fmt("", "openipc.click", 80, "host:70000", &n, warn, sizeof(warn)) == NULL,
           "a default port above 65535 refused");
-    CHECK(fmt("", "d.lan", 80, "offline.example.lan:8099", &n, warn,
+    CHECK(fmt("", "openipc.click", 80, "offline.openipc.click:8099", &n, warn,
               sizeof(warn)) == NULL,
           "a host name default refused (no resolver in the example)");
-    CHECK(fmt("", "d.lan", 80, "1. 2.3.4:80", &n, warn, sizeof(warn)) == NULL,
+    CHECK(fmt("", "openipc.click", 80, "1. 2.3.4:80", &n, warn, sizeof(warn)) == NULL,
           "a default with a blank in the address refused");
-    CHECK(fmt("", "d.lan", 80, "1.2.3.4: 80", &n, warn, sizeof(warn)) == NULL,
+    CHECK(fmt("", "openipc.click", 80, "1.2.3.4: 80", &n, warn, sizeof(warn)) == NULL,
           "a default with a blank before the port refused");
-    CHECK(fmt("", "d.lan", 80, "1.+2.3.4:80", &n, warn, sizeof(warn)) == NULL,
+    CHECK(fmt("", "openipc.click", 80, "1.+2.3.4:80", &n, warn, sizeof(warn)) == NULL,
           "a default with a signed number refused");
-    CHECK(fmt("", "d.lan", 80, "1.2.3.4:+80", &n, warn, sizeof(warn)) == NULL,
+    CHECK(fmt("", "openipc.click", 80, "1.2.3.4:+80", &n, warn, sizeof(warn)) == NULL,
           "a default with a signed port refused");
-    CHECK(fmt("", "d.lan", 80, "1.2.3.4:080000", &n, warn, sizeof(warn)) == NULL,
+    CHECK(fmt("", "openipc.click", 80, "1.2.3.4:080000", &n, warn, sizeof(warn)) == NULL,
           "a default port with too many digits refused");
 
     test_index();

@@ -365,20 +365,20 @@ CAM-C  10.200.0.4       gone 6m40s
 ### 客户端前面的 nginx
 
 服务器所在主机上的 nginx 可以按名称打开每个客户端的 Web 界面，
-`http://<客户端 ID>.cam.example.lan/` → `http://<其隧道地址>:80/`，无需维护地址
+`http://<客户端 ID>.openipc.click/` → `http://<其隧道地址>:80/`，无需维护地址
 列表：`camex --status --format nginx-map` 输出包含在线客户端的 nginx `map`，
 `examples/camex-nginx-sync.sh` 将其写入 nginx 引用的文件，并在内容变化时重新加载
 nginx。
 
 ```sh
-sudo camex --status --format nginx-map --domain cam.example.lan
+sudo camex --status --format nginx-map --domain openipc.click
 ```
 
 ```
 # camex --status --format nginx-map: generated, do not edit
 map $host $camex_upstream {
-    "cam-a.cam.example.lan" 10.200.0.2:80;
-    "cam-b.cam.example.lan" 10.200.0.3:80;
+    "cam-a.openipc.click" 10.200.0.2:80;
+    "cam-b.openipc.click" 10.200.0.3:80;
 }
 ```
 
@@ -395,12 +395,12 @@ map $host $camex_upstream {
 - 脚本的设置：`DOMAIN`、`UPSTREAM_PORT`、`DEFAULT`、`CONTROL`、`MAP`
   （`/etc/nginx/camex-map.conf`）、`INDEX`、`CAMEX`、`NGINX_BIN`。
 - **起始页**（#105）：`camex --status --format nginx-index --domain
-  cam.example.lan` 输出一个静态 HTML 页面，列出所有在线客户端：名称以及指向
-  `//<客户端 ID>.cam.example.lan/` 的链接。名称来自服务器上该客户端
+  openipc.click` 输出一个静态 HTML 页面，列出所有在线客户端：名称以及指向
+  `//<客户端 ID>.openipc.click/` 的链接。名称来自服务器上该客户端
   `[client ID]` 块中的 `name=`（UTF-8，最多 64 字节），没有时显示 ID；
   `--status` 和 `--json` 也会显示它。设置 `INDEX=` 后，同步脚本会在页面变化时写入
   页面，`examples/nginx-camex.conf` 的第二个 server 块在裸域名
-  （`http://cam.example.lan/`）上提供该页面。页面列出所有设备：请像限制摄像机
+  （`http://openipc.click/`）上提供该页面。页面列出所有设备：请像限制摄像机
   访问一样限制对它的访问。
 
   ![起始页](docs/images/nginx-start-page.png)
