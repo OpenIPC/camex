@@ -30,6 +30,8 @@
 #                  /var/lib/camex-nginx/index.html (empty: no updates; a
 #                  page written before stays until it is removed); its
 #                  directory must exist
+#   CHECK_DNS      no: --check skips the DNS records (a container, a
+#                  private network)
 #   CAMEX, NGINX_BIN  the programs (camex, nginx; not NGINX, which nginx
 #                  itself reads)
 #

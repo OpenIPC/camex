@@ -212,10 +212,16 @@ what it would do. DNS and TLS (steps 1 and 2) stay yours.
 **The checks**: `camex-nginx-sync.sh --check` goes through the whole setup and
 prints one line per item, `ok`, `WARN` or `FAIL`. It checks that the servers
 answer, the domain, that nginx includes the map and has `server_name` for the
-domain, the start page and the DNS records, and that the timer is active. It
-exits with 1 on a `FAIL`. After each new map the sync script also logs a
-warning when there is no domain, or when nginx has no `server_name` for it or
-does not include the map.
+domain, and what nginx really answers on port 80 of this host: a name under
+the domain with no camera must get camex's offline page, and the bare domain
+the start page. Then the start page file, the DNS records and the timer. It
+exits with 1 on a `FAIL`. A DNS name that does not resolve is a `FAIL`; one
+that resolves to an address that is not this host's is a `WARN`, because
+behind NAT that is normal. `CHECK_DNS=no` skips the DNS items, e.g. in a
+container. After each new map the sync script also logs a warning when there
+is no domain, or when nginx has no `server_name` for it or does not include
+the map. camex's own warnings (no domain, a bad ID) are logged when they
+change, not at every run.
 
 The steps by hand:
 
