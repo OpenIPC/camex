@@ -816,7 +816,11 @@ static void control_domain(const char *path, const char *given, char *out,
         char *buf = NULL;
         size_t len = 0U;
 
-        if (control_ask(paths[i], "DOMAIN\n", &buf, &len) == 0) {
+        int rc = control_ask(paths[i], "DOMAIN\n", &buf, &len);
+
+        if (rc == -1) {
+            none = 1;   /* a server older than 3.8.0: ERROR */
+        } else if (rc == 0) {
             while (len > 0U && (buf[len - 1U] == '\n' ||
                                 buf[len - 1U] == '\r')) {
                 buf[--len] = '\0';
@@ -828,7 +832,7 @@ static void control_domain(const char *path, const char *given, char *out,
                     differ = 1;
                 }
             } else {
-                none = 1;   /* no domain= (or a server older than 3.8.0) */
+                none = 1;   /* no domain= */
             }
         }
         free(buf);

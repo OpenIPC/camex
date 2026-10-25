@@ -65,7 +65,8 @@ quiet_repeats() {
     werr=$(mktemp "$seen.XXXXXX" 2>/dev/null) || { "$@"; return $?; }
     "$@" 2> "$werr"
     wrc=$?
-    if [ -f "$seen" ] && cmp -s "$werr" "$seen"; then
+    # A failure always says why; warnings of a good run once
+    if [ "$wrc" -eq 0 ] && [ -f "$seen" ] && cmp -s "$werr" "$seen"; then
         rm -f "$werr"
     else
         cat "$werr" >&2

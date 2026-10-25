@@ -153,8 +153,9 @@ SERVER_RE='^[[:space:]]*[[][[:space:]]*[Ss][Ee][Rr][Vv][Ee][Rr][[:space:]]*[]][[
 server_domain() {
     awk -v re="$SERVER_RE" '/^[[:space:]]*\[/ { s = ($0 ~ re) }
         s && /^[[:space:]]*domain[[:space:]]*=/ {
-            sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); print; exit
-        }' "$CONF_REAL"
+            sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); d = $0
+        }
+        END { if (d != "") print d }' "$CONF_REAL"   # the last one, as camex
 }
 # Another domain in camex.conf: stop before nginx is changed, or nginx and
 # the map would follow two domains
@@ -318,6 +319,12 @@ fi
 if [ -n "$DRY" ]; then
     say "would check and reload nginx, enable the timer, run a sync and --check"
     exit 0
+fi
+# nginx must load the file written here, not only some other one
+if [ -z "$DRY" ] && ! "$NGINX_BIN" -T 2>/dev/null |
+       grep -qxF "# configuration file $NGINX_CONF:"; then
+    problem "nginx does not load $NGINX_CONF: put it where nginx.conf" \
+            "includes (e.g. /etc/nginx/conf.d/) or include it"
 fi
 if ! "$NGINX_BIN" -t >/dev/null 2>&1; then
     problem "nginx -t rejects the configuration:"
