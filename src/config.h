@@ -52,6 +52,7 @@ typedef struct {
     char bind_dev[IFNAMSIZ];
     char pid_file[256];
     char control_socket[108];      /* control_socket= (#82) */
+    char domain[254];              /* domain= (#106): for nginx-map/-index */
     char psk[128];   /* hex: + 64 digits fits; passphrases too */
     int  port;
     int  mtu;

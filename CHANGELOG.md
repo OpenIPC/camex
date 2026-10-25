@@ -4,6 +4,29 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.8.0 — 2026-10-25
+
+- One domain, given once (#106): `domain=` in `[server]` of the server's file.
+  `camex --status --format nginx-map` and `nginx-index` take it from the running servers
+  (a new `DOMAIN` control command; a server older than 3.8.0 counts as none). `--domain`
+  overrides it, with a warning when they differ; servers with different domains and no
+  domain at all are warned about too. A `domain=` that is no host name stops the load.
+  The map names its domain in a `# domain:` comment.
+- `camex-nginx-sync.sh`: `DOMAIN` is optional (default: the server's `domain=`), and
+  `camex-nginx-sync.service` no longer sets it. After each new map the script warns when
+  there is no domain, or when nginx has no `server_name` for it or does not include the
+  map. `--check` goes through the whole setup (servers, domain, nginx, start page, DNS,
+  timer), one `ok` / `WARN` / `FAIL` line per item, exit code 1 on a `FAIL`.
+- `examples/camex-nginx-setup.sh --domain <domain>`: installs the nginx server blocks,
+  the sync script, its service and timer and the start page's directory with that domain,
+  sets `domain=` in `camex.conf` and reloads the camex servers, checks and reloads nginx,
+  enables the timer and runs `--check`. Safe to run again; an edited file is kept unless
+  `--force` (the old one in `/var/backups/camex/`); `--dry-run`.
+- Tests: unit tests of the map's domain line; the nginx e2e test checks the domain from
+  `domain=`, `--domain` overriding it, no domain after a reload, the warning and `--check`
+  for a domain nginx does not serve, and the setup script on a clean host (install, run
+  again, an edited file, `--force`, another domain).
+
 ## 3.7.0 — 2026-10-25
 
 - nginx start page (#110): two tabs, **Configured** (every `[client ID]` block of the

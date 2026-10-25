@@ -59,11 +59,13 @@ check() {   # check <condition-exit-code> <message>
 
 cp "$CAMEX_BINARY" "$BUILD_CTX/camex"
 cp "$REPO_DIR/examples/camex-nginx-sync.sh" "$BUILD_CTX/"
+mkdir -p "$BUILD_CTX/examples" && cp "$REPO_DIR"/examples/* "$BUILD_CTX/examples/"
 sed "s/cam\.example\.lan/$DOMAIN/g" "$REPO_DIR/examples/nginx-camex.conf" > "$BUILD_CTX/nginx-camex.conf"
 . "$SCRIPT_DIR/lib-keys.sh"
 gen_server_key "$BUILD_CTX" "$CAMEX_BINARY" || { echo "cannot create a server key"; exit 1; }
 # CAM-Z is configured but never connects: offline on the start page
-printf '[client CAM-A]\nname=%s\n[client CAM-Z]\nname=Gate\n' "$NAME_A" > "$BUILD_CTX/camex.conf"
+printf '[server]\ndomain=%s\n[client CAM-A]\nname=%s\n[client CAM-Z]\nname=Gate\n' \
+    "$DOMAIN" "$NAME_A" > "$BUILD_CTX/camex.conf"
 cat > "$BUILD_CTX/Dockerfile" <<'DOCKERFILE'
 FROM ubuntu:24.04
 # New clients right after the server starts: no start hold (#81)
@@ -77,6 +79,7 @@ COPY camex.conf /etc/camex/camex.conf
 RUN mkdir -p /var/lib/camex-nginx
 COPY camex-nginx-sync.sh /usr/local/bin/camex-nginx-sync.sh
 COPY nginx-camex.conf /etc/nginx/conf.d/nginx-camex.conf
+COPY examples /opt/camex-examples
 # Counts nginx reloads for the test
 RUN printf '#!/bin/sh\n[ "$1" = "-s" ] && echo reload >> /tmp/reloads\nexec /usr/sbin/nginx "$@"\n' \
         > /usr/local/bin/nginx-counting && chmod +x /usr/local/bin/nginx-counting
@@ -100,8 +103,8 @@ client() {  # client <name>: a camex client serving "I am <name>" on port 80
 
 sync() {    # sync: the example sync script in the server container; nginx
             # reloads in the background, so give its new workers a moment
-    docker exec -e DOMAIN="$DOMAIN" -e NGINX_BIN=nginx-counting \
-        -e INDEX="$INDEX" "$P-srv" camex-nginx-sync.sh 2>&1
+    docker exec -e NGINX_BIN=nginx-counting -e INDEX="$INDEX" "$P-srv" \
+        camex-nginx-sync.sh 2>&1
     sleep 1
 }
 
@@ -203,7 +206,7 @@ docker exec "$P-srv" chmod 600 "$INDEX"
 sync >/dev/null
 [ "$(docker exec "$P-srv" stat -c %a "$INDEX")" = 644 ]
 check $? "a page with tight permissions is made readable for nginx"
-out=$(docker exec -e DOMAIN="$DOMAIN" -e NGINX_BIN=nginx-counting \
+out=$(docker exec -e NGINX_BIN=nginx-counting \
     -e INDEX=/nonexistent/index.html "$P-srv" camex-nginx-sync.sh 2>&1)
 echo "$out" | grep -q "cannot write /nonexistent/index.html.tmp.* (does the directory of INDEX exist?)" &&
     ! echo "$out" | grep -q "did not answer"
@@ -262,7 +265,7 @@ docker exec "$P-srv" sh -c 'printf "#!/bin/sh\n[ \"\$1\" = \"-s\" ] && exit 1\ne
 client CAM-C
 wait_registered CAM-C
 sleep 2
-out=$(docker exec -e DOMAIN="$DOMAIN" -e NGINX_BIN=nginx-down -e INDEX="$INDEX" \
+out=$(docker exec -e NGINX_BIN=nginx-down -e INDEX="$INDEX" \
     "$P-srv" camex-nginx-sync.sh 2>&1)
 echo "$out" | grep -q "nginx did not reload" &&
     docker exec "$P-srv" grep -q "cam-c" /etc/nginx/camex-map.conf
@@ -291,21 +294,145 @@ t1=$(date +%s)
 [ $((t1 - t0)) -ge 3 ] && [ "$(get cam-d.$DOMAIN)" = "I am CAM-D" ]
 check $? "the second run waited for the lock ($((t1 - t0)) s) and applied its map"
 
+echo "== 7a. the domain from domain= in [server] (#106)"
+# Every sync above ran without DOMAIN: the names came from the server
+docker exec "$P-srv" grep -qx "# domain: $DOMAIN" /etc/nginx/camex-map.conf &&
+    docker exec "$P-srv" grep -q "\"cam-a\.$DOMAIN\"" /etc/nginx/camex-map.conf
+check $? "without DOMAIN the map takes the server's domain= ($DOMAIN)"
+err=$(docker exec "$P-srv" camex --status --format nginx-map --domain other.test 2>&1 >/dev/null)
+echo "$err" | grep -q -- "--domain other.test differs from the server's domain= $DOMAIN: other.test used"
+check $? "--domain that differs from domain= is used, with a warning"
+docker exec "$P-srv" sh -c 'echo "[server]" > /tmp/bad.conf; echo "domain=bad_domain" >> /tmp/bad.conf'
+out=$(docker exec "$P-srv" timeout 5 camex --mode server --port 5898 \
+    --local-cidr 10.202.0.1/24 $SERVER_KEY_ARGS --psk "$PSK" \
+    --config /tmp/bad.conf 2>&1)
+rc=$?
+[ $rc -ne 0 ] && [ $rc -ne 124 ] && echo "$out" | grep -q "Invalid domain=: bad_domain"
+check $? "a server refuses a file with a domain= that is no host name"
+
 echo "== 8. IDs that are map keywords, no domain"
 # Without a domain the keys are bare IDs: default, include, hostnames and
-# volatile must stay hosts, not map's own parameters
+# volatile must stay hosts, not map's own parameters. The server's
+# domain= is taken away, applied with a reload (kill -HUP)
+docker exec "$P-srv" sed -i '/^domain=/d' /etc/camex/camex.conf
+docker kill -s HUP "$P-srv" >/dev/null
+sleep 1
 for id in default include; do client "$id"; done
 wait_registered default include
 sleep 2
-out=$(docker exec -e DOMAIN= -e NGINX_BIN=nginx-counting "$P-srv" camex-nginx-sync.sh 2>&1)
+out=$(docker exec -e NGINX_BIN=nginx-counting "$P-srv" camex-nginx-sync.sh 2>&1)
 sleep 1
 echo "$out" | sed 's/^/      /'
+echo "$out" | grep -q "camex: no domain (domain= in \[server\] or --domain)" &&
+    echo "$out" | grep -q "warning: no domain" &&
+    docker exec "$P-srv" grep -qx "# domain: (none)" /etc/nginx/camex-map.conf
+check $? "without domain= after a reload: the bare IDs, with a warning"
 docker exec "$P-srv" grep -q '^    "\\default" ' /etc/nginx/camex-map.conf &&
     docker exec "$P-srv" nginx -t >/dev/null 2>&1
 check $? "the map has them and nginx -t accepts it"
 [ "$(get default)" = "I am default" ] && [ "$(get include)" = "I am include" ] &&
     get nobody | grep -q "is offline"
 check $? "each one gets its own page, an unknown name still the offline page"
+
+echo "== 9. a warning when nginx does not follow the domain (#106)"
+docker exec "$P-srv" sh -c "sed -i '/^\\[server\\]/a domain=wrong.test' /etc/camex/camex.conf"
+docker kill -s HUP "$P-srv" >/dev/null
+sleep 1
+out=$(sync)
+echo "$out" | grep -q "warning: nginx has no server_name \*\.wrong\.test"
+check $? "a domain nginx has no server_name for is reported"
+out=$(docker exec -e NGINX_BIN=nginx-counting -e INDEX="$INDEX" "$P-srv" camex-nginx-sync.sh --check 2>&1)
+rc=$?
+echo "$out" | sed 's/^/      /'
+[ $rc -ne 0 ] && echo "$out" | grep -q "FAIL  nginx has no server_name \*\.wrong\.test" &&
+    echo "$out" | grep -q "ok    nginx includes the map"
+check $? "--check fails on it and says why"
+
+echo "== 10. camex-nginx-setup.sh on a clean host (#106)"
+# Where nginx was set up by hand (nginx-camex.conf), the setup does not
+# add a second configuration with the same names
+out=$(docker exec "$P-srv" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
+rc=$?
+[ $rc -ne 0 ] &&
+    echo "$out" | grep -q "nginx already has a camex configuration: /etc/nginx/conf.d/nginx-camex.conf" &&
+    ! docker exec "$P-srv" test -e /etc/nginx/conf.d/camex.conf
+check $? "an existing camex configuration of nginx is named, nothing added"
+# A new container: the server with camex.conf, nginx with no camex config
+# yet, no sync script; the setup puts it all in place
+docker run -d --name "$P-new" --network "$NET_NAME" --cap-add NET_ADMIN \
+    --cap-add MKNOD "$IMAGE" --mode server --port 5800 \
+    --local-cidr 10.200.0.1/24 $SERVER_KEY_ARGS --psk "$PSK" \
+    --config /etc/camex/camex.conf >/dev/null
+# camex.conf a symlink: the setup must change its target and keep the link
+docker exec "$P-new" sh -c 'sed -i "/^domain=/d; /^\[server\]/d" /etc/camex/camex.conf
+    mv /etc/camex/camex.conf /etc/camex/real.conf && ln -s real.conf /etc/camex/camex.conf
+    rm -f /etc/nginx/conf.d/nginx-camex.conf /usr/local/bin/camex-nginx-sync.sh && nginx'
+sleep 1
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
+rc=$?
+echo "$out" | sed 's/^/      /'
+[ $rc -eq 0 ] &&
+    docker exec "$P-new" grep -q "server_name \*\.$DOMAIN;" /etc/nginx/conf.d/camex.conf &&
+    docker exec "$P-new" grep -qx "domain=$DOMAIN" /etc/camex/real.conf &&
+    docker exec "$P-new" grep -qx "# domain: $DOMAIN" /etc/nginx/camex-map.conf &&
+    docker exec "$P-new" test -f /var/lib/camex-nginx/index.html &&
+    echo "$out" | grep -q "ok    nginx has server_name \*\.$DOMAIN" &&
+    echo "$out" | grep -q "ok    nginx sends camex-check-[0-9]*\.$DOMAIN to camex" &&
+    echo "$out" | grep -q "ok    nginx serves the start page on $DOMAIN"
+check $? "the setup installs it all with the domain, and --check agrees"
+docker exec "$P-new" test -L /etc/camex/camex.conf &&
+    docker exec "$P-new" grep -qx "domain=$DOMAIN" /etc/camex/real.conf
+check $? "a symlinked camex.conf keeps its link, its target gets domain="
+out=$(docker exec "$P-new" camex-nginx-sync.sh --check 2>&1)
+[ $? -ne 0 ] && echo "$out" | grep -q "FAIL  camex-check-[0-9]*\.$DOMAIN does not resolve: no DNS record for \*\.$DOMAIN"
+check $? "--check fails when the domain's DNS records are missing"
+docker exec "$P-new" curl -s -m 10 -H "Host: $DOMAIN" http://127.0.0.1/ | grep -q "Camex Devices"
+check $? "the start page answers on $DOMAIN"
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
+rc=$?
+[ $rc -eq 0 ] && ! echo "$out" | grep -q "wrote:" &&
+    echo "$out" | grep -q "unchanged: /etc/nginx/conf.d/camex.conf"
+check $? "run again it changes nothing"
+docker exec "$P-new" sh -c 'echo "# edited" >> /etc/nginx/conf.d/camex.conf'
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
+rc=$?
+[ $rc -ne 0 ] && echo "$out" | grep -q "kept /etc/nginx/conf.d/camex.conf: it differs" &&
+    docker exec "$P-new" grep -q "^# edited" /etc/nginx/conf.d/camex.conf
+check $? "an edited file is kept, its difference shown"
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" --force 2>&1)
+rc=$?
+[ $rc -eq 0 ] && ! docker exec "$P-new" grep -q "^# edited" /etc/nginx/conf.d/camex.conf &&
+    docker exec "$P-new" sh -c 'grep -l "^# edited" /var/backups/camex/etc_nginx_conf.d_camex.conf.*' >/dev/null &&
+    ! docker exec "$P-new" sh -c 'ls /etc/nginx/conf.d/ | grep -q bak'
+check $? "--force replaces it and keeps the old one in /var/backups/camex"
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" \
+    --index /var/lib/camex-nginx/start.html --force 2>&1)
+rc=$?
+[ $rc -eq 0 ] && docker exec "$P-new" grep -q "try_files /start.html " /etc/nginx/conf.d/camex.conf &&
+    docker exec "$P-new" curl -s -m 10 -H "Host: $DOMAIN" http://127.0.0.1/ | grep -q "Camex Devices"
+check $? "another page file name (--index .../start.html) is served"
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" \
+    --index '/var/lib/a&b/index.html' 2>&1)
+[ $? -ne 0 ] && echo "$out" | grep -q "use a path of letters, digits"
+check $? "a page path with characters sed would read is refused"
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain other.test 2>&1)
+rc=$?
+[ $rc -ne 0 ] && echo "$out" | grep -q "has domain=$DOMAIN, not other.test: nothing changed" &&
+    docker exec "$P-new" grep -q "server_name \*\.$DOMAIN;" /etc/nginx/conf.d/camex.conf
+check $? "another domain changes nothing, nginx included, without --force"
+
+# Debian's layout: the file in sites-available, a symlink in sites-enabled
+docker exec "$P-new" sh -c 'mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled &&
+    mv /etc/nginx/conf.d/camex.conf /etc/nginx/sites-available/camex &&
+    ln -s ../sites-available/camex /etc/nginx/sites-enabled/camex &&
+    grep -q "sites-enabled" /etc/nginx/nginx.conf'
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh \
+    --domain "$DOMAIN" --index /var/lib/camex-nginx/start.html \
+    --nginx-conf /etc/nginx/sites-enabled/camex 2>&1)
+rc=$?
+[ $rc -eq 0 ] && echo "$out" | grep -q "unchanged: /etc/nginx/sites-available/camex" &&
+    docker exec "$P-new" test -L /etc/nginx/sites-enabled/camex
+check $? "a sites-enabled symlink is managed through its target, and stays a link"
 
 if [ "$FAILS" -ne 0 ]; then
     echo "FAIL: $FAILS check(s) failed"

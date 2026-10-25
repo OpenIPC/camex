@@ -26,15 +26,26 @@ static const char head[] =
     "# camex --status --format nginx-map: generated, do not edit\n"
     "map $host $camex_upstream {\n";
 
+/* The "# domain: ..." line of the last map (#106), cut out of it so that
+ * the checks below compare the rest */
+static char domain_line[300];
+
 static char *fmt(const char *lines, const char *domain, int port,
                  const char *dflt, size_t *count, char *warn, size_t wsize)
 {
     FILE *w = fmemopen(warn, wsize, "w");
-    char *m;
+    char *m, *d, *e;
 
     m = nginx_map_format(lines, domain, port, dflt, w, count);
     if (w != NULL) {
         fclose(w);
+    }
+    domain_line[0] = '\0';
+    if (m != NULL && (d = strstr(m, "\n# domain: ")) != NULL &&
+        (e = strchr(d + 1, '\n')) != NULL) {
+        snprintf(domain_line, sizeof(domain_line), "%.*s",
+                 (int)(e - d - 1), d + 1);
+        memmove(d + 1, e + 1, strlen(e + 1) + 1U);
     }
     return m;
 }
@@ -320,6 +331,12 @@ int main(void)
     m = fmt("", NULL, 80, "127.0.0.1:8099", &n, warn, sizeof(warn));
     CHECK(m != NULL && strstr(m, "    default 127.0.0.1:8099;\n") != NULL,
           "the default line");
+    free(m);
+    CHECK(strcmp(domain_line, "# domain: (none)") == 0,
+          "a map without a domain says so");
+    m = fmt("", "Openipc.Click", 80, NULL, &n, warn, sizeof(warn));
+    CHECK(m != NULL && strcmp(domain_line, "# domain: Openipc.Click") == 0,
+          "the map names its domain");
     free(m);
 
     /* Sorted, lower case, the domain and the port */

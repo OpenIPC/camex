@@ -284,7 +284,7 @@ sudo ./camex \
 | `--json`                   |        | Вместе с `--status`: то же в JSON, для скриптов                                                                                                                  |
 | `--control <path>`         |        | Сервер: управляющий сокет для `--status` (по умолчанию `/run/camex/camex-<transport>-<port>.sock`, `none` — выключен); с `--status`: спросить только этот сервер |
 | `--format <fmt>`           |        | С `--status`: `table` (по умолчанию), `json` (как `--json`), `nginx-map` или `nginx-index`, см. [nginx перед клиентами](#nginx-перед-клиентами)                  |
-| `--domain <name>`          |        | С `--format nginx-map` или `nginx-index`: домен после ID клиента                                                                                                 |
+| `--domain <name>`          |        | С `--format nginx-map` или `nginx-index`: домен после ID клиента (по умолчанию — `domain=` в `[server]` сервера)                                                 |
 | `--upstream-port <port>`   |        | С `--format nginx-map`: веб-порт клиентов (по умолчанию 80)                                                                                                      |
 | `--default <ip:port>`      |        | С `--format nginx-map`: куда идут имена без живого клиента (по умолчанию никуда — страница nginx «не в сети»)                                                    |
 | `--client-isolation`       |        | Сервер: отбрасывать пакеты от одного клиента другому (или `client_isolation=yes` в `[server]`), см. [Модель безопасности](#модель-безопасности)                  |
@@ -411,7 +411,14 @@ map $host $camex_upstream {
   работает один раз или с `--loop <секунды>`; `camex-nginx-sync.service` и
   `.timer` запускают его каждые 10 секунд. Адреса стабильны (#81), поэтому карта
   меняется, только когда клиенты приходят и уходят.
-- Настройки скрипта: `DOMAIN`, `UPSTREAM_PORT`, `DEFAULT`, `CONTROL`, `MAP`
+- **Домен задаётся один раз** (#106): `domain=openipc.click` в `[server]` файла
+  сервера; карта, стартовая страница и скрипт синхронизации берут его у
+  запущенного сервера. `sudo examples/camex-nginx-setup.sh --domain
+  openipc.click` прописывает его туда и ставит блоки `server` nginx, скрипт
+  синхронизации, его service и timer с тем же доменом;
+  `camex-nginx-sync.sh --check` проверяет всю связку (серверы, домен, nginx,
+  стартовую страницу, DNS).
+- Настройки скрипта: `DOMAIN` (по умолчанию — `domain=` сервера), `UPSTREAM_PORT`, `DEFAULT`, `CONTROL`, `MAP`
   (`/etc/nginx/camex-map.conf`), `INDEX`, `CAMEX`, `NGINX_BIN`.
 - **Стартовая страница** (#105, #110): `camex --status --format nginx-index
   --domain openipc.click` печатает статическую HTML-страницу с клиентами на двух

@@ -15,12 +15,15 @@
 #include "camex.h"
 #include "log.h"
 #include "server.h"
+#include "config.h"
 #include "nginxmap.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 
 #ifndef _WIN32
@@ -342,10 +345,25 @@ static void control_answer(control_conn_t *c)
         c->out = server_clients_list(1, &len);
     } else if (strcmp(c->cmd, "CLIENTS INDEX") == 0) {
         c->out = server_clients_index(&len);
+    } else if (strcmp(c->cmd, "DOMAIN") == 0) {
+        /* domain= of [server] (#106), an empty line without one; in lower
+         * case, as the map writes it (and never "ERROR...") */
+        size_t k;
+
+        len = strlen(server_db.globals.domain) + 1U;
+        c->out = malloc(len + 1U);
+        if (c->out != NULL) {
+            for (k = 0U; k + 1U < len; ++k) {
+                c->out[k] = (char)tolower(
+                    (unsigned char)server_db.globals.domain[k]);
+            }
+            c->out[len - 1U] = '\n';
+            c->out[len] = '\0';
+        }
     } else {
         static const char err[] = "ERROR unknown command (STATUS, "
                                   "STATUS JSON, CLIENTS, CLIENTS NAMES, "
-                                  "CLIENTS INDEX)\n";
+                                  "CLIENTS INDEX, DOMAIN)\n";
 
         c->out = malloc(sizeof(err));
         if (c->out != NULL) {
@@ -470,9 +488,22 @@ void control_handle(const fd_set *readset, const fd_set *writeset)
     }
 }
 
+/* Set while a question may go unanswered without a word: control_ask()
+ * then says nothing about an ERROR answer (DOMAIN of a server older than
+ * 3.8.0) or a socket nobody listens on; other failures it still names */
+static int control_quiet = 0;
+
+#define ASK_ERR(...) \
+    do { \
+        if (!control_quiet) { \
+            fprintf(stderr, __VA_ARGS__); \
+        } \
+    } while (0)
+
 /* Client side: send cmd to path; the whole answer, without its end
  * marker, in *buf (malloc'd, NUL-terminated). 0, or -1 with a message on
- * stderr (no answer, a cut-off one, an error). */
+ * stderr (no answer, a cut-off one); -2 when nobody listens there; -3
+ * when the server answered ERROR (an unknown command, say). */
 static int control_ask(const char *path, const char *cmd, char **buf,
                        size_t *buf_len)
 {
@@ -509,11 +540,15 @@ static int control_ask(const char *path, const char *cmd, char **buf,
     if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
         int err = errno;
 
-        fprintf(stderr, "camex: cannot connect to %s: %s%s\n", path,
-                strerror(err), err == EACCES
-                    ? " (run it as the server's user, normally root)"
-                    : (err == ECONNREFUSED || err == ENOENT)
-                          ? " (is the server running?)" : "");
+        /* Quiet only for a socket nobody listens on (a server that is
+         * gone): the clients' query names it */
+        if (!control_quiet || (err != ECONNREFUSED && err != ENOENT)) {
+            fprintf(stderr, "camex: cannot connect to %s: %s%s\n", path,
+                    strerror(err), err == EACCES
+                        ? " (run it as the server's user, normally root)"
+                        : (err == ECONNREFUSED || err == ENOENT)
+                              ? " (is the server running?)" : "");
+        }
         close(fd);
         /* -2: nobody listens there (a server that is gone) */
         return (err == ECONNREFUSED || err == ENOENT) ? -2 : -1;
@@ -563,8 +598,8 @@ static int control_ask(const char *path, const char *cmd, char **buf,
         *buf_len -= m;
         (*buf)[*buf_len] = '\0';
         if (strncmp(*buf, "ERROR", 5) == 0) {
-            fprintf(stderr, "camex: %s: %s", path, *buf);
-            return -1;
+            ASK_ERR("camex: %s: %s", path, *buf);
+            return -3;   /* the server answered: it does not know cmd */
         }
     }
     return 0;
@@ -770,6 +805,98 @@ static int control_gather(const char *path, const char *cmd, char **all)
     return 0;
 }
 
+/* The domain for the map and the page (#106): --domain (given), else
+ * domain= of the servers' [server] block, in out. A warning on stderr when
+ * they differ, when the servers differ, or when there is none. 0, or -1
+ * (with a message) when a server did not answer */
+static int control_domain(const char *path, const char *given, char *out,
+                          size_t size)
+{
+    control_path_t one;
+    control_path_t *paths = &one;
+    control_path_t *listed = NULL;
+    char server[254] = "";
+    int n, i, differ = 0, none = 0, failed = 0;
+
+    if (path != NULL && path[0] != '\0') {
+        n = 1;
+        snprintf(one, sizeof(one), "%s", path);
+    } else {
+        n = control_list(&listed);
+        paths = listed;
+        if (n <= 0) {
+            /* No server: the clients' query says so, not a domain warning */
+            free(listed);
+            snprintf(out, size, "%s", given != NULL ? given : "");
+            return 0;
+        }
+    }
+    /* Quiet: a server older than 3.8.0 answers ERROR, one that is gone
+     * does not answer; the clients' query says so */
+    control_quiet = 1;
+    for (i = 0; i < n; ++i) {
+        char *buf = NULL;
+        size_t len = 0U;
+
+        int rc = control_ask(paths[i], "DOMAIN\n", &buf, &len);
+
+        if (rc == -3) {
+            none = 1;   /* a server older than 3.8.0: ERROR */
+        } else if (rc == -1) {
+            /* No answer (a timeout, a cut-off one): the map must not lose
+             * this server's domain, so no map this time */
+            failed = 1;
+        } else if (rc == 0) {
+            while (len > 0U && (buf[len - 1U] == '\n' ||
+                                buf[len - 1U] == '\r')) {
+                buf[--len] = '\0';
+            }
+            if (len > 0U && camex_domain_valid(buf)) {
+                if (server[0] == '\0') {
+                    snprintf(server, sizeof(server), "%s", buf);
+                } else if (strcasecmp(server, buf) != 0) {
+                    differ = 1;
+                }
+            } else {
+                none = 1;   /* no domain= */
+            }
+        }
+        free(buf);
+    }
+    control_quiet = 0;
+    free(listed);
+    if (failed) {
+        fprintf(stderr, "camex: a server did not answer for its domain=: "
+                "no map or page this time\n");
+        return -1;
+    }
+    /* The servers disagree: all their clients get one domain */
+    if (differ) {
+        fprintf(stderr, "camex: the servers have different domain= (%s "
+                "and another): %s used for all their clients\n", server,
+                given != NULL && given[0] != '\0' ? given : server);
+    } else if (none && server[0] != '\0') {
+        fprintf(stderr, "camex: a server has no domain= while another has "
+                "%s: %s used for all their clients\n", server,
+                given != NULL && given[0] != '\0' ? given : server);
+    }
+
+    if (given != NULL && given[0] != '\0') {
+        if (server[0] != '\0' && strcasecmp(server, given) != 0) {
+            fprintf(stderr, "camex: --domain %s differs from the server's "
+                    "domain= %s: %s used\n", given, server, given);
+        }
+        snprintf(out, size, "%s", given);
+    } else {
+        snprintf(out, size, "%s", server);
+        if (server[0] == '\0') {
+            fprintf(stderr, "camex: no domain (domain= in [server] or "
+                    "--domain): the names are the bare client IDs\n");
+        }
+    }
+    return 0;
+}
+
 int control_nginx_map(const char *path, const char *domain, int port,
                       const char *dflt)
 {
@@ -777,10 +904,13 @@ int control_nginx_map(const char *path, const char *domain, int port,
     size_t count = 0U;
     int rc;
 
-    if (control_gather(path, "CLIENTS\n", &all) != 0) {
+    char dom[254];
+
+    if (control_domain(path, domain, dom, sizeof(dom)) != 0 ||
+        control_gather(path, "CLIENTS\n", &all) != 0) {
         return 1;
     }
-    map = nginx_map_format(all, domain, port, dflt, stderr, &count);
+    map = nginx_map_format(all, dom, port, dflt, stderr, &count);
     free(all);
     if (map == NULL) {
         fprintf(stderr, "camex: cannot build the map (check --domain, "
@@ -800,10 +930,13 @@ int control_nginx_index(const char *path, const char *domain)
 
     /* A server older than 3.7.0 answers ERROR: the page is not built, so
      * a sync keeps the previous one */
-    if (control_gather(path, "CLIENTS INDEX\n", &all) != 0) {
+    char dom[254];
+
+    if (control_domain(path, domain, dom, sizeof(dom)) != 0 ||
+        control_gather(path, "CLIENTS INDEX\n", &all) != 0) {
         return 1;
     }
-    page = nginx_index_format(all, domain, stderr, &count);
+    page = nginx_index_format(all, dom, stderr, &count);
     free(all);
     if (page == NULL) {
         fprintf(stderr, "camex: cannot build the start page (check "

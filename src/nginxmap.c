@@ -126,6 +126,11 @@ static int valid_hostname(const char *name)
     return 1;
 }
 
+int camex_domain_valid(const char *domain)
+{
+    return domain != NULL && valid_hostname(domain);
+}
+
 /* A dotted IPv4 address: four numbers 0..255, nothing else (digits and
  * dots only: sscanf alone would take blanks and signs) */
 static int parse_addr(const char *a, uint32_t *out)
@@ -474,7 +479,10 @@ char *nginx_map_format(const char *lines, const char *domain, int port,
     }
 
     buf_printf(&out, "# camex --status --format nginx-map: generated, do "
-               "not edit\nmap $host $camex_upstream {\n");
+               "not edit\n");
+    /* For the sync script's checks (#106): the domain the names end in */
+    buf_printf(&out, "# domain: %s\n", dlen > 0U ? domain : "(none)");
+    buf_printf(&out, "map $host $camex_upstream {\n");
     if (dnorm[0] != '\0') {
         buf_printf(&out, "    default %s;\n", dnorm);
     }

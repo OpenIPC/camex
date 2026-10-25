@@ -527,6 +527,17 @@ static int config_db_parse_file(const char *path, char *line,
             } else if (strcmp(content, "control_socket") == 0) {
                 rc = copy_option(g->control_socket, sizeof(g->control_socket),
                                  val, "control socket");
+            } else if (strcmp(content, "domain") == 0) {
+                /* The domain of the nginx map and start page (#106) */
+                if (!camex_domain_valid(val)) {
+                    log_message(LOG_ERR, "Invalid domain=: %s (host name "
+                                "labels: letters, digits and '-', separated "
+                                "by dots)", val);
+                    rc = -1;
+                } else {
+                    rc = copy_option(g->domain, sizeof(g->domain), val,
+                                     "domain");
+                }
             } else if (strcmp(content, "name") == 0) {
                 /* A client's display name (#105), as in [defaults] */
                 log_message(LOG_ERR, "name= belongs in a [client ID] "
