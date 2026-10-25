@@ -17,7 +17,7 @@
 #
 # Run it again at any time: unchanged files stay, a file that was edited
 # since is kept and its difference shown (--force replaces it, keeping the
-# old one as <file>.bak).
+# old one in /var/backups/camex/).
 #
 # Usage: camex-nginx-setup.sh --domain <domain> [options]
 #   --domain <domain>   the cameras' domain: <ID>.<domain>, the start page on
@@ -43,6 +43,9 @@ INDEX=/var/lib/camex-nginx/index.html
 NGINX_CONF=/etc/nginx/conf.d/camex.conf
 MAP=/etc/nginx/camex-map.conf
 BIN=/usr/local/bin
+# Backups of replaced files: not next to them, where nginx's
+# sites-enabled/* would load a copy too
+BACKUP=/var/backups/camex
 UNITS=/etc/systemd/system
 FORCE=
 DRY=
@@ -194,11 +197,12 @@ install_file() {
         return 0
     fi
     if [ -f "$2" ]; then
-        if ! cp -p "$2" "$2.bak"; then
-            problem "cannot keep $2 as $2.bak: $2 left as it is"
+        bak=$BACKUP/$(echo "$2" | sed 's|^/||; s|/|_|g').$(date +%Y%m%d-%H%M%S)
+        if ! { mkdir -p -m 700 "$BACKUP" && cp -p "$2" "$bak"; }; then
+            problem "cannot keep $2 as $bak: $2 left as it is"
             return 1
         fi
-        say "previous one kept as $2.bak"
+        say "previous one kept as $bak"
     fi
     mkdir -p "$(dirname "$2")" &&
         cp "$1" "$2.tmp.$$" && chmod "$3" "$2.tmp.$$" && mv -f "$2.tmp.$$" "$2" ||

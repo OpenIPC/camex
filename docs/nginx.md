@@ -206,7 +206,8 @@ script with its service and timer, and the start page's directory. It sets
 the running camex servers, then checks and reloads nginx and enables the
 timer. Run it again at any time: unchanged files stay, and a file edited since
 is kept and its difference shown (`--force` replaces it and keeps the old one
-as `.bak`). `--index none` leaves out the start page, `--dry-run` only says
+in `/var/backups/camex/`, out of nginx's directories; `camex.conf` as
+`camex.conf.bak`). `--index none` leaves out the start page, `--dry-run` only says
 what it would do. DNS and TLS (steps 1 and 2) stay yours.
 
 **The checks**: `camex-nginx-sync.sh --check` goes through the whole setup and

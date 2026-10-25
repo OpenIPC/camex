@@ -21,7 +21,7 @@ release, rebuilt from every push to `master`; this file is the change history.
   the sync script, its service and timer and the start page's directory with that domain,
   sets `domain=` in `camex.conf` and reloads the camex servers, checks and reloads nginx,
   enables the timer and runs `--check`. Safe to run again; an edited file is kept unless
-  `--force` (the old one as `.bak`); `--dry-run`.
+  `--force` (the old one in `/var/backups/camex/`); `--dry-run`.
 - Tests: unit tests of the map's domain line; the nginx e2e test checks the domain from
   `domain=`, `--domain` overriding it, no domain after a reload, the warning and `--check`
   for a domain nginx does not serve, and the setup script on a clean host (install, run

@@ -377,8 +377,8 @@ echo "$out" | sed 's/^/      /'
     docker exec "$P-new" grep -qx "# domain: $DOMAIN" /etc/nginx/camex-map.conf &&
     docker exec "$P-new" test -f /var/lib/camex-nginx/index.html &&
     echo "$out" | grep -q "ok    nginx has server_name \*\.$DOMAIN" &&
-    echo "$out" | grep -q "ok    nginx on port 80 sends camex-check-[0-9]*\.$DOMAIN to camex" &&
-    echo "$out" | grep -q "ok    nginx on port 80 serves the start page on $DOMAIN"
+    echo "$out" | grep -q "ok    nginx sends camex-check-[0-9]*\.$DOMAIN to camex" &&
+    echo "$out" | grep -q "ok    nginx serves the start page on $DOMAIN"
 check $? "the setup installs it all with the domain, and --check agrees"
 docker exec "$P-new" test -L /etc/camex/camex.conf &&
     docker exec "$P-new" grep -qx "domain=$DOMAIN" /etc/camex/real.conf
@@ -402,8 +402,9 @@ check $? "an edited file is kept, its difference shown"
 out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" --force 2>&1)
 rc=$?
 [ $rc -eq 0 ] && ! docker exec "$P-new" grep -q "^# edited" /etc/nginx/conf.d/camex.conf &&
-    docker exec "$P-new" grep -q "^# edited" /etc/nginx/conf.d/camex.conf.bak
-check $? "--force replaces it and keeps the old one as .bak"
+    docker exec "$P-new" sh -c 'grep -l "^# edited" /var/backups/camex/etc_nginx_conf.d_camex.conf.*' >/dev/null &&
+    ! docker exec "$P-new" sh -c 'ls /etc/nginx/conf.d/ | grep -q bak'
+check $? "--force replaces it and keeps the old one in /var/backups/camex"
 out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" \
     --index /var/lib/camex-nginx/start.html --force 2>&1)
 rc=$?

@@ -48,6 +48,7 @@ UPSTREAM_PORT=${UPSTREAM_PORT:-80}
 DEFAULT=${DEFAULT-}
 CONTROL=${CONTROL-}
 MAP=${MAP:-/etc/nginx/camex-map.conf}
+INDEX_SET=${INDEX+set}    # INDEX= given, even empty: --check keeps it
 INDEX=${INDEX-}
 CAMEX=${CAMEX:-camex}
 NGINX_BIN=${NGINX_BIN:-nginx}
@@ -302,6 +303,20 @@ nginx_warnings() {
             "do not reach the map (nginx-camex.conf)"
 }
 
+# What nginx on this host answers for host $1 on port 80; when port 80
+# only redirects to HTTPS (certbot's redirect, say), what port 443 answers
+probe() {
+    pb=$(curl -s -m 5 -H "Host: $1" -w '\n%{http_code}' http://127.0.0.1/ 2>/dev/null)
+    case "${pb##*
+}" in
+        301|302|307|308)
+            curl -sk -m 5 -H "Host: $1" https://127.0.0.1/ 2>/dev/null ;;
+        *)
+            printf '%s\n' "${pb%
+*}" ;;
+    esac
+}
+
 # --check: one line per item, ok / WARN / FAIL; exit code 1 on a FAIL
 check_all() {
     fails=0
@@ -310,6 +325,12 @@ check_all() {
     fail() { echo "  FAIL  $*"; fails=$((fails + 1)); }
 
     echo "camex-nginx-sync --check"
+    # Run by hand: the start page the timer's service writes
+    u=/etc/systemd/system/camex-nginx-sync.service
+    if [ -z "${INDEX_SET-}" ] && [ -z "$INDEX" ] && [ -f "$u" ]; then
+        INDEX=$(sed -n 's/^Environment=INDEX=//p' "$u" | tail -n 1)
+        [ -n "$INDEX" ] && ok "INDEX=$INDEX (from $u)"
+    fi
     if ! command -v "$CAMEX" >/dev/null 2>&1; then
         fail "$CAMEX not found (CAMEX=)"
         return 1
@@ -380,14 +401,13 @@ check_all() {
                 ok "nginx not asked for a name with no camera (DEFAULT= sends" \
                    "those to $DEFAULT)"
             elif command -v curl >/dev/null 2>&1; then
-                b=$(curl -s -m 5 -H "Host: camex-check-$$.$dom" \
-                    http://127.0.0.1/ 2>/dev/null)
+                b=$(probe "camex-check-$$.$dom")
                 case "$b" in
                     *"camera is offline"*)
-                        ok "nginx on port 80 sends camex-check-$$.$dom to camex" \
+                        ok "nginx sends camex-check-$$.$dom to camex" \
                            "(the offline page of a name with no camera)" ;;
                     *)
-                        fail "nginx on port 80 does not send camex-check-$$.$dom" \
+                        fail "nginx does not send camex-check-$$.$dom" \
                              "to camex (no offline page): check the server" \
                              "block for *.$dom" ;;
                 esac
@@ -395,10 +415,10 @@ check_all() {
                 warn "no curl: nginx not asked on port 80"
             fi
             if [ -n "$INDEX" ] && command -v curl >/dev/null 2>&1; then
-                b=$(curl -s -m 5 -H "Host: $dom" http://127.0.0.1/ 2>/dev/null)
+                b=$(probe "$dom")
                 case "$b" in
-                    *"Camex Devices"*) ok "nginx on port 80 serves the start page on $dom" ;;
-                    *) warn "nginx on port 80 does not serve the start page on $dom" ;;
+                    *"Camex Devices"*) ok "nginx serves the start page on $dom" ;;
+                    *) warn "nginx does not serve the start page on $dom" ;;
                 esac
             fi ;;
     esac
