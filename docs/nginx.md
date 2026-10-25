@@ -109,7 +109,9 @@ psk=hex:<this camera's 64 hex digits>
 ```
 
 `name=` is optional, with one shared key too: a block with only `name=` gives
-the camera a name on the start page and changes nothing else.
+the camera a name on the start page. Any `[client ID]` block lists the ID in
+the file, though: with `allow_unknown_clients=no` it also lets that camera in,
+with the shared key when the block has no `psk=` of its own.
 
 ## Cameras
 
