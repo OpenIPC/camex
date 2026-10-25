@@ -62,7 +62,8 @@ cp "$REPO_DIR/examples/camex-nginx-sync.sh" "$BUILD_CTX/"
 sed "s/cam\.example\.lan/$DOMAIN/g" "$REPO_DIR/examples/nginx-camex.conf" > "$BUILD_CTX/nginx-camex.conf"
 . "$SCRIPT_DIR/lib-keys.sh"
 gen_server_key "$BUILD_CTX" "$CAMEX_BINARY" || { echo "cannot create a server key"; exit 1; }
-printf '[client CAM-A]\nname=%s\n' "$NAME_A" > "$BUILD_CTX/camex.conf"
+# CAM-Z is configured but never connects: offline on the start page
+printf '[client CAM-A]\nname=%s\n[client CAM-Z]\nname=Gate\n' "$NAME_A" > "$BUILD_CTX/camex.conf"
 cat > "$BUILD_CTX/Dockerfile" <<'DOCKERFILE'
 FROM ubuntu:24.04
 # New clients right after the server starts: no start hold (#81)
@@ -148,14 +149,26 @@ get nobody.$DOMAIN | grep -q "is offline"
 check $? "an unknown name gets the offline page"
 ! get "<b>x.$DOMAIN" | grep -q "<b>"
 check $? "the offline page does not echo the Host header"
-echo "$out" | grep -q "start page updated: 2 devices"
+echo "$out" | grep -q "start page updated: 2 devices online"
 check $? "the sync writes the start page"
 home=$(get "$DOMAIN")
 echo "$home" | grep '^<tr class="dev">' | sed 's/^/      /'
 echo "$home" | grep -qF "<a href=\"//cam-a.$DOMAIN/\">$NAME_A_HTML</a></td><td class=\"id\">cam-a</td>" &&
     echo "$home" | grep -qF "<a href=\"//cam-b.$DOMAIN/\">cam-b</a></td><td class=\"id\">cam-b</td>" &&
-    echo "$home" | grep -qF '<div class="sub">2 devices online</div>'
+    echo "$home" | grep -qF '<div class="sub">2 online &middot; 2 configured</div>'
 check $? "the bare domain lists both, CAM-A by its escaped name, CAM-B by its ID"
+conf_part=$(echo "$home" | sed -n '/<div class="list list-conf">/,/<div class="list list-auto">/p')
+auto_part=$(echo "$home" | sed -n '/<div class="list list-auto">/,$p')
+echo "$conf_part" | grep -q "//cam-a.$DOMAIN/" && ! echo "$conf_part" | grep -q "//cam-b." &&
+    echo "$auto_part" | grep -q "//cam-b.$DOMAIN/" && ! echo "$auto_part" | grep -q "//cam-a."
+check $? "CAM-A (configured) under Configured, CAM-B (auto pool) under Auto"
+echo "$conf_part" | grep -qF '<tr class="dev off"><td class="lamp"><span class="bulb"></span></td><td><span class="nm">Gate</span></td><td class="id">cam-z</td>' &&
+    ! echo "$home" | grep -q "//cam-z." &&
+    echo "$home" | grep -qF 'Configured <b>2</b> &middot; <i>1 offline</i>'
+check $? "CAM-Z, configured and never connected, is listed offline without a link"
+hs=$(docker exec "$P-srv" camex --status --json | python3 -c 'import json,sys; print([c for s in json.load(sys.stdin)["servers"] for c in s["clients"] if c["id"]=="CAM-A"][0]["handshakes"])')
+echo "$home" | grep -F "//cam-a.$DOMAIN/" | grep -qE "<td class=\"hs\">[0-9dhms]+ ago &middot; $hs</td><td class=\"tr\">[0-9.&#;]+ / [0-9.&#;]+</td>"
+check $? "CAM-A's row has its handshakes ($hs, as --json says), ages and traffic"
 ok=0
 for host in $(echo "$home" | sed -n 's|.*<a href="//\([^/"]*\)/">.*|\1|p'); do
     case "$(get "$host")" in "I am "*) ;; *) ok=1 ;; esac
@@ -170,17 +183,26 @@ check $? "--status and --json show the name"
 
 echo "== 2. a sync without a change"
 before=$(reloads)
-page_before=$(docker exec "$P-srv" stat -c '%i %Y' "$INDEX")
+rx_of_a() {  # CAM-A's RX on the page, in KiB, without the thousands' spaces
+    get "$DOMAIN" | grep -F "//cam-a.$DOMAIN/" | sed -e 's/&#8239;//g' |
+        sed -n 's|.*<td class="tr">\([0-9.]*\) / .*|\1|p'
+}
+rx_before=$(rx_of_a)
+addr_a=$(docker exec "$P-srv" camex --status --json | python3 -c 'import json,sys; print([c for s in json.load(sys.stdin)["servers"] for c in s["clients"] if c["id"]=="CAM-A"][0]["address"])')
+docker exec "$P-srv" ping -c 20 -i 0.2 -s 1000 "$addr_a" >/dev/null 2>&1
 sleep 1
-sync >/dev/null
+out=$(sync)
 [ "$(reloads)" = "$before" ]
 check $? "nginx is not reloaded ($before -> $(reloads))"
-[ "$(docker exec "$P-srv" stat -c '%i %Y' "$INDEX")" = "$page_before" ]
-check $? "the start page is not rewritten"
+! echo "$out" | grep -q "start page updated"
+check $? "the same devices online: the page's new values are not logged"
+rx_after=$(rx_of_a)
+python3 -c "import sys; sys.exit(0 if float('${rx_after:-0}') > float('${rx_before:-0}') else 1)"
+check $? "CAM-A's traffic on the page grows with pings ($rx_before -> $rx_after KiB)"
 docker exec "$P-srv" chmod 600 "$INDEX"
 sync >/dev/null
 [ "$(docker exec "$P-srv" stat -c %a "$INDEX")" = 644 ]
-check $? "an unchanged page with tight permissions is made readable for nginx"
+check $? "a page with tight permissions is made readable for nginx"
 out=$(docker exec -e DOMAIN="$DOMAIN" -e NGINX_BIN=nginx-counting \
     -e INDEX=/nonexistent/index.html "$P-srv" camex-nginx-sync.sh 2>&1)
 echo "$out" | grep -q "cannot write /nonexistent/index.html.tmp.* (does the directory of INDEX exist?)" &&

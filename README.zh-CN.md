@@ -394,11 +394,14 @@ map $host $camex_upstream {
   因此只有在客户端上线或离开时 map 才会变化。
 - 脚本的设置：`DOMAIN`、`UPSTREAM_PORT`、`DEFAULT`、`CONTROL`、`MAP`
   （`/etc/nginx/camex-map.conf`）、`INDEX`、`CAMEX`、`NGINX_BIN`。
-- **起始页**（#105）：`camex --status --format nginx-index --domain
-  openipc.click` 输出一个静态 HTML 页面，列出所有在线客户端：名称以及指向
-  `//<客户端 ID>.openipc.click/` 的链接。名称来自服务器上该客户端
+- **起始页**（#105、#110）：`camex --status --format nginx-index --domain
+  openipc.click` 输出一个静态 HTML 页面，客户端分两个标签页显示：**Configured**
+  列出服务器文件中所有 `[client ID]` 块，未连接的以红色标出；**Auto** 列出来自自动
+  地址池的已连接客户端。每行包含指向 `//<客户端 ID>.openipc.click/` 的名称链接、
+  ID 和地址、连接时长、最后一个数据包、最近一次握手及握手次数，以及以 KiB 为单位的
+  RX / TX。名称来自服务器上该客户端
   `[client ID]` 块中的 `name=`（UTF-8，最多 64 字节），没有时显示 ID；
-  `--status` 和 `--json` 也会显示它。设置 `INDEX=` 后，同步脚本会在页面变化时写入
+  `--status` 和 `--json` 也会显示它。设置 `INDEX=` 后，同步脚本每次运行都会写入
   页面，`examples/nginx-camex.conf` 的第二个 server 块在裸域名
   （`http://openipc.click/`）上提供该页面。页面列出所有设备：请像限制摄像机
   访问一样限制对它的访问。

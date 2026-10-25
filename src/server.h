@@ -159,4 +159,13 @@ char *server_status(int json, size_t *len);
  * malloc'd, NULL without memory */
 char *server_clients_list(int names, size_t *len);
 
+/* The start page's records (#110), tab-separated, one a line:
+ *   L <ID> <address> <configured 0|1> <connected s> <last packet s|->
+ *     <last handshake s> <handshakes> <rx bytes> <tx bytes> [<name>]
+ * for each live client with an ID and an address, and
+ *   O <ID> <configured address|-> [<name>]
+ * for each [client ID] block with no live client. malloc'd, NULL without
+ * memory */
+char *server_clients_index(size_t *len);
+
 #endif /* CAMEX_SERVER_H */

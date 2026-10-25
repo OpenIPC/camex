@@ -2753,6 +2753,92 @@ char *server_status(int json, size_t *len)
     return b.p;
 }
 
+/* Seconds since t, 0 when the clock went back past it */
+static double age_s(time_t t)
+{
+    double d = difftime(g_now, t);
+
+    return d > 0.0 ? d : 0.0;
+}
+
+/* An ID fit for a one-line, tab-separated record: no blank, control
+ * byte or DEL in it */
+static int record_id_ok(const char *id)
+{
+    for (; *id != '\0'; ++id) {
+        if ((unsigned char)*id <= 0x20U || (unsigned char)*id == 0x7fU) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+char *server_clients_index(size_t *len)
+{
+    status_buf_t b = { NULL, 0U, 0U, 0 };
+    size_t i;
+    char ip[16];
+
+    sb_printf(&b, "%s", "");
+    for (i = 0U; i < server_max_clients; ++i) {
+        const server_client_t *c = &server_clients[i];
+        const char *name;
+        double last;
+
+        if (!c->active || !c->registered || c->client_id[0] == '\0' ||
+            c->ip_be == 0U || !record_id_ok(c->client_id)) {
+            continue;
+        }
+        ip_text(ntohl(c->ip_be), ip, sizeof(ip));
+        name = status_name(c->client_id);
+        /* Ages from the wall clock: a step back must not make them
+         * negative (the record would not be read) */
+        last = c->last_data != 0 ? age_s(c->last_data) : -1.0;
+        sb_printf(&b, "L\t%s\t%s\t%d\t%.0f\t", c->client_id, ip,
+                  config_db_find_client(c->client_id) != NULL ? 1 : 0,
+                  c->session_since != 0 ? age_s(c->session_since) : 0.0);
+        if (last < 0.0) {
+            sb_printf(&b, "-");
+        } else {
+            sb_printf(&b, "%.0f", last);
+        }
+        /* The name is the last field: it has no control characters, so
+         * no tab (checked when the file was loaded) */
+        sb_printf(&b, "\t%.0f\t%u\t%llu\t%llu%s%s\n",
+                  c->last_hs != 0 ? age_s(c->last_hs) : 0.0,
+                  (unsigned)c->handshakes,
+                  (unsigned long long)c->rx_bytes,
+                  (unsigned long long)c->tx_bytes,
+                  name != NULL ? "\t" : "", name != NULL ? name : "");
+    }
+    /* The configured clients that are not connected */
+    for (i = 0U; i < server_db.client_count; ++i) {
+        const camex_server_profile_t *p = &server_db.clients[i];
+        const server_client_t *c;
+
+        if (!p->active || p->client_id[0] == '\0' ||
+            !record_id_ok(p->client_id)) {
+            continue;
+        }
+        c = server_find_by_client_id(p->client_id);
+        if (c != NULL && c->registered && c->ip_be != 0U) {
+            continue;
+        }
+        if (p->has_ip) {
+            ip_text(ntohl(p->ip_be), ip, sizeof(ip));
+        }
+        sb_printf(&b, "O\t%s\t%s%s%s\n", p->client_id,
+                  p->has_ip ? ip : "-", p->name[0] != '\0' ? "\t" : "",
+                  p->name);
+    }
+    if (b.err || b.p == NULL) {
+        free(b.p);
+        return NULL;
+    }
+    *len = b.len;
+    return b.p;
+}
+
 /* The live clients as "<client ID> <tunnel address>" lines, for the nginx
  * map (#84): clients with an ID and an address only; with names, " <name>"
  * follows for a client with name= (#105) */

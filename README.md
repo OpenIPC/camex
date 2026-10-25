@@ -411,12 +411,16 @@ map $host $camex_upstream {
   clients come and go.
 - Settings of the script: `DOMAIN`, `UPSTREAM_PORT`, `DEFAULT`, `CONTROL`, `MAP`
   (`/etc/nginx/camex-map.conf`), `INDEX`, `CAMEX`, `NGINX_BIN`.
-- **Start page** (#105): `camex --status --format nginx-index --domain
-  openipc.click` prints a static HTML page with every live client, its name
-  and a link to `//<client ID>.openipc.click/`. The name is `name=` in the
-  client's `[client ID]` block on the server (UTF-8, up to 64 bytes), or the ID
-  without one; `--status` and `--json` show it too. With `INDEX=` the sync
-  script writes the page when it changed, and the second server block of
+- **Start page** (#105, #110): `camex --status --format nginx-index --domain
+  openipc.click` prints a static HTML page of the clients in two tabs:
+  **Configured**, every `[client ID]` block of the server's file with the
+  offline ones in red, and **Auto**, the connected clients from the auto pool.
+  Each row has the name linked to `//<client ID>.openipc.click/`, the ID and
+  address, how long it has been connected, its last packet, its last handshake
+  and their number, and RX / TX in KiB. The name is `name=` in the client's
+  `[client ID]` block on the server (UTF-8, up to 64 bytes), or the ID without
+  one; `--status` and `--json` show it too. With `INDEX=` the sync
+  script writes the page at every run, and the second server block of
   `examples/nginx-camex.conf` serves it on the bare domain
   (`http://openipc.click/`). The page lists every device: limit who may open
   it as for the cameras.
