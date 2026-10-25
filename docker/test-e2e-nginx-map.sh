@@ -195,6 +195,10 @@ check $? "the same devices online: the page's new values are not logged"
 rx_after=$(get "$DOMAIN" | grep -F "//cam-a.$DOMAIN/" | sed -n 's|.*<td class="tr">\([0-9.]*\) / .*|\1|p')
 python3 -c "import sys; sys.exit(0 if float('${rx_after:-0}') > float('${rx_before:-0}') else 1)"
 check $? "CAM-A's traffic on the page grows with pings ($rx_before -> $rx_after KiB)"
+docker exec "$P-srv" chmod 600 "$INDEX"
+sync >/dev/null
+[ "$(docker exec "$P-srv" stat -c %a "$INDEX")" = 644 ]
+check $? "a page with tight permissions is made readable for nginx"
 out=$(docker exec -e DOMAIN="$DOMAIN" -e NGINX_BIN=nginx-counting \
     -e INDEX=/nonexistent/index.html "$P-srv" camex-nginx-sync.sh 2>&1)
 echo "$out" | grep -q "cannot write /nonexistent/index.html.tmp.* (does the directory of INDEX exist?)" &&

@@ -196,7 +196,8 @@ index_build() {
     [ -n "$CONTROL" ] && set -- "$@" --control "$CONTROL"
     if ! "$CAMEX" "$@" > "$itmp" 9>&-; then
         rm -f "$itmp"
-        log "no start page (a server did not answer); $INDEX left as it is"
+        # camex said why above: no server answered, an older server, ...
+        log "no start page (see the error above); $INDEX left as it is"
         return 1
     fi
     return 0
@@ -208,6 +209,9 @@ index_build() {
 index_publish() {
     if [ -f "$INDEX" ] && cmp -s "$itmp" "$INDEX"; then
         rm -f "$itmp"
+        # Readable for nginx even when someone wrote it with a tight umask
+        chmod 644 "$INDEX" 2>/dev/null ||
+            log "cannot make $INDEX readable for nginx"
         return 0
     fi
     before=$(grep -c '^<tr class="dev">' "$INDEX" 2>/dev/null)
