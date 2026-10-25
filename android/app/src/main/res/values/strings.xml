@@ -5,11 +5,11 @@
     strings.xml — camex app strings
 -->
 <resources>
-    <string name="app_name">Camex VPN</string>
+    <string name="app_name">Camex</string>
     <string name="status_connected">Connected</string>
     <string name="status_disconnected">Disconnected</string>
-    <string name="btn_start">Start VPN</string>
-    <string name="btn_stop">Stop VPN</string>
+    <string name="btn_start">Start</string>
+    <string name="btn_stop">Stop</string>
     <string name="btn_settings">Settings</string>
 
     <!-- Settings screen -->

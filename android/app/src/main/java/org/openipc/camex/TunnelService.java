@@ -184,7 +184,7 @@ public class TunnelService extends VpnService {
     private int establishTun(String localIp, int prefixLen, int mtu, String[] routes) {
         try {
             Builder builder = new Builder();
-            builder.setSession("Camex VPN");
+            builder.setSession(getString(R.string.app_name));
             builder.setMtu(mtu);
             builder.addAddress(localIp, prefixLen);
             // The tunnel subnet itself
@@ -299,7 +299,7 @@ public class TunnelService extends VpnService {
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel chan = new NotificationChannel(
-                CHANNEL_ID, "Camex VPN",
+                CHANNEL_ID, getString(R.string.app_name),
                 NotificationManager.IMPORTANCE_LOW);
             NotificationManager mgr = getSystemService(NotificationManager.class);
             mgr.createNotificationChannel(chan);
@@ -312,7 +312,7 @@ public class TunnelService extends VpnService {
             this, 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         return new Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("Camex VPN")
+            .setContentTitle(getString(R.string.app_name))
             .setContentText(text)
             .setContentIntent(pi)
             .setSmallIcon(android.R.drawable.ic_lock_lock)

@@ -4,6 +4,15 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.8.2 — 2026-10-25
+
+- Android: the app is "Camex", no longer "Camex VPN" (#115): the label under the launcher
+  icon, the VPN session name in Android's VPN dialog and settings, the notification and
+  its channel. The main screen's buttons are "Start" and "Stop". The manifest and the
+  service take the name from `app_name`.
+- `tests/android/device-test.sh` taps the buttons by their exact text, so "Stop" does not
+  match "camex stopped".
+
 ## 3.8.1 — 2026-10-25
 
 - `camex --help`: `--domain` names its default (`domain=` in `[server]` of the server),
