@@ -163,13 +163,24 @@ tap_text() {   # tap the UI element whose text matches $1 (regex)
     $ADB shell input tap $xy
 }
 
+tap_exact() {  # tap the UI element whose text is exactly $1 ("Stop", not "stopped")
+    local xy
+    $ADB shell uiautomator dump /data/local/tmp/ui.xml >/dev/null 2>&1
+    xy=$($ADB shell cat /data/local/tmp/ui.xml | tr '>' '\n' |
+        grep -iF "text=\"$1\"" | head -1 |
+        sed -nE 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/p' |
+        awk '{ print int(($1 + $3) / 2), int(($2 + $4) / 2) }')
+    [ -n "$xy" ] || return 1
+    $ADB shell input tap $xy
+}
+
 set +e   # from here on, check() reports failures
 
 echo "== start VPN"
 $ADB logcat -c
 $ADB shell am start -W -n "$PKG/.MainActivity" >/dev/null
 sleep 2
-tap_text "Start VPN" || { echo "start button not found"; exit 2; }
+tap_exact "Start" || { echo "start button not found"; exit 2; }
 sleep 3
 tap_text "OK|ОК|Allow" >/dev/null 2>&1 || true   # VPN consent, if shown
 
@@ -220,7 +231,7 @@ check $? "server reaches the device at its new address"
 echo "== stop VPN"
 $ADB shell am start -W -n "$PKG/.MainActivity" >/dev/null
 sleep 1
-tap_text "Stop VPN" || true
+tap_exact "Stop" || true
 down=1
 for _ in $(seq 1 15); do
     if ! $ADB shell ip addr 2>/dev/null | grep -q "10.200.0.[78]/24"; then down=0; break; fi

@@ -22,7 +22,7 @@
     <uses-permission android:name="org.openipc.camex.permission.INTERNAL" />
 
     <application
-        android:label="Camex VPN"
+        android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
         android:supportsRtl="true">
