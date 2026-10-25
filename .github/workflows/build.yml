@@ -246,6 +246,19 @@ jobs:
           APK=$(ls "$OUT"/app-release.apk "$OUT"/app-release-unsigned.apk 2>/dev/null | head -1)
           cp "$APK" "$OUT/camex-android.apk"
 
+      # The APK's version comes from src/version.h through Gradle (#117)
+      - name: Check the APK's version
+        run: |
+          VER=$(sed -n 's/^#define CAMEX_VERSION "\(.*\)"/\1/p' src/version.h)
+          CODE=$(echo "$VER" | awk -F. '{ print $1 * 10000 + $2 * 100 + $3 }')
+          AAPT=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)
+          B=$("$AAPT" dump badging android/app/build/outputs/apk/release/camex-android.apk | head -1)
+          echo "$B"
+          echo "$B" | grep -q "versionCode='$CODE' versionName='$VER'" || {
+            echo "::error::the APK is not version $VER ($CODE) of src/version.h"
+            exit 1
+          }
+
       - name: Upload artifact (APK)
         uses: actions/upload-artifact@v7
         with:

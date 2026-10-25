@@ -1002,9 +1002,11 @@ The **only** place to change the software version is `src/version.h`:
 #define CAMEX_VERSION "X.Y.Z"
 ```
 
-The Android `versionName` and `versionCode` follow it: `scripts/sync-android-version.sh`
-(or `make apk`, which calls it) updates `android/app/build.gradle.kts` and
-`android/app/src/main/AndroidManifest.xml`.
+Every build takes it from there: the app, the kernel module (`MODULE_VERSION`,
+not git), the name of `make apk`'s file, and the Android `versionName` and
+`versionCode`, which `android/app/build.gradle.kts` reads from `version.h` at
+build time (a version it cannot read fails the build). Nothing else holds a
+version to keep in step; CI checks that the APK's version matches `version.h`.
 
 ### When to bump
 
@@ -1027,8 +1029,7 @@ The Android `versionName` and `versionCode` follow it: `scripts/sync-android-ver
 There are no version tags and no versioned releases: one release, `latest`, is
 replaced by CI after every push to `master`, once all build and test jobs pass.
 
-1. **In a PR**: bump `CAMEX_VERSION`, run `scripts/sync-android-version.sh`, add the
-   version's section to `CHANGELOG.md`.
+1. **In a PR**: bump `CAMEX_VERSION` and add the version's section to `CHANGELOG.md`.
 2. **Merge into `master`**. CI deletes the old `latest` release and its tag and creates
    it again on the built commit: title `Camex X.Y.Z`, the files from
    [Permanent links](#permanent-links).
