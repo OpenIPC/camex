@@ -45,6 +45,12 @@ fi
 
 DOMAIN_SET=${DOMAIN+set}  # DOMAIN= given, even empty: --check keeps it
 DOMAIN=${DOMAIN-}
+# Which settings were given (even empty): --check keeps those, and takes
+# the others from the installed service
+UPSTREAM_PORT_SET=${UPSTREAM_PORT+set}
+DEFAULT_SET=${DEFAULT+set}
+CONTROL_SET=${CONTROL+set}
+MAP_SET=${MAP+set}
 UPSTREAM_PORT=${UPSTREAM_PORT:-80}
 DEFAULT=${DEFAULT-}
 CONTROL=${CONTROL-}
@@ -328,15 +334,17 @@ check_all() {
     fail() { echo "  FAIL  $*"; fails=$((fails + 1)); }
 
     echo "camex-nginx-sync --check"
-    # Run by hand: the start page the timer's service writes
     u=/etc/systemd/system/camex-nginx-sync.service
-    if [ -z "${INDEX_SET-}" ] && [ -z "$INDEX" ] && [ -f "$u" ]; then
-        INDEX=$(sed -n 's/^Environment=INDEX=//p' "$u" | tail -n 1)
-        [ -n "$INDEX" ] && ok "INDEX=$INDEX (from $u)"
-    fi
-    if [ -z "${DOMAIN_SET-}" ] && [ -f "$u" ]; then
-        DOMAIN=$(sed -n 's/^Environment=DOMAIN=//p' "$u" | tail -n 1)
-        [ -n "$DOMAIN" ] && ok "DOMAIN=$DOMAIN (from $u)"
+    # Run by hand: the timer's settings, for those not given here
+    if [ -f "$u" ]; then
+        for v in INDEX DOMAIN DEFAULT UPSTREAM_PORT CONTROL MAP; do
+            eval "given=\${${v}_SET-}"
+            [ -n "$given" ] && continue
+            val=$(sed -n "s/^Environment=$v=//p" "$u" | tail -n 1)
+            [ -n "$val" ] || continue
+            eval "$v=\$val"
+            ok "$v=$val (from $u)"
+        done
     fi
     if ! command -v "$CAMEX" >/dev/null 2>&1; then
         fail "$CAMEX not found (CAMEX=)"

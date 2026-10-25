@@ -18,6 +18,7 @@
 #include "config.h"
 #include "nginxmap.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -345,11 +346,19 @@ static void control_answer(control_conn_t *c)
     } else if (strcmp(c->cmd, "CLIENTS INDEX") == 0) {
         c->out = server_clients_index(&len);
     } else if (strcmp(c->cmd, "DOMAIN") == 0) {
-        /* domain= of [server] (#106), an empty line without one */
+        /* domain= of [server] (#106), an empty line without one; in lower
+         * case, as the map writes it (and never "ERROR...") */
+        size_t k;
+
         len = strlen(server_db.globals.domain) + 1U;
         c->out = malloc(len + 1U);
         if (c->out != NULL) {
-            snprintf(c->out, len + 1U, "%s\n", server_db.globals.domain);
+            for (k = 0U; k + 1U < len; ++k) {
+                c->out[k] = (char)tolower(
+                    (unsigned char)server_db.globals.domain[k]);
+            }
+            c->out[len - 1U] = '\n';
+            c->out[len] = '\0';
         }
     } else {
         static const char err[] = "ERROR unknown command (STATUS, "

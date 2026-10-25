@@ -233,7 +233,15 @@ if [ -z "$INDEX" ]; then
         "$TMP/nginx.conf" > "$TMP/nginx.conf.2" && mv "$TMP/nginx.conf.2" "$TMP/nginx.conf"
 fi
 # A symlink (sites-enabled -> sites-available): its target is written
+before=$PROBLEMS
 install_file "$TMP/nginx.conf" "$NGINX_CONF_REAL" 644
+if [ "$PROBLEMS" -ne "$before" ]; then
+    # nginx keeps its own file: changing camex's domain now would leave
+    # the two on different domains
+    say "nothing else changed: merge the difference into" \
+        "$NGINX_CONF_REAL, or run with --force"
+    exit 1
+fi
 if [ ! -f "$MAP" ]; then
     printf 'map $host $camex_upstream {\n}\n' > "$TMP/map"
     install_file "$TMP/map" "$MAP" 644
