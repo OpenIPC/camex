@@ -363,51 +363,62 @@ docker run -d --name "$P-new" --network "$NET_NAME" --cap-add NET_ADMIN \
     --cap-add MKNOD "$IMAGE" --mode server --port 5800 \
     --local-cidr 10.200.0.1/24 $SERVER_KEY_ARGS --psk "$PSK" \
     --config /etc/camex/camex.conf >/dev/null
+# camex.conf a symlink: the setup must change its target and keep the link
 docker exec "$P-new" sh -c 'sed -i "/^domain=/d; /^\[server\]/d" /etc/camex/camex.conf
+    mv /etc/camex/camex.conf /etc/camex/real.conf && ln -s real.conf /etc/camex/camex.conf
     rm -f /etc/nginx/conf.d/nginx-camex.conf /usr/local/bin/camex-nginx-sync.sh && nginx'
 sleep 1
-out=$(docker exec "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
 rc=$?
 echo "$out" | sed 's/^/      /'
 [ $rc -eq 0 ] &&
     docker exec "$P-new" grep -q "server_name \*\.$DOMAIN;" /etc/nginx/conf.d/camex.conf &&
-    docker exec "$P-new" grep -qx "domain=$DOMAIN" /etc/camex/camex.conf &&
+    docker exec "$P-new" grep -qx "domain=$DOMAIN" /etc/camex/real.conf &&
     docker exec "$P-new" grep -qx "# domain: $DOMAIN" /etc/nginx/camex-map.conf &&
     docker exec "$P-new" test -f /var/lib/camex-nginx/index.html &&
-    echo "$out" | grep -q "ok    nginx has server_name \*\.$DOMAIN"
+    echo "$out" | grep -q "ok    nginx has server_name \*\.$DOMAIN" &&
+    echo "$out" | grep -q "ok    nginx on port 80 sends camex-check-[0-9]*\.$DOMAIN to camex" &&
+    echo "$out" | grep -q "ok    nginx on port 80 serves the start page on $DOMAIN"
 check $? "the setup installs it all with the domain, and --check agrees"
+docker exec "$P-new" test -L /etc/camex/camex.conf &&
+    docker exec "$P-new" grep -qx "domain=$DOMAIN" /etc/camex/real.conf
+check $? "a symlinked camex.conf keeps its link, its target gets domain="
+out=$(docker exec "$P-new" camex-nginx-sync.sh --check 2>&1)
+[ $? -ne 0 ] && echo "$out" | grep -q "FAIL  camex-check-[0-9]*\.$DOMAIN does not resolve: no DNS record for \*\.$DOMAIN"
+check $? "--check fails when the domain's DNS records are missing"
 docker exec "$P-new" curl -s -m 10 -H "Host: $DOMAIN" http://127.0.0.1/ | grep -q "Camex Devices"
 check $? "the start page answers on $DOMAIN"
-out=$(docker exec "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
 rc=$?
 [ $rc -eq 0 ] && ! echo "$out" | grep -q "wrote:" &&
     echo "$out" | grep -q "unchanged: /etc/nginx/conf.d/camex.conf"
 check $? "run again it changes nothing"
 docker exec "$P-new" sh -c 'echo "# edited" >> /etc/nginx/conf.d/camex.conf'
-out=$(docker exec "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
 rc=$?
 [ $rc -ne 0 ] && echo "$out" | grep -q "kept /etc/nginx/conf.d/camex.conf: it differs" &&
     docker exec "$P-new" grep -q "^# edited" /etc/nginx/conf.d/camex.conf
 check $? "an edited file is kept, its difference shown"
-out=$(docker exec "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" --force 2>&1)
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" --force 2>&1)
 rc=$?
 [ $rc -eq 0 ] && ! docker exec "$P-new" grep -q "^# edited" /etc/nginx/conf.d/camex.conf &&
     docker exec "$P-new" grep -q "^# edited" /etc/nginx/conf.d/camex.conf.bak
 check $? "--force replaces it and keeps the old one as .bak"
-out=$(docker exec "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" \
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" \
     --index /var/lib/camex-nginx/start.html --force 2>&1)
 rc=$?
 [ $rc -eq 0 ] && docker exec "$P-new" grep -q "try_files /start.html " /etc/nginx/conf.d/camex.conf &&
     docker exec "$P-new" curl -s -m 10 -H "Host: $DOMAIN" http://127.0.0.1/ | grep -q "Camex Devices"
 check $? "another page file name (--index .../start.html) is served"
-out=$(docker exec "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" \
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" \
     --index '/var/lib/a&b/index.html' 2>&1)
 [ $? -ne 0 ] && echo "$out" | grep -q "use a path of letters, digits"
 check $? "a page path with characters sed would read is refused"
-out=$(docker exec "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain other.test 2>&1)
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain other.test 2>&1)
 rc=$?
-[ $rc -ne 0 ] && echo "$out" | grep -q "kept domain=$DOMAIN in /etc/camex/camex.conf"
-check $? "another domain does not replace domain= without --force"
+[ $rc -ne 0 ] && echo "$out" | grep -q "has domain=$DOMAIN, not other.test: nothing changed" &&
+    docker exec "$P-new" grep -q "server_name \*\.$DOMAIN;" /etc/nginx/conf.d/camex.conf
+check $? "another domain changes nothing, nginx included, without --force"
 
 if [ "$FAILS" -ne 0 ]; then
     echo "FAIL: $FAILS check(s) failed"

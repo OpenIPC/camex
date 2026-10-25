@@ -54,6 +54,24 @@ log() {
     echo "camex-nginx-sync: $*" >&2
 }
 
+# Run a command; its messages (camex's warnings: no domain, bad IDs, ...)
+# go to the log only when they differ from the previous run's, kept in
+# $1, so a lasting state is not logged every 10 seconds
+quiet_repeats() {
+    seen=$1
+    shift
+    werr=$(mktemp "$seen.XXXXXX" 2>/dev/null) || { "$@"; return $?; }
+    "$@" 2> "$werr"
+    wrc=$?
+    if [ -f "$seen" ] && cmp -s "$werr" "$seen"; then
+        rm -f "$werr"
+    else
+        cat "$werr" >&2
+        mv -f "$werr" "$seen" 2>/dev/null || rm -f "$werr"
+    fi
+    return $wrc
+}
+
 # One sync at a time: a second one waits, so a rollback never undoes
 # another run's map. flock(1) (util-linux, busybox): the kernel drops the
 # lock when its holder exits, so a killed run leaves nothing behind and a
@@ -129,7 +147,7 @@ sync_locked() {
     [ -n "$DOMAIN" ] && set -- "$@" --domain "$DOMAIN"
     [ -n "$DEFAULT" ] && set -- "$@" --default "$DEFAULT"
     [ -n "$CONTROL" ] && set -- "$@" --control "$CONTROL"
-    if ! "$CAMEX" "$@" > "$tmp" 9>&-; then
+    if ! quiet_repeats "$MAP.warnings" "$CAMEX" "$@" > "$tmp" 9>&-; then
         rm -f "$tmp"
         log "no map (a server did not answer); $MAP left as it is"
         return 1
@@ -200,7 +218,7 @@ index_build() {
     set -- --status --format nginx-index
     [ -n "$DOMAIN" ] && set -- "$@" --domain "$DOMAIN"
     [ -n "$CONTROL" ] && set -- "$@" --control "$CONTROL"
-    if ! "$CAMEX" "$@" > "$itmp" 9>&-; then
+    if ! quiet_repeats "$MAP.warnings-index" "$CAMEX" "$@" > "$itmp" 9>&-; then
         rm -f "$itmp"
         # camex said why above: no server answered, an older server, ...
         log "no start page (see the error above); $INDEX left as it is"
@@ -296,14 +314,15 @@ check_all() {
     set -- --status --format nginx-map
     [ -n "$DOMAIN" ] && set -- "$@" --domain "$DOMAIN"
     [ -n "$CONTROL" ] && set -- "$@" --control "$CONTROL"
-    ctmp=$(mktemp) || return 1
-    if "$CAMEX" "$@" > "$ctmp" 2> "$ctmp.err"; then
-        ok "the servers answer: $(grep -c '^    "' "$ctmp") clients in the map"
+    # Its own directory: no name in /tmp that someone else could predict
+    cdir=$(mktemp -d) || return 1
+    if "$CAMEX" "$@" > "$cdir/map" 2> "$cdir/err"; then
+        ok "the servers answer: $(grep -c '^    "' "$cdir/map") clients in the map"
     else
-        fail "the servers do not answer: $(tail -n 1 "$ctmp.err")"
+        fail "the servers do not answer: $(tail -n 1 "$cdir/err")"
     fi
-    dom=$(map_domain "$ctmp")
-    rm -f "$ctmp" "$ctmp.err"
+    dom=$(map_domain "$cdir/map")
+    rm -rf "$cdir"
     case "$dom" in
         ''|'(none)')
             fail "no domain: set domain= in [server] of camex.conf (or DOMAIN=)" ;;
@@ -349,6 +368,38 @@ check_all() {
         esac
     fi
 
+    # What nginx really does on port 80 of this host (the configuration
+    # read above may name the domain in another block or port)
+    case "$dom" in
+        ''|'(none)') ;;
+        *)
+            if [ -n "$DEFAULT" ]; then
+                ok "nginx not asked for a name with no camera (DEFAULT= sends" \
+                   "those to $DEFAULT)"
+            elif command -v curl >/dev/null 2>&1; then
+                b=$(curl -s -m 5 -H "Host: camex-check-$$.$dom" \
+                    http://127.0.0.1/ 2>/dev/null)
+                case "$b" in
+                    *"camera is offline"*)
+                        ok "nginx on port 80 sends camex-check-$$.$dom to camex" \
+                           "(the offline page of a name with no camera)" ;;
+                    *)
+                        fail "nginx on port 80 does not send camex-check-$$.$dom" \
+                             "to camex (no offline page): check the server" \
+                             "block for *.$dom" ;;
+                esac
+            else
+                warn "no curl: nginx not asked on port 80"
+            fi
+            if [ -n "$INDEX" ] && command -v curl >/dev/null 2>&1; then
+                b=$(curl -s -m 5 -H "Host: $dom" http://127.0.0.1/ 2>/dev/null)
+                case "$b" in
+                    *"Camex Devices"*) ok "nginx on port 80 serves the start page on $dom" ;;
+                    *) warn "nginx on port 80 does not serve the start page on $dom" ;;
+                esac
+            fi ;;
+    esac
+
     if [ -n "$INDEX" ]; then
         if [ ! -d "$(dirname "$INDEX")" ]; then
             fail "the start page's directory $(dirname "$INDEX") is missing"
@@ -374,13 +425,19 @@ check_all() {
                      awk '{sub("/.*", "", $4); print $4}') | tr ' ' '\n')
             for h in "camex-check-$$.$dom" ${INDEX:+"$dom"}; do
                 a=$(getent hosts "$h" 2>/dev/null | awk '{print $1; exit}')
-                if [ -z "$a" ]; then
-                    warn "$h does not resolve: a DNS record for" \
-                         "$( [ "$h" = "$dom" ] && echo "$dom" || echo "*.$dom")?"
+                rec=$( [ "$h" = "$dom" ] && echo "$dom" || echo "*.$dom")
+                if [ "${CHECK_DNS-}" = no ]; then
+                    ok "DNS not checked (CHECK_DNS=no)"
+                    break
+                elif [ -z "$a" ]; then
+                    fail "$h does not resolve: no DNS record for $rec" \
+                         "(CHECK_DNS=no skips this, e.g. in a container)"
                 elif printf '%s\n' "$mine" | grep -qx "$a"; then
                     ok "$h resolves to this host ($a)"
                 else
-                    warn "$h resolves to $a, not an address of this host"
+                    # Behind NAT the public address is not one of ours
+                    warn "$h resolves to $a, not an address of this host" \
+                         "(fine behind NAT)"
                 fi
             done ;;
     esac

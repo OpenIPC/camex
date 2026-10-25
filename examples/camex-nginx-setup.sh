@@ -142,6 +142,32 @@ if [ -n "$others" ]; then
     exit 1
 fi
 
+# The file to change: a symlink's target, so the link stays
+if [ -f "$CONF" ]; then
+    CONF_REAL=$(readlink -f "$CONF" 2>/dev/null || echo "$CONF")
+else
+    CONF_REAL=$CONF
+fi
+# [server], as camex reads it: any case, blanks inside the brackets
+SERVER_RE='^[[:space:]]*[[][[:space:]]*[Ss][Ee][Rr][Vv][Ee][Rr][[:space:]]*[]][[:space:]]*$'
+server_domain() {
+    awk -v re="$SERVER_RE" '/^[[:space:]]*\[/ { s = ($0 ~ re) }
+        s && /^[[:space:]]*domain[[:space:]]*=/ {
+            sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); print; exit
+        }' "$CONF_REAL"
+}
+# Another domain in camex.conf: stop before nginx is changed, or nginx and
+# the map would follow two domains
+have=
+if [ -f "$CONF_REAL" ]; then
+    have=$(server_domain)
+    if [ -n "$have" ] && [ "$have" != "$DOMAIN" ] && [ -z "$FORCE" ]; then
+        problem "$CONF has domain=$have, not $DOMAIN: nothing changed" \
+                "(--force sets $DOMAIN there and everywhere else)"
+        exit 1
+    fi
+fi
+
 TMP=$(mktemp -d) || exit 1
 trap 'rm -rf "$TMP"' EXIT INT TERM HUP
 
@@ -150,6 +176,10 @@ trap 'rm -rf "$TMP"' EXIT INT TERM HUP
 install_file() {
     if [ -f "$2" ] && cmp -s "$1" "$2"; then
         say "unchanged: $2"
+        # The contents are right; the mode may not be (a script that lost
+        # its x bit)
+        [ -n "$DRY" ] || chmod "$3" "$2" 2>/dev/null ||
+            problem "cannot set mode $3 on $2"
         return 0
     fi
     if [ -f "$2" ] && [ -z "$FORCE" ]; then
@@ -162,7 +192,13 @@ install_file() {
         say "would write: $2"
         return 0
     fi
-    [ -f "$2" ] && cp -p "$2" "$2.bak" && say "previous one kept as $2.bak"
+    if [ -f "$2" ]; then
+        if ! cp -p "$2" "$2.bak"; then
+            problem "cannot keep $2 as $2.bak: $2 left as it is"
+            return 1
+        fi
+        say "previous one kept as $2.bak"
+    fi
     mkdir -p "$(dirname "$2")" &&
         cp "$1" "$2.tmp.$$" && chmod "$3" "$2.tmp.$$" && mv -f "$2.tmp.$$" "$2" ||
         { rm -f "$2.tmp.$$"; problem "cannot write $2"; return 1; }
@@ -224,17 +260,15 @@ if [ ! -f "$CONF" ]; then
     problem "no $CONF: add domain=$DOMAIN to [server] of the server's" \
             "config (or set DOMAIN= for the sync script)"
 else
-    have=$(awk '/^[[:space:]]*\[/ { s = tolower($0) ~ /^[[:space:]]*\[server\]/ }
-                s && /^[[:space:]]*domain[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); print; exit }' "$CONF")
     if [ "$have" = "$DOMAIN" ]; then
         say "unchanged: domain=$DOMAIN in $CONF"
     elif [ -n "$have" ] && [ -z "$FORCE" ]; then
         problem "kept domain=$have in $CONF (--force sets $DOMAIN)"
     else
-        awk -v d="$DOMAIN" '
+        awk -v d="$DOMAIN" -v re="$SERVER_RE" '
             /^[[:space:]]*\[/ {
                 if (s && !done) { print "domain=" d; done = 1 }
-                s = tolower($0) ~ /^[[:space:]]*\[server\]/
+                s = ($0 ~ re)
                 print; next
             }
             s && /^[[:space:]]*domain[[:space:]]*=/ {
@@ -245,18 +279,20 @@ else
             END {
                 if (!done && s) { print "domain=" d; done = 1 }
                 if (!done) { print ""; print "[server]"; print "domain=" d }
-            }' "$CONF" > "$TMP/camex.conf"
+            }' "$CONF_REAL" > "$TMP/camex.conf"
         if [ -n "$DRY" ]; then
             say "would set domain=$DOMAIN in [server] of $CONF"
         # Through a copy next to it (its owner and mode), renamed in one
         # step: a failed write leaves the file as it was
-        elif cp -p "$CONF" "$CONF.bak" && cp -p "$CONF" "$CONF.tmp.$$" &&
-             cat "$TMP/camex.conf" > "$CONF.tmp.$$" &&
-             mv -f "$CONF.tmp.$$" "$CONF"; then
-            say "set domain=$DOMAIN in [server] of $CONF (previous: $CONF.bak)"
+        elif cp -p "$CONF_REAL" "$CONF_REAL.bak" &&
+             cp -p "$CONF_REAL" "$CONF_REAL.tmp.$$" &&
+             cat "$TMP/camex.conf" > "$CONF_REAL.tmp.$$" &&
+             mv -f "$CONF_REAL.tmp.$$" "$CONF_REAL"; then
+            say "set domain=$DOMAIN in [server] of $CONF_REAL" \
+                "(previous: $CONF_REAL.bak)"
         else
-            rm -f "$CONF.tmp.$$"
-            problem "cannot write $CONF (left as it was)"
+            rm -f "$CONF_REAL.tmp.$$"
+            problem "cannot write $CONF_REAL (left as it was)"
         fi
     fi
 fi
