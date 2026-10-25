@@ -177,6 +177,10 @@ sync >/dev/null
 check $? "nginx is not reloaded ($before -> $(reloads))"
 [ "$(docker exec "$P-srv" stat -c '%i %Y' "$INDEX")" = "$page_before" ]
 check $? "the start page is not rewritten"
+docker exec "$P-srv" chmod 600 "$INDEX"
+sync >/dev/null
+[ "$(docker exec "$P-srv" stat -c %a "$INDEX")" = 644 ]
+check $? "an unchanged page with tight permissions is made readable for nginx"
 out=$(docker exec -e DOMAIN="$DOMAIN" -e NGINX_BIN=nginx-counting \
     -e INDEX=/nonexistent/index.html "$P-srv" camex-nginx-sync.sh 2>&1)
 echo "$out" | grep -q "cannot write /nonexistent/index.html.tmp.* (does the directory of INDEX exist?)" &&
