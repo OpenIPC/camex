@@ -283,7 +283,7 @@ sudo ./camex \
 | `--json`                   |       | With `--status`: the same as JSON, for scripts                                                                                                                   |
 | `--control <path>`         |       | Server: control socket for `--status` (default `/run/camex/camex-<transport>-<port>.sock`, `none` = off); with `--status`: ask only that server                  |
 | `--format <fmt>`           |       | With `--status`: `table` (default), `json` (same as `--json`), `nginx-map` or `nginx-index`, see [nginx in front of the clients](#nginx-in-front-of-the-clients) |
-| `--domain <name>`          |       | With `--format nginx-map` or `nginx-index`: the domain after the client ID                                                                                       |
+| `--domain <name>`          |       | With `--format nginx-map` or `nginx-index`: the domain after the client ID (default: `domain=` in `[server]` of the server)                                      |
 | `--upstream-port <port>`   |       | With `--format nginx-map`: the clients' web port (default: 80)                                                                                                   |
 | `--default <ip:port>`      |       | With `--format nginx-map`: where names of no live client go (default: none, nginx's offline page)                                                                |
 | `--client-isolation`       |       | Server: drop packets from one client to another (or `client_isolation=yes` in `[server]`), see [Security Model](#security-model)                                 |
@@ -409,7 +409,14 @@ map $host $camex_upstream {
   once or with `--loop <seconds>`; `camex-nginx-sync.service` and `.timer` run it
   every 10 seconds. Addresses are stable (#81), so the map changes only when
   clients come and go.
-- Settings of the script: `DOMAIN`, `UPSTREAM_PORT`, `DEFAULT`, `CONTROL`, `MAP`
+- **One domain, given once** (#106): `domain=openipc.click` in `[server]` of
+  the server's file; the map, the start page and the sync script take it from
+  the running server. `sudo examples/camex-nginx-setup.sh --domain
+  openipc.click` sets it there and installs the nginx server blocks, the sync
+  script, its service and timer with the same domain;
+  `camex-nginx-sync.sh --check` checks the whole setup (servers, domain, nginx,
+  start page, DNS).
+- Settings of the script: `DOMAIN` (default: the server's `domain=`), `UPSTREAM_PORT`, `DEFAULT`, `CONTROL`, `MAP`
   (`/etc/nginx/camex-map.conf`), `INDEX`, `CAMEX`, `NGINX_BIN`.
 - **Start page** (#105, #110): `camex --status --format nginx-index --domain
   openipc.click` prints a static HTML page of the clients in two tabs:

@@ -282,7 +282,7 @@ sudo ./camex \
 | `--json`                   |        | 与 `--status` 一起使用：以 JSON 输出，便于脚本处理                                                                                            |
 | `--control <path>`         |        | 服务器：`--status` 使用的控制套接字（默认 `/run/camex/camex-<transport>-<port>.sock`，`none` 为关闭）；与 `--status` 一起使用：只查询该服务器 |
 | `--format <fmt>`           |        | 与 `--status` 一起使用：`table`（默认）、`json`（同 `--json`）、`nginx-map` 或 `nginx-index`，见[客户端前面的 nginx](#客户端前面的-nginx)     |
-| `--domain <name>`          |        | 与 `--format nginx-map` 或 `nginx-index` 一起使用：客户端 ID 之后的域名                                                                       |
+| `--domain <name>`          |        | 与 `--format nginx-map` 或 `nginx-index` 一起使用：客户端 ID 之后的域名（默认取服务器 `[server]` 中的 `domain=`）                             |
 | `--upstream-port <port>`   |        | 与 `--format nginx-map` 一起使用：客户端的 Web 端口（默认 80）                                                                                |
 | `--default <ip:port>`      |        | 与 `--format nginx-map` 一起使用：没有在线客户端的名称转到何处（默认无，即 nginx 的离线页面）                                                 |
 | `--client-isolation`       |        | 服务器：丢弃客户端之间的数据包（或在 `[server]` 中设置 `client_isolation=yes`），见[安全模型](#安全模型)                                      |
@@ -392,7 +392,12 @@ map $host $camex_upstream {
   `examples/camex-nginx-sync.sh`（POSIX sh）可运行一次或使用 `--loop <秒>`；
   `camex-nginx-sync.service` 和 `.timer` 每 10 秒运行一次。地址是稳定的（#81），
   因此只有在客户端上线或离开时 map 才会变化。
-- 脚本的设置：`DOMAIN`、`UPSTREAM_PORT`、`DEFAULT`、`CONTROL`、`MAP`
+- **域名只需设置一次**（#106）：在服务器配置文件的 `[server]` 中写入
+  `domain=openipc.click`；map、起始页和同步脚本都从运行中的服务器获取它。
+  `sudo examples/camex-nginx-setup.sh --domain openipc.click` 会写入该设置，
+  并以同一域名安装 nginx 的 server 块、同步脚本及其 service 和 timer；
+  `camex-nginx-sync.sh --check` 检查整个部署（服务器、域名、nginx、起始页、DNS）。
+- 脚本的设置：`DOMAIN`（默认取服务器的 `domain=`）、`UPSTREAM_PORT`、`DEFAULT`、`CONTROL`、`MAP`
   （`/etc/nginx/camex-map.conf`）、`INDEX`、`CAMEX`、`NGINX_BIN`。
 - **起始页**（#105、#110）：`camex --status --format nginx-index --domain
   openipc.click` 输出一个静态 HTML 页面，客户端分两个标签页显示：**Configured**

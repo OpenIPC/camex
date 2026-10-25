@@ -10,6 +10,7 @@ camex in various environments.
 | `camex.conf`               | Server-side configuration file format reference                                                                                                                                 |
 | `camex.service`            | systemd service unit for running camex as a daemon                                                                                                                              |
 | `camex-nginx-sync.sh`      | Writes the nginx map of the live clients (`camex --status --format nginx-map`) and reloads nginx when it changed; with `INDEX=`, also their start page (`--format nginx-index`) |
+| `camex-nginx-setup.sh`     | Sets up nginx in front of the clients with one domain, given once: server blocks, sync script, service, timer, `domain=` in `camex.conf`; then checks it                        |
 | `camex-nginx-sync.service` | systemd unit running the sync script once                                                                                                                                       |
 | `camex-nginx-sync.timer`   | systemd timer starting the sync every 10 seconds                                                                                                                                |
 | `nginx-camex.conf`         | nginx server blocks: each client's web UI by name, an offline page, the start page on the bare domain                                                                           |

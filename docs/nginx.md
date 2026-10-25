@@ -63,6 +63,8 @@ auto_pool=10.200.0.0/22
 allow_unknown_clients=yes
 # Cameras must not reach each other (see Firewall)
 client_isolation=yes
+# The cameras' domain, for the map and the start page (see nginx)
+domain=openipc.click
 # One pre-shared key for all devices (see the next section)
 psk=hex:<64 hex digits>
 ```
@@ -178,6 +180,45 @@ route other traffic.
 
 ## nginx
 
+The domain is given once. Put it in `[server]` of the server's file:
+
+```ini
+[server]
+domain=openipc.click
+```
+
+The map and the start page take it from the running server (`camex --status`
+asks for it), and the sync script needs no setting of its own. `--domain` (or
+`DOMAIN=` for the script) still overrides it, with a warning when the two
+differ. A reload (`kill -HUP`) applies a new domain. The nginx configuration
+must name the same domain; the setup script below writes it there for you.
+
+**The quick way**: `examples/camex-nginx-setup.sh` does steps 3 to 5 below in
+one go, with the domain filled in everywhere, then checks the result:
+
+```sh
+sudo examples/camex-nginx-setup.sh --domain openipc.click
+```
+
+It installs the nginx server blocks as `/etc/nginx/conf.d/camex.conf`, the sync
+script with its service and timer, and the start page's directory. It sets
+`domain=` in `/etc/camex/camex.conf` (`--config` for another file) and reloads
+the running camex servers, then checks and reloads nginx and enables the
+timer. Run it again at any time: unchanged files stay, and a file edited since
+is kept and its difference shown (`--force` replaces it and keeps the old one
+as `.bak`). `--index none` leaves out the start page, `--dry-run` only says
+what it would do. DNS and TLS (steps 1 and 2) stay yours.
+
+**The checks**: `camex-nginx-sync.sh --check` goes through the whole setup and
+prints one line per item, `ok`, `WARN` or `FAIL`. It checks that the servers
+answer, the domain, that nginx includes the map and has `server_name` for the
+domain, the start page and the DNS records, and that the timer is active. It
+exits with 1 on a `FAIL`. After each new map the sync script also logs a
+warning when there is no domain, or when nginx has no `server_name` for it or
+does not include the map.
+
+The steps by hand:
+
 1. **DNS**: a wildcard record `*.openipc.click` pointing to the server host,
    and for the start page a record for `openipc.click` itself: a wildcard
    does not cover the bare domain.
@@ -186,7 +227,7 @@ route other traffic.
    either); uncomment the `listen 443 ssl` lines in both server blocks of the
    example.
 3. **Server block**: copy `examples/nginx-camex.conf` to `/etc/nginx/conf.d/`
-   and replace `openipc.click` with your domain. It includes the map, proxies
+   and replace `openipc.click` with your domain (the one in `domain=`). It includes the map, proxies
    to the camera with WebSocket support and without buffering, gives up on a
    camera after 5 s and shows an "offline" page for names with no live camera.
 4. **The map**: create an empty one so that nginx starts, then let the sync
@@ -197,7 +238,7 @@ route other traffic.
    sudo cp examples/camex-nginx-sync.sh /usr/local/bin/
    sudo cp examples/camex-nginx-sync.service examples/camex-nginx-sync.timer \
        /etc/systemd/system/
-   # Set DOMAIN= in the service, then:
+   # The domain comes from domain= in [server] of camex.conf
    sudo systemctl daemon-reload
    sudo systemctl enable --now camex-nginx-sync.timer
    ```
@@ -290,6 +331,7 @@ blocks in the file, Auto otherwise, and the browser remembers the tab chosen
 - **The start page**: `curl -s -H 'Host: openipc.click' http://127.0.0.1/`
   on the server host; a 404 means the page file is missing: compare `INDEX=`
   with the block's `root` and run the sync script by hand.
+- **Everything at once**: `sudo camex-nginx-sync.sh --check` (see [nginx](#nginx)).
 - **Through nginx**: `curl -sI -H 'Host: 001a2b3c4d5e.openipc.click'
   http://127.0.0.1/`. The offline page means the name is not in the map:
   compare with `camex --status --format nginx-map --domain openipc.click`
