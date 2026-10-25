@@ -337,7 +337,8 @@ check_all() {
         fail "$CAMEX not found (CAMEX=)"
         return 1
     fi
-    set -- --status --format nginx-map
+    set -- --status --format nginx-map --upstream-port "$UPSTREAM_PORT"
+    [ -n "$DEFAULT" ] && set -- "$@" --default "$DEFAULT"
     [ -n "$DOMAIN" ] && set -- "$@" --domain "$DOMAIN"
     [ -n "$CONTROL" ] && set -- "$@" --control "$CONTROL"
     # Its own directory: no name in /tmp that someone else could predict
@@ -348,6 +349,11 @@ check_all() {
         fail "the servers do not answer: $(tail -n 1 "$cdir/err")"
     fi
     dom=$(map_domain "$cdir/map")
+    # The map nginx uses against the servers' state now
+    if [ -f "$MAP" ] && ! cmp -s "$cdir/map" "$MAP"; then
+        warn "$MAP differs from the servers' state now: run the sync" \
+             "(is the timer running?)"
+    fi
     rm -rf "$cdir"
     case "$dom" in
         ''|'(none)')

@@ -93,7 +93,7 @@ if [ -z "$DOMAIN" ]; then
     echo "camex-nginx-setup: --domain is required" >&2
     usage
 fi
-if [ ${#DOMAIN} -gt 253 ] ||
+if [ ${#DOMAIN} -gt 253 ] || [ "$(printf '%s' "$DOMAIN" | wc -l)" -ne 0 ] ||
    ! printf '%s\n' "$DOMAIN" |
      grep -qE '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$'; then
     echo "camex-nginx-setup: not a domain: $DOMAIN" >&2
@@ -158,7 +158,7 @@ server_domain() {
         s && /^[[:space:]]*domain[[:space:]]*=/ {
             sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); d = $0
         }
-        END { if (d != "") print d }' "$CONF_REAL"   # the last one, as camex
+        END { if (d != "") print tolower(d) }' "$CONF_REAL"   # the last one, as camex
 }
 # Another domain in camex.conf: stop before nginx is changed, or nginx and
 # the map would follow two domains
