@@ -488,8 +488,9 @@ void control_handle(const fd_set *readset, const fd_set *writeset)
     }
 }
 
-/* Set while a question may go unanswered without a word (DOMAIN of a
- * server older than 3.8.0): control_ask() then prints nothing */
+/* Set while a question may go unanswered without a word: control_ask()
+ * then says nothing about an ERROR answer (DOMAIN of a server older than
+ * 3.8.0) or a socket nobody listens on; other failures it still names */
 static int control_quiet = 0;
 
 #define ASK_ERR(...) \
@@ -512,12 +513,12 @@ static int control_ask(const char *path, const char *cmd, char **buf,
     int fd;
 
     if (strlen(path) >= sizeof(sa.sun_path)) {
-        ASK_ERR( "camex: control socket path too long: %s\n", path);
+        fprintf(stderr, "camex: control socket path too long: %s\n", path);
         return -1;
     }
     fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
-        ASK_ERR( "camex: socket: %s\n", strerror(errno));
+        fprintf(stderr, "camex: socket: %s\n", strerror(errno));
         return -1;
     }
     /* A server that does not answer (stopped, stuck) must not hold up the
@@ -539,11 +540,15 @@ static int control_ask(const char *path, const char *cmd, char **buf,
     if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
         int err = errno;
 
-        ASK_ERR( "camex: cannot connect to %s: %s%s\n", path,
-                strerror(err), err == EACCES
-                    ? " (run it as the server's user, normally root)"
-                    : (err == ECONNREFUSED || err == ENOENT)
-                          ? " (is the server running?)" : "");
+        /* Quiet only for a socket nobody listens on (a server that is
+         * gone): the clients' query names it */
+        if (!control_quiet || (err != ECONNREFUSED && err != ENOENT)) {
+            fprintf(stderr, "camex: cannot connect to %s: %s%s\n", path,
+                    strerror(err), err == EACCES
+                        ? " (run it as the server's user, normally root)"
+                        : (err == ECONNREFUSED || err == ENOENT)
+                              ? " (is the server running?)" : "");
+        }
         close(fd);
         /* -2: nobody listens there (a server that is gone) */
         return (err == ECONNREFUSED || err == ENOENT) ? -2 : -1;
@@ -553,7 +558,7 @@ static int control_ask(const char *path, const char *cmd, char **buf,
 #else
     if (send(fd, cmd, strlen(cmd), 0) != (ssize_t)strlen(cmd)) {
 #endif
-        ASK_ERR( "camex: %s: %s\n", path, strerror(errno));
+        fprintf(stderr, "camex: %s: %s\n", path, strerror(errno));
         close(fd);
         return -1;
     }
@@ -571,7 +576,7 @@ static int control_ask(const char *path, const char *cmd, char **buf,
     }
     close(fd);
     if (n < 0) {
-        ASK_ERR( "camex: %s: %s\n", path,
+        fprintf(stderr, "camex: %s: %s\n", path,
                 (errno == EAGAIN || errno == EWOULDBLOCK)
                     ? "no answer (timeout)" : strerror(errno));
         return -1;
@@ -582,18 +587,18 @@ static int control_ask(const char *path, const char *cmd, char **buf,
         size_t m = sizeof(CONTROL_END) - 1U;
 
         if (*buf_len == 0U) {
-            ASK_ERR( "camex: %s: no answer (server busy?)\n", path);
+            fprintf(stderr, "camex: %s: no answer (server busy?)\n", path);
             return -1;
         }
         if (*buf_len < m || memcmp(*buf + *buf_len - m, CONTROL_END, m) != 0 ||
             (*buf_len > m && (*buf)[*buf_len - m - 1U] != '\n')) {
-            ASK_ERR( "camex: %s: the answer was cut off\n", path);
+            fprintf(stderr, "camex: %s: the answer was cut off\n", path);
             return -1;
         }
         *buf_len -= m;
         (*buf)[*buf_len] = '\0';
         if (strncmp(*buf, "ERROR", 5) == 0) {
-            ASK_ERR( "camex: %s: %s", path, *buf);
+            ASK_ERR("camex: %s: %s", path, *buf);
             return -3;   /* the server answered: it does not know cmd */
         }
     }
@@ -819,6 +824,12 @@ static int control_domain(const char *path, const char *given, char *out,
     } else {
         n = control_list(&listed);
         paths = listed;
+        if (n <= 0) {
+            /* No server: the clients' query says so, not a domain warning */
+            free(listed);
+            snprintf(out, size, "%s", given != NULL ? given : "");
+            return 0;
+        }
     }
     /* Quiet: a server older than 3.8.0 answers ERROR, one that is gone
      * does not answer; the clients' query says so */

@@ -186,6 +186,10 @@ trap 'rm -rf "$TMP"; echo "camex-nginx-setup: interrupted" >&2; exit 130' INT TE
 # install <made file> <destination> <mode>: put it there unless the same
 # file is there already; one that differs is kept without --force
 install_file() {
+    if [ -e "$2" ] && [ ! -f "$2" ]; then
+        problem "$2 is not a file (a directory?): left as it is"
+        return 1
+    fi
     if [ -f "$2" ] && cmp -s "$1" "$2"; then
         say "unchanged: $2"
         # The contents are right; the mode may not be (a script that lost
