@@ -173,7 +173,9 @@ if [ -f "$CONF_REAL" ]; then
 fi
 
 TMP=$(mktemp -d) || exit 1
-trap 'rm -rf "$TMP"' EXIT INT TERM HUP
+# Interrupted: stop here, nothing after this point runs
+trap 'rm -rf "$TMP"' EXIT
+trap 'rm -rf "$TMP"; echo "camex-nginx-setup: interrupted" >&2; exit 130' INT TERM HUP
 
 # install <made file> <destination> <mode>: put it there unless the same
 # file is there already; one that differs is kept without --force
@@ -362,10 +364,12 @@ if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] &&
 fi
 # This version's sync script, also when an older one was kept installed
 # (it differs: reported above)
-INDEX=$INDEX MAP=$MAP CAMEX=$CAMEX NGINX_BIN=$NGINX_BIN \
-    sh "$SRC/camex-nginx-sync.sh" || problem "the first sync failed (see above)"
-INDEX=$INDEX MAP=$MAP CAMEX=$CAMEX NGINX_BIN=$NGINX_BIN \
-    sh "$SRC/camex-nginx-sync.sh" --check || PROBLEMS=$((PROBLEMS + 1))
+# With the service's settings only: none inherited from this shell
+SYNC_ENV="INDEX=$INDEX MAP=$MAP CAMEX=$CAMEX NGINX_BIN=$NGINX_BIN DOMAIN= \
+CONTROL= DEFAULT= UPSTREAM_PORT="
+env $SYNC_ENV sh "$SRC/camex-nginx-sync.sh" ||
+    problem "the first sync failed (see above)"
+env $SYNC_ENV sh "$SRC/camex-nginx-sync.sh" --check || PROBLEMS=$((PROBLEMS + 1))
 
 if [ "$PROBLEMS" -eq 0 ]; then
     say "done: the cameras at <ID>.$DOMAIN${INDEX:+, the start page at $DOMAIN}"

@@ -43,6 +43,7 @@ if ! command -v flock >/dev/null 2>&1; then
     exit 2
 fi
 
+DOMAIN_SET=${DOMAIN+set}  # DOMAIN= given, even empty: --check keeps it
 DOMAIN=${DOMAIN-}
 UPSTREAM_PORT=${UPSTREAM_PORT:-80}
 DEFAULT=${DEFAULT-}
@@ -333,6 +334,10 @@ check_all() {
         INDEX=$(sed -n 's/^Environment=INDEX=//p' "$u" | tail -n 1)
         [ -n "$INDEX" ] && ok "INDEX=$INDEX (from $u)"
     fi
+    if [ -z "${DOMAIN_SET-}" ] && [ -f "$u" ]; then
+        DOMAIN=$(sed -n 's/^Environment=DOMAIN=//p' "$u" | tail -n 1)
+        [ -n "$DOMAIN" ] && ok "DOMAIN=$DOMAIN (from $u)"
+    fi
     if ! command -v "$CAMEX" >/dev/null 2>&1; then
         fail "$CAMEX not found (CAMEX=)"
         return 1
@@ -345,6 +350,10 @@ check_all() {
     cdir=$(mktemp -d) || return 1
     if "$CAMEX" "$@" > "$cdir/map" 2> "$cdir/err"; then
         ok "the servers answer: $(grep -c '^    "' "$cdir/map") clients in the map"
+        # camex's own warnings: servers with other domains, bad IDs, ...
+        while IFS= read -r line; do
+            warn "${line#camex: }"
+        done < "$cdir/err"
     else
         fail "the servers do not answer: $(tail -n 1 "$cdir/err")"
     fi
@@ -455,12 +464,13 @@ check_all() {
             mine=$( (hostname -I 2>/dev/null; ip -o addr show 2>/dev/null |
                      awk '{sub("/.*", "", $4); print $4}') | tr ' ' '\n')
             for h in "camex-check-$$.$dom" ${INDEX:+"$dom"}; do
-                a=$(getent hosts "$h" 2>/dev/null | awk '{print $1; exit}')
-                rec=$( [ "$h" = "$dom" ] && echo "$dom" || echo "*.$dom")
                 if [ "${CHECK_DNS-}" = no ]; then
                     ok "DNS not checked (CHECK_DNS=no)"
                     break
-                elif [ -z "$a" ]; then
+                fi
+                a=$(getent hosts "$h" 2>/dev/null | awk '{print $1; exit}')
+                rec=$( [ "$h" = "$dom" ] && echo "$dom" || echo "*.$dom")
+                if [ -z "$a" ]; then
                     fail "$h does not resolve: no DNS record for $rec" \
                          "(CHECK_DNS=no skips this, e.g. in a container)"
                 elif printf '%s\n' "$mine" | grep -qx "$a"; then
