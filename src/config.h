@@ -10,6 +10,7 @@
 #define CAMEX_CFG_H
 
 #include "camex.h"
+#include "nginxmap.h"
 #include "slotidx.h"
 
 #include <stdint.h>
@@ -37,6 +38,7 @@ typedef struct {
 typedef struct {
     char client_id[CAMEX_CLIENT_ID_LEN];
     camex_profile_t profile;
+    char name[CAMEX_NAME_MAX + 1];   /* name= (#105): display only, "" = none */
     uint8_t active;
     uint8_t has_ip;     /* ip_be is the address of profile.local_cidr */
     uint32_t ip_be;     /* filled when the file is loaded */

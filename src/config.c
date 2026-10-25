@@ -527,6 +527,11 @@ static int config_db_parse_file(const char *path, char *line,
             } else if (strcmp(content, "control_socket") == 0) {
                 rc = copy_option(g->control_socket, sizeof(g->control_socket),
                                  val, "control socket");
+            } else if (strcmp(content, "name") == 0) {
+                /* A client's display name (#105), as in [defaults] */
+                log_message(LOG_ERR, "name= belongs in a [client ID] "
+                            "block");
+                rc = -1;
             } else {
                 log_message(LOG_WARNING,
                             "Ignoring unknown [server] key: %s", content);
@@ -544,6 +549,26 @@ static int config_db_parse_file(const char *path, char *line,
                         "Config value outside of a section: %s", line);
             fclose(fp);
             return -1;
+        }
+
+        /* A display name for the start page (#105): the client's own, so
+         * not in [defaults] */
+        if (strcmp(content, "name") == 0) {
+            if (section != SECTION_CLIENT) {
+                log_message(LOG_ERR, "name= belongs in a [client ID] "
+                            "block");
+                fclose(fp);
+                return -1;
+            }
+            if (!camex_name_valid(equals + 1)) {
+                log_message(LOG_ERR, "Invalid name= for client %s: up to %u "
+                            "bytes of UTF-8 text without control characters",
+                            client->client_id, (unsigned)CAMEX_NAME_MAX);
+                fclose(fp);
+                return -1;
+            }
+            snprintf(client->name, sizeof(client->name), "%s", equals + 1);
+            continue;
         }
 
         if (config_db_apply_kv(current, content, equals + 1) != 0) {

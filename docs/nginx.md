@@ -6,11 +6,13 @@ camex in auto mode, gets a tunnel address from the server's pool, and its web UI
 opens through nginx by name:
 
 ```
-http://<camera ID>.cam.example.lan/   →   http://<its tunnel address>:80/
+http://<camera ID>.openipc.click/   →   http://<its tunnel address>:80/
 ```
 
 Nobody keeps a list of addresses: nginx follows the server's live state through
-`camex --status --format nginx-map` and a small sync script.
+`camex --status --format nginx-map` and a small sync script. The bare domain,
+`http://openipc.click/`, opens a start page with every connected camera, its
+name and a link (see [Start page](#start-page)).
 
 ## Topology
 
@@ -21,7 +23,7 @@ Nobody keeps a list of addresses: nginx follows the server's live state through
  │   --name <MAC>      │               │   tunnel interface camex/tun0       │
  │ web UI on :80 of    │ ◀── tunnel ── │   pool 10.200.0.0/22                │
  │ its tunnel address  │               │                                     │
- └─────────────────────┘               │ nginx :80/:443 *.cam.example.lan    │
+ └─────────────────────┘               │ nginx :80/:443 *.openipc.click    │
                                        │   map from camex --status           │
  users ── http(s)://<id>.cam.… ──────▶ │   proxy_pass → <tunnel address>:80  │
                                        └─────────────────────────────────────┘
@@ -34,7 +36,7 @@ Nobody keeps a list of addresses: nginx follows the server's live state through
   camera's tunnel address and proxies to it; a name with no live camera gets an
   "offline" page.
 - **camex-nginx-sync.sh**: rewrites nginx's map when cameras come or go and
-  reloads nginx.
+  reloads nginx, and keeps the start page current.
 
 Both run on the same host on purpose: nginx reaches the tunnel addresses
 through the server's own tunnel interface, and `camex --status` needs the
@@ -102,8 +104,14 @@ list to keep: one block per camera.
 
 ```ini
 [client 001a2b3c4d5e]
+name=Warehouse, entrance
 psk=hex:<this camera's 64 hex digits>
 ```
+
+`name=` is optional, with one shared key too: a block with only `name=` gives
+the camera a name on the start page. Any `[client ID]` block lists the ID in
+the file, though: with `allow_unknown_clients=no` it also lets that camera in,
+with the shared key when the block has no `psk=` of its own.
 
 ## Cameras
 
@@ -118,7 +126,7 @@ camex --mode client --auto --name 001a2b3c4d5e \
 ```
 
 - **ID**: lower-case hex without separators, so it is a valid host name label
-  (`001a2b3c4d5e.cam.example.lan`). IDs with `:` or `_` are left out of the map
+  (`001a2b3c4d5e.openipc.click`). IDs with `:` or `_` are left out of the map
   with a warning.
 - **Kernel module**: on OpenIPC cameras without `tun.ko` load `camex.ko` and use
   `--tun-dev /dev/camex` (see [Kernel Module](../README.md#kernel-module)).
@@ -170,11 +178,15 @@ route other traffic.
 
 ## nginx
 
-1. **DNS**: a wildcard record `*.cam.example.lan` pointing to the server host.
-2. **TLS** (optional): a wildcard certificate for `*.cam.example.lan`; uncomment
-   the `listen 443 ssl` lines in the example.
+1. **DNS**: a wildcard record `*.openipc.click` pointing to the server host,
+   and for the start page a record for `openipc.click` itself: a wildcard
+   does not cover the bare domain.
+2. **TLS** (optional): a certificate for both `*.openipc.click` and
+   `openipc.click` (a wildcard certificate does not cover the bare domain
+   either); uncomment the `listen 443 ssl` lines in both server blocks of the
+   example.
 3. **Server block**: copy `examples/nginx-camex.conf` to `/etc/nginx/conf.d/`
-   and replace `cam.example.lan` with your domain. It includes the map, proxies
+   and replace `openipc.click` with your domain. It includes the map, proxies
    to the camera with WebSocket support and without buffering, gives up on a
    camera after 5 s and shows an "offline" page for names with no live camera.
 4. **The map**: create an empty one so that nginx starts, then let the sync
@@ -197,15 +209,61 @@ route other traffic.
    not answer it leaves the map as it is (a socket left behind by a server that
    is gone is skipped).
 
+5. **The start page** (optional): `INDEX=` in the service (set in the
+   example) makes the script write it, and `StateDirectory=` creates its
+   directory, `/var/lib/camex-nginx`. The second server block of the example
+   serves it on the bare domain. See [Start page](#start-page).
+
 The map looks like this:
 
 ```
 # camex --status --format nginx-map: generated, do not edit
 map $host $camex_upstream {
-    "001a2b3c4d5e.cam.example.lan" 10.200.0.2:80;
-    "001a2b3c4d5f.cam.example.lan" 10.200.0.3:80;
+    "001a2b3c4d5e.openipc.click" 10.200.0.2:80;
+    "001a2b3c4d5f.openipc.click" 10.200.0.3:80;
 }
 ```
+
+## Start page
+
+`camex --status --format nginx-index --domain openipc.click` prints a static
+HTML page of the live cameras: one row each with its name, ID and tunnel
+address, the name linked to `//<camera ID>.openipc.click/` (no scheme, so the
+link works over HTTP and HTTPS alike).
+
+| Desktop                                    | Phone (the address column is hidden)                        |
+|--------------------------------------------|-------------------------------------------------------------|
+| ![Start page](images/nginx-start-page.png) | ![Start page on a phone](images/nginx-start-page-phone.png) |
+
+- **Names** come from the server's file: `name=` in the camera's `[client ID]`
+  block, UTF-8 text up to 64 bytes without control characters. A camera without
+  one is listed by its ID. A reload (`kill -HUP`) applies new names; the server
+  refuses to load a file with a name that is not valid. `camex --status` shows
+  the names in a NAME column, `--json` as `"name"`.
+- **Order**: by name (A–Z in any case alike), then by ID. The page holds no
+  time, so an unchanged state gives an identical file: the script replaces the
+  page only when cameras came, went or got another name, and nginx's
+  `Last-Modified` tells when that was. The page itself reloads every 30 seconds.
+- **The same rules as the map**: IDs that are not a host name label are left
+  out with a warning, of an ID on two servers the lower address is kept, and
+  when a running server does not answer nothing is printed and the old page
+  stays.
+- **DNS and TLS**: the bare domain needs its own DNS record and must be in the
+  certificate next to the wildcard (see [nginx](#nginx), steps 1 and 2).
+- **With the map**: the script builds the page before the map, so every device
+  on it is in the map too, and publishes it only after that map was applied.
+  While nginx rejects a new map or does not reload, the page stays as it was,
+  so its links never lead to names that nginx does not know yet.
+- **Turning it off**: empty `INDEX=` stops the updates only; the script does
+  not know which file it wrote before. Remove the start page's server block
+  from `nginx-camex.conf` (or the file, e.g. `/var/lib/camex-nginx/index.html`)
+  and reload nginx.
+- **Access**: the page lists every camera on the server. Let in only those who
+  may open the cameras: the example's start page block has commented `allow` /
+  `deny` and `auth_basic` lines.
+- The sync script needs a server of camex 3.6.0 or later for the page: an older
+  one answers the page's control command with an error, and the page is not
+  written (the map still is).
 
 ## Checks
 
@@ -215,9 +273,12 @@ map $host $camex_upstream {
 - **A camera directly**: `curl -sI http://10.200.0.2/` on the server host. No
   answer while `camex --status` lists the camera: the camera's web server, or
   the firewall's output chain.
-- **Through nginx**: `curl -sI -H 'Host: 001a2b3c4d5e.cam.example.lan'
+- **The start page**: `curl -s -H 'Host: openipc.click' http://127.0.0.1/`
+  on the server host; a 404 means the page file is missing: compare `INDEX=`
+  with the block's `root` and run the sync script by hand.
+- **Through nginx**: `curl -sI -H 'Host: 001a2b3c4d5e.openipc.click'
   http://127.0.0.1/`. The offline page means the name is not in the map:
-  compare with `camex --status --format nginx-map --domain cam.example.lan`
+  compare with `camex --status --format nginx-map --domain openipc.click`
   and run the sync script by hand.
 - **Logs**: the server logs `Registered auto client <ID>`, `Expired client
   <address>`, address offers and moves, and rejected handshakes (a wrong key, a

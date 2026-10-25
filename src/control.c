@@ -337,10 +337,12 @@ static void control_answer(control_conn_t *c)
     } else if (strcmp(c->cmd, "STATUS JSON") == 0) {
         c->out = server_status(1, &len);
     } else if (strcmp(c->cmd, "CLIENTS") == 0) {
-        c->out = server_clients_list(&len);
+        c->out = server_clients_list(0, &len);
+    } else if (strcmp(c->cmd, "CLIENTS NAMES") == 0) {
+        c->out = server_clients_list(1, &len);
     } else {
         static const char err[] = "ERROR unknown command (STATUS, "
-                                  "STATUS JSON, CLIENTS)\n";
+                                  "STATUS JSON, CLIENTS, CLIENTS NAMES)\n";
 
         c->out = malloc(sizeof(err));
         if (c->out != NULL) {
@@ -684,16 +686,30 @@ int control_status(const char *path, int json)
     return ok == n ? 0 : 1;
 }
 
-int control_nginx_map(const char *path, const char *domain, int port,
-                      const char *dflt)
+/* text to stdout, whole: 0, or 1 with a message (a full disk, say), so a
+ * script never takes a cut-off map or page for a good one */
+static int control_put(const char *text, const char *what)
+{
+    if (fputs(text, stdout) == EOF || fflush(stdout) != 0 ||
+        ferror(stdout)) {
+        fprintf(stderr, "camex: cannot write the %s: %s\n", what,
+                strerror(errno));
+        return 1;
+    }
+    return 0;
+}
+
+/* cmd to every server (path: only that one): their answers one after
+ * the other in *all (malloc'd). 0, or 1 with a message on stderr */
+static int control_gather(const char *path, const char *cmd, char **all)
 {
     control_path_t one;
     control_path_t *paths = &one;
     control_path_t *listed = NULL;
-    char *all = NULL, *map;
-    size_t all_len = 0U, count = 0U;
+    size_t all_len = 0U;
     int n, i;
 
+    *all = NULL;
     if (path != NULL && path[0] != '\0') {
         n = 1;
         snprintf(one, sizeof(one), "%s", path);
@@ -709,13 +725,14 @@ int control_nginx_map(const char *path, const char *domain, int port,
         }
     }
     /* Every running server must answer: a map without one server's
-     * clients would send their names to the offline page */
+     * clients would send their names to the offline page, a start page
+     * would leave them out */
     for (i = 0; i < n; ++i) {
         char *buf = NULL;
         size_t len = 0U;
         char *grown;
 
-        int rc = control_ask(paths[i], "CLIENTS\n", &buf, &len);
+        int rc = control_ask(paths[i], cmd, &buf, &len);
 
         /* A socket left behind by a server that is gone (found in the
          * directory, not named with --control) has no clients: skip it */
@@ -727,24 +744,39 @@ int control_nginx_map(const char *path, const char *domain, int port,
         }
         if (rc != 0) {
             free(buf);
-            free(all);
+            free(*all);
+            *all = NULL;
             free(listed);
             return 1;
         }
-        grown = realloc(all, all_len + len + 1U);
+        grown = realloc(*all, all_len + len + 1U);
         if (grown == NULL) {
             free(buf);
-            free(all);
+            free(*all);
+            *all = NULL;
             free(listed);
             return 1;
         }
-        all = grown;
-        memcpy(all + all_len, buf, len);
+        *all = grown;
+        memcpy(*all + all_len, buf, len);
         all_len += len;
-        all[all_len] = '\0';
+        (*all)[all_len] = '\0';
         free(buf);
     }
     free(listed);
+    return 0;
+}
+
+int control_nginx_map(const char *path, const char *domain, int port,
+                      const char *dflt)
+{
+    char *all = NULL, *map;
+    size_t count = 0U;
+    int rc;
+
+    if (control_gather(path, "CLIENTS\n", &all) != 0) {
+        return 1;
+    }
     map = nginx_map_format(all, domain, port, dflt, stderr, &count);
     free(all);
     if (map == NULL) {
@@ -752,13 +784,43 @@ int control_nginx_map(const char *path, const char *domain, int port,
                 "--upstream-port and --default)\n");
         return 1;
     }
-    fputs(map, stdout);
-    fflush(stdout);
+    rc = control_put(map, "map");
     free(map);
-    return 0;
+    return rc;
+}
+
+int control_nginx_index(const char *path, const char *domain)
+{
+    char *all = NULL, *page;
+    size_t count = 0U;
+    int rc;
+
+    /* A server older than 3.6.0 answers ERROR: the page is not built, so
+     * a sync keeps the previous one */
+    if (control_gather(path, "CLIENTS NAMES\n", &all) != 0) {
+        return 1;
+    }
+    page = nginx_index_format(all, domain, stderr, &count);
+    free(all);
+    if (page == NULL) {
+        fprintf(stderr, "camex: cannot build the start page (check "
+                "--domain)\n");
+        return 1;
+    }
+    rc = control_put(page, "start page");
+    free(page);
+    return rc;
 }
 
 #else  /* _WIN32 */
+
+int control_nginx_index(const char *path, const char *domain)
+{
+    (void)path;
+    (void)domain;
+    fprintf(stderr, "camex: --status is not available on Windows\n");
+    return 1;
+}
 
 int control_nginx_map(const char *path, const char *domain, int port,
                       const char *dflt)

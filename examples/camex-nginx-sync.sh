@@ -6,18 +6,25 @@
 #
 # Writes `camex --status --format nginx-map` to $MAP when it changed, then
 # checks and reloads nginx; on a failed check the previous map is put back.
-# A server that does not answer leaves the map as it is.
+# With INDEX set, also writes the start page of the clients (`camex
+# --status --format nginx-index`, #105) there when it changed; a static
+# file, so nginx needs no reload for it. A server that does not answer
+# leaves the map and the page as they are.
 #
 # Usage: camex-nginx-sync.sh            once (cron, a systemd timer)
 #        camex-nginx-sync.sh --loop 10  every 10 seconds
 #
 # Settings (environment):
-#   DOMAIN         the domain after the client ID (cam.example.lan)
+#   DOMAIN         the domain after the client ID (openipc.click)
 #   UPSTREAM_PORT  the clients' web port (80)
 #   DEFAULT        where unknown names go, <IPv4>:<port> (empty: nginx's
 #                  offline page in nginx-camex.conf)
 #   CONTROL        one server's control socket (empty: every server)
 #   MAP            the map file nginx includes (/etc/nginx/camex-map.conf)
+#   INDEX          the start page nginx serves on the bare domain, e.g.
+#                  /var/lib/camex-nginx/index.html (empty: no updates; a
+#                  page written before stays until it is removed); its
+#                  directory must exist
 #   CAMEX, NGINX_BIN  the programs (camex, nginx; not NGINX, which nginx
 #                  itself reads)
 #
@@ -29,11 +36,12 @@ if ! command -v flock >/dev/null 2>&1; then
     exit 2
 fi
 
-DOMAIN=${DOMAIN-cam.example.lan}
+DOMAIN=${DOMAIN-openipc.click}
 UPSTREAM_PORT=${UPSTREAM_PORT:-80}
 DEFAULT=${DEFAULT-}
 CONTROL=${CONTROL-}
 MAP=${MAP:-/etc/nginx/camex-map.conf}
+INDEX=${INDEX-}
 CAMEX=${CAMEX:-camex}
 NGINX_BIN=${NGINX_BIN:-nginx}
 
@@ -79,7 +87,7 @@ cleanup() {
             rm -f "$MAP"
         fi
     fi
-    rm -f "${tmp-}" "${prev-}"
+    rm -f "${tmp-}" "${prev-}" "${itmp-}"
     unlock
 }
 
@@ -87,9 +95,23 @@ sync_once() {
     lock || return 1
     trap 'cleanup; exit 1' INT TERM HUP
     replaced=
+    # The page links to names in the map. It is built first, then the map:
+    # every device on it was connected before the map was asked for, so
+    # the map has it. It goes out only once that map is applied; while
+    # nginx rejects a new map or does not reload, the old page stays
+    index_build
+    irc=$?
     sync_locked
     rc=$?
     replaced=
+    if [ $rc -ne 0 ]; then
+        [ $irc -eq 0 ] && log "the map was not applied: $INDEX left as it is"
+        rm -f "${itmp-}"
+    elif [ $irc -eq 0 ]; then
+        index_publish || rc=1
+    elif [ $irc -eq 1 ]; then
+        rc=1
+    fi
     trap - INT TERM HUP
     unlock
     return $rc
@@ -155,6 +177,52 @@ sync_locked() {
         rm -f "$MAP"
     fi
     return 1
+}
+
+# The start page into $itmp: 0, 1 (a server did not answer, logged) or 2
+# (no INDEX, no page)
+index_build() {
+    [ -n "$INDEX" ] || return 2
+    itmp="$INDEX.tmp.$$"
+    # (checked with true first: a failed redirection must not be taken
+    # for a server that did not answer)
+    if ! true 2>/dev/null > "$itmp"; then
+        log "cannot write $itmp (does the directory of INDEX exist?);" \
+            "$INDEX left as it is"
+        return 1
+    fi
+    set -- --status --format nginx-index
+    [ -n "$DOMAIN" ] && set -- "$@" --domain "$DOMAIN"
+    [ -n "$CONTROL" ] && set -- "$@" --control "$CONTROL"
+    if ! "$CAMEX" "$@" > "$itmp" 9>&-; then
+        rm -f "$itmp"
+        # camex said why above: no server answered, an older server, ...
+        log "no start page (see the error above); $INDEX left as it is"
+        return 1
+    fi
+    return 0
+}
+
+# $itmp in place of $INDEX when it changed: one rename, so nginx never
+# serves half of it
+index_publish() {
+    if [ -f "$INDEX" ] && cmp -s "$itmp" "$INDEX"; then
+        rm -f "$itmp"
+        # Readable for nginx even when someone wrote it with a tight umask
+        chmod 644 "$INDEX" 2>/dev/null ||
+            log "cannot make $INDEX readable for nginx"
+        return 0
+    fi
+    # nginx's workers read it: readable by all, whatever the umask
+    if ! { chmod 644 "$itmp" && mv -f "$itmp" "$INDEX"; }; then
+        rm -f "$itmp"
+        log "cannot write $INDEX; left as it is"
+        return 1
+    fi
+    devices=$(grep -c '^<tr class="dev">' "$INDEX")
+    [ "$devices" = 1 ] && noun=device || noun=devices
+    log "start page updated: $devices $noun"
+    return 0
 }
 
 if [ "${1-}" = "--loop" ]; then

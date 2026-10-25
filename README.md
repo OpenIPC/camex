@@ -259,38 +259,38 @@ sudo ./camex \
 
 ### Options
 
-| Option                     | Short | Description                                                                                                                                       |
-|----------------------------|-------|---------------------------------------------------------------------------------------------------------------------------------------------------|
-| `--mode <mode>`            | `-M`  | Operation mode: `client` or `server` (required)                                                                                                   |
-| `--auto`                   | `-a`  | Fetch tunnel parameters from the server                                                                                                           |
-| `--name <id>`              | `-n`  | Client ID (auto mode; optional in manual mode)                                                                                                    |
-| `--local-cidr <cidr>`      | `-l`  | Tunnel address in `address/prefix` form                                                                                                           |
-| `--gateway-ip <addr>`      | `-g`  | Client gateway inside the tunnel                                                                                                                  |
-| `--server-host <addr>`     | `-s`  | Server hostname or IP for client mode                                                                                                             |
-| `--port <port>`            | `-p`  | Server port for client or listen port for server                                                                                                  |
-| `--bind-ip <addr>`         | `-b`  | Server bind address (default: 0.0.0.0)                                                                                                            |
-| `--config <path>`          | `-f`  | Server config file path                                                                                                                           |
-| `--route-cidr <cidr>`      | `-c`  | Extra route to install on the client; repeatable                                                                                                  |
-| `--mtu <size>`             | `-t`  | Tunnel MTU, 576–9000 (default: 1500)                                                                                                              |
-| `--psk <key>`              | `-k`  | Pre-shared key: `hex:<64 hex digits>`, `base64:<44 chars>`, or a passphrase (stretched with Argon2id). Required on clients                        |
-| `--server-pubkey <key>`    |       | Client: the server's public key (from `--genkey`)                                                                                                 |
-| `--server-key-file <path>` |       | Server: file with its private key (or `server_key=` in `[server]`)                                                                                |
-| `--genkey`                 |       | Print a new server key pair (`server_key=`, `public_key=`) and exit                                                                               |
-| `--encrypt`                | `-e`  | Accepted for compatibility; protocol v2 is always encrypted                                                                                       |
-| `--tun-dev <path>`         | `-T`  | TUN device path (default: auto-detect `/dev/net/tun` then `/dev/camex`)                                                                           |
-| `--pid-file <path>`        | `-P`  | Write PID to file on startup                                                                                                                      |
-| `--status`                 |       | Print the connected clients of every server on this host and exit (as the server's user, normally root)                                           |
-| `--json`                   |       | With `--status`: the same as JSON, for scripts                                                                                                    |
-| `--control <path>`         |       | Server: control socket for `--status` (default `/run/camex/camex-<transport>-<port>.sock`, `none` = off); with `--status`: ask only that server   |
-| `--format <fmt>`           |       | With `--status`: `table` (default), `json` (same as `--json`) or `nginx-map`, see [nginx in front of the clients](#nginx-in-front-of-the-clients) |
-| `--domain <name>`          |       | With `--format nginx-map`: the domain after the client ID                                                                                         |
-| `--upstream-port <port>`   |       | With `--format nginx-map`: the clients' web port (default: 80)                                                                                    |
-| `--default <ip:port>`      |       | With `--format nginx-map`: where names of no live client go (default: none, nginx's offline page)                                                 |
-| `--client-isolation`       |       | Server: drop packets from one client to another (or `client_isolation=yes` in `[server]`), see [Security Model](#security-model)                  |
-| `--bind-dev <iface>`       | `-d`  | Bind socket to a specific network interface (`SO_BINDTODEVICE`)                                                                                   |
-| `--transport <proto>`      | `-R`  | Transport protocol: `udp` (default) or `tcp`                                                                                                      |
-| `--version`                | `-v`  | Print version and exit                                                                                                                            |
-| `--help`                   | `-h`  | Print usage and exit                                                                                                                              |
+| Option                     | Short | Description                                                                                                                                                      |
+|----------------------------|-------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `--mode <mode>`            | `-M`  | Operation mode: `client` or `server` (required)                                                                                                                  |
+| `--auto`                   | `-a`  | Fetch tunnel parameters from the server                                                                                                                          |
+| `--name <id>`              | `-n`  | Client ID (auto mode; optional in manual mode)                                                                                                                   |
+| `--local-cidr <cidr>`      | `-l`  | Tunnel address in `address/prefix` form                                                                                                                          |
+| `--gateway-ip <addr>`      | `-g`  | Client gateway inside the tunnel                                                                                                                                 |
+| `--server-host <addr>`     | `-s`  | Server hostname or IP for client mode                                                                                                                            |
+| `--port <port>`            | `-p`  | Server port for client or listen port for server                                                                                                                 |
+| `--bind-ip <addr>`         | `-b`  | Server bind address (default: 0.0.0.0)                                                                                                                           |
+| `--config <path>`          | `-f`  | Server config file path                                                                                                                                          |
+| `--route-cidr <cidr>`      | `-c`  | Extra route to install on the client; repeatable                                                                                                                 |
+| `--mtu <size>`             | `-t`  | Tunnel MTU, 576–9000 (default: 1500)                                                                                                                             |
+| `--psk <key>`              | `-k`  | Pre-shared key: `hex:<64 hex digits>`, `base64:<44 chars>`, or a passphrase (stretched with Argon2id). Required on clients                                       |
+| `--server-pubkey <key>`    |       | Client: the server's public key (from `--genkey`)                                                                                                                |
+| `--server-key-file <path>` |       | Server: file with its private key (or `server_key=` in `[server]`)                                                                                               |
+| `--genkey`                 |       | Print a new server key pair (`server_key=`, `public_key=`) and exit                                                                                              |
+| `--encrypt`                | `-e`  | Accepted for compatibility; protocol v2 is always encrypted                                                                                                      |
+| `--tun-dev <path>`         | `-T`  | TUN device path (default: auto-detect `/dev/net/tun` then `/dev/camex`)                                                                                          |
+| `--pid-file <path>`        | `-P`  | Write PID to file on startup                                                                                                                                     |
+| `--status`                 |       | Print the connected clients of every server on this host and exit (as the server's user, normally root)                                                          |
+| `--json`                   |       | With `--status`: the same as JSON, for scripts                                                                                                                   |
+| `--control <path>`         |       | Server: control socket for `--status` (default `/run/camex/camex-<transport>-<port>.sock`, `none` = off); with `--status`: ask only that server                  |
+| `--format <fmt>`           |       | With `--status`: `table` (default), `json` (same as `--json`), `nginx-map` or `nginx-index`, see [nginx in front of the clients](#nginx-in-front-of-the-clients) |
+| `--domain <name>`          |       | With `--format nginx-map` or `nginx-index`: the domain after the client ID                                                                                       |
+| `--upstream-port <port>`   |       | With `--format nginx-map`: the clients' web port (default: 80)                                                                                                   |
+| `--default <ip:port>`      |       | With `--format nginx-map`: where names of no live client go (default: none, nginx's offline page)                                                                |
+| `--client-isolation`       |       | Server: drop packets from one client to another (or `client_isolation=yes` in `[server]`), see [Security Model](#security-model)                                 |
+| `--bind-dev <iface>`       | `-d`  | Bind socket to a specific network interface (`SO_BINDTODEVICE`)                                                                                                  |
+| `--transport <proto>`      | `-R`  | Transport protocol: `udp` (default) or `tcp`                                                                                                                     |
+| `--version`                | `-v`  | Print version and exit                                                                                                                                           |
+| `--help`                   | `-h`  | Print usage and exit                                                                                                                                             |
 
 ## Examples
 
@@ -379,20 +379,20 @@ the address of the client's previous session).
 ### nginx in front of the clients
 
 nginx on the server's host can open the web UI of every client by name,
-`http://<client ID>.cam.example.lan/` → `http://<its tunnel address>:80/`, with
+`http://<client ID>.openipc.click/` → `http://<its tunnel address>:80/`, with
 no list of addresses to keep: `camex --status --format nginx-map` prints an nginx
 `map` of the live clients, and `examples/camex-nginx-sync.sh` writes it to the
 file nginx includes and reloads nginx when it changed.
 
 ```sh
-sudo camex --status --format nginx-map --domain cam.example.lan
+sudo camex --status --format nginx-map --domain openipc.click
 ```
 
 ```
 # camex --status --format nginx-map: generated, do not edit
 map $host $camex_upstream {
-    "cam-a.cam.example.lan" 10.200.0.2:80;
-    "cam-b.cam.example.lan" 10.200.0.3:80;
+    "cam-a.openipc.click" 10.200.0.2:80;
+    "cam-b.openipc.click" 10.200.0.3:80;
 }
 ```
 
@@ -410,7 +410,18 @@ map $host $camex_upstream {
   every 10 seconds. Addresses are stable (#81), so the map changes only when
   clients come and go.
 - Settings of the script: `DOMAIN`, `UPSTREAM_PORT`, `DEFAULT`, `CONTROL`, `MAP`
-  (`/etc/nginx/camex-map.conf`), `CAMEX`, `NGINX_BIN`.
+  (`/etc/nginx/camex-map.conf`), `INDEX`, `CAMEX`, `NGINX_BIN`.
+- **Start page** (#105): `camex --status --format nginx-index --domain
+  openipc.click` prints a static HTML page with every live client, its name
+  and a link to `//<client ID>.openipc.click/`. The name is `name=` in the
+  client's `[client ID]` block on the server (UTF-8, up to 64 bytes), or the ID
+  without one; `--status` and `--json` show it too. With `INDEX=` the sync
+  script writes the page when it changed, and the second server block of
+  `examples/nginx-camex.conf` serves it on the bare domain
+  (`http://openipc.click/`). The page lists every device: limit who may open
+  it as for the cameras.
+
+  ![Start page](docs/images/nginx-start-page.png)
 
 The whole setup — the server and nginx on one host, one pre-shared key or one
 key per camera, the cameras, an `nftables` firewall, DNS, TLS and the checks —

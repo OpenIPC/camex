@@ -281,8 +281,8 @@ sudo ./camex \
 | `--status`                 |        | 列出本机所有服务器的已连接客户端后退出（以服务器的用户运行，通常为 root）                                                                     |
 | `--json`                   |        | 与 `--status` 一起使用：以 JSON 输出，便于脚本处理                                                                                            |
 | `--control <path>`         |        | 服务器：`--status` 使用的控制套接字（默认 `/run/camex/camex-<transport>-<port>.sock`，`none` 为关闭）；与 `--status` 一起使用：只查询该服务器 |
-| `--format <fmt>`           |        | 与 `--status` 一起使用：`table`（默认）、`json`（同 `--json`）或 `nginx-map`，见[客户端前面的 nginx](#客户端前面的-nginx)                     |
-| `--domain <name>`          |        | 与 `--format nginx-map` 一起使用：客户端 ID 之后的域名                                                                                        |
+| `--format <fmt>`           |        | 与 `--status` 一起使用：`table`（默认）、`json`（同 `--json`）、`nginx-map` 或 `nginx-index`，见[客户端前面的 nginx](#客户端前面的-nginx)     |
+| `--domain <name>`          |        | 与 `--format nginx-map` 或 `nginx-index` 一起使用：客户端 ID 之后的域名                                                                       |
 | `--upstream-port <port>`   |        | 与 `--format nginx-map` 一起使用：客户端的 Web 端口（默认 80）                                                                                |
 | `--default <ip:port>`      |        | 与 `--format nginx-map` 一起使用：没有在线客户端的名称转到何处（默认无，即 nginx 的离线页面）                                                 |
 | `--client-isolation`       |        | 服务器：丢弃客户端之间的数据包（或在 `[server]` 中设置 `client_isolation=yes`），见[安全模型](#安全模型)                                      |
@@ -365,20 +365,20 @@ CAM-C  10.200.0.4       gone 6m40s
 ### 客户端前面的 nginx
 
 服务器所在主机上的 nginx 可以按名称打开每个客户端的 Web 界面，
-`http://<客户端 ID>.cam.example.lan/` → `http://<其隧道地址>:80/`，无需维护地址
+`http://<客户端 ID>.openipc.click/` → `http://<其隧道地址>:80/`，无需维护地址
 列表：`camex --status --format nginx-map` 输出包含在线客户端的 nginx `map`，
 `examples/camex-nginx-sync.sh` 将其写入 nginx 引用的文件，并在内容变化时重新加载
 nginx。
 
 ```sh
-sudo camex --status --format nginx-map --domain cam.example.lan
+sudo camex --status --format nginx-map --domain openipc.click
 ```
 
 ```
 # camex --status --format nginx-map: generated, do not edit
 map $host $camex_upstream {
-    "cam-a.cam.example.lan" 10.200.0.2:80;
-    "cam-b.cam.example.lan" 10.200.0.3:80;
+    "cam-a.openipc.click" 10.200.0.2:80;
+    "cam-b.openipc.click" 10.200.0.3:80;
 }
 ```
 
@@ -393,7 +393,17 @@ map $host $camex_upstream {
   `camex-nginx-sync.service` 和 `.timer` 每 10 秒运行一次。地址是稳定的（#81），
   因此只有在客户端上线或离开时 map 才会变化。
 - 脚本的设置：`DOMAIN`、`UPSTREAM_PORT`、`DEFAULT`、`CONTROL`、`MAP`
-  （`/etc/nginx/camex-map.conf`）、`CAMEX`、`NGINX_BIN`。
+  （`/etc/nginx/camex-map.conf`）、`INDEX`、`CAMEX`、`NGINX_BIN`。
+- **起始页**（#105）：`camex --status --format nginx-index --domain
+  openipc.click` 输出一个静态 HTML 页面，列出所有在线客户端：名称以及指向
+  `//<客户端 ID>.openipc.click/` 的链接。名称来自服务器上该客户端
+  `[client ID]` 块中的 `name=`（UTF-8，最多 64 字节），没有时显示 ID；
+  `--status` 和 `--json` 也会显示它。设置 `INDEX=` 后，同步脚本会在页面变化时写入
+  页面，`examples/nginx-camex.conf` 的第二个 server 块在裸域名
+  （`http://openipc.click/`）上提供该页面。页面列出所有设备：请像限制摄像机
+  访问一样限制对它的访问。
+
+  ![起始页](docs/images/nginx-start-page.png)
 
 完整的部署方案——服务器与 nginx 位于同一主机、全体共用一个预共享密钥或每台摄像机
 各用自己的密钥、摄像机端、`nftables` 防火墙、DNS、TLS 以及检查方法——见

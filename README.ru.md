@@ -283,8 +283,8 @@ sudo ./camex \
 | `--status`                 |        | Показать подключённых клиентов всех серверов на этой машине и выйти (от пользователя сервера, обычно root)                                                       |
 | `--json`                   |        | Вместе с `--status`: то же в JSON, для скриптов                                                                                                                  |
 | `--control <path>`         |        | Сервер: управляющий сокет для `--status` (по умолчанию `/run/camex/camex-<transport>-<port>.sock`, `none` — выключен); с `--status`: спросить только этот сервер |
-| `--format <fmt>`           |        | С `--status`: `table` (по умолчанию), `json` (как `--json`) или `nginx-map`, см. [nginx перед клиентами](#nginx-перед-клиентами)                                 |
-| `--domain <name>`          |        | С `--format nginx-map`: домен после ID клиента                                                                                                                   |
+| `--format <fmt>`           |        | С `--status`: `table` (по умолчанию), `json` (как `--json`), `nginx-map` или `nginx-index`, см. [nginx перед клиентами](#nginx-перед-клиентами)                  |
+| `--domain <name>`          |        | С `--format nginx-map` или `nginx-index`: домен после ID клиента                                                                                                 |
 | `--upstream-port <port>`   |        | С `--format nginx-map`: веб-порт клиентов (по умолчанию 80)                                                                                                      |
 | `--default <ip:port>`      |        | С `--format nginx-map`: куда идут имена без живого клиента (по умолчанию никуда — страница nginx «не в сети»)                                                    |
 | `--client-isolation`       |        | Сервер: отбрасывать пакеты от одного клиента другому (или `client_isolation=yes` в `[server]`), см. [Модель безопасности](#модель-безопасности)                  |
@@ -380,20 +380,20 @@ CAM-C  10.200.0.4       gone 6m40s
 ### nginx перед клиентами
 
 nginx на машине сервера может открывать веб-интерфейс каждого клиента по имени,
-`http://<ID клиента>.cam.example.lan/` → `http://<его адрес в туннеле>:80/`, без
+`http://<ID клиента>.openipc.click/` → `http://<его адрес в туннеле>:80/`, без
 списка адресов, который надо вести вручную: `camex --status --format nginx-map`
 печатает `map` nginx с живыми клиентами, а `examples/camex-nginx-sync.sh` пишет
 её в файл, который подключает nginx, и перезагружает nginx, когда она изменилась.
 
 ```sh
-sudo camex --status --format nginx-map --domain cam.example.lan
+sudo camex --status --format nginx-map --domain openipc.click
 ```
 
 ```
 # camex --status --format nginx-map: generated, do not edit
 map $host $camex_upstream {
-    "cam-a.cam.example.lan" 10.200.0.2:80;
-    "cam-b.cam.example.lan" 10.200.0.3:80;
+    "cam-a.openipc.click" 10.200.0.2:80;
+    "cam-b.openipc.click" 10.200.0.3:80;
 }
 ```
 
@@ -412,7 +412,18 @@ map $host $camex_upstream {
   `.timer` запускают его каждые 10 секунд. Адреса стабильны (#81), поэтому карта
   меняется, только когда клиенты приходят и уходят.
 - Настройки скрипта: `DOMAIN`, `UPSTREAM_PORT`, `DEFAULT`, `CONTROL`, `MAP`
-  (`/etc/nginx/camex-map.conf`), `CAMEX`, `NGINX_BIN`.
+  (`/etc/nginx/camex-map.conf`), `INDEX`, `CAMEX`, `NGINX_BIN`.
+- **Стартовая страница** (#105): `camex --status --format nginx-index --domain
+  openipc.click` печатает статическую HTML-страницу со всеми живыми
+  клиентами: имя и ссылка на `//<ID клиента>.openipc.click/`. Имя — это
+  `name=` в блоке `[client ID]` клиента на сервере (UTF-8, до 64 байт), а без
+  него — ID; `--status` и `--json` тоже его показывают. С `INDEX=` скрипт
+  синхронизации пишет страницу, когда она изменилась, а второй блок `server` в
+  `examples/nginx-camex.conf` отдаёт её на голом домене
+  (`http://openipc.click/`). На странице видны все устройства: ограничьте
+  доступ к ней так же, как к камерам.
+
+  ![Стартовая страница](docs/images/nginx-start-page.png)
 
 Развёртывание целиком — сервер и nginx на одной машине, один общий ключ или
 свой ключ у каждой камеры, камеры, межсетевой экран `nftables`, DNS, TLS и

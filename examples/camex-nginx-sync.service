@@ -11,6 +11,10 @@ After=camex.service nginx.service
 
 [Service]
 Type=oneshot
-Environment=DOMAIN=cam.example.lan
+Environment=DOMAIN=openipc.click
 Environment=MAP=/etc/nginx/camex-map.conf
+# The start page of the clients (#105); empty: none. StateDirectory
+# creates /var/lib/camex-nginx
+Environment=INDEX=/var/lib/camex-nginx/index.html
+StateDirectory=camex-nginx
 ExecStart=/usr/local/bin/camex-nginx-sync.sh

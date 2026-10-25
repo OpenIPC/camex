@@ -16,7 +16,11 @@
 #    its name gets the offline page.
 # 5. A socket left behind by a killed server does not stop the sync.
 # 6. A reload that failed (nginx not running) is tried again by the next
-#    sync, although the map did not change.
+#    sync, although the map did not change; the start page waits for it.
+# The start page (#105) along the way: the bare domain lists the live
+# clients with their name= (escaped) or ID and links that reach them;
+# --status shows the name; an unchanged state leaves the file alone; bad
+# IDs and clients that are gone are not on it.
 #
 # Usage: ./test-e2e-nginx-map.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
@@ -33,7 +37,11 @@ P="camex-nginx-$$"
 NET_NAME="$P-net"
 BUILD_CTX="$(mktemp -d)"
 PSK="nginx-test"
-DOMAIN="cam.test"
+DOMAIN="openipc.click"
+INDEX="/var/lib/camex-nginx/index.html"
+# CAM-A's name= has HTML characters and Cyrillic
+NAME_A='Склад <1> & "A"'
+NAME_A_HTML='Склад &lt;1&gt; &amp; &quot;A&quot;'
 FAILS=0
 
 cleanup() {
@@ -54,6 +62,7 @@ cp "$REPO_DIR/examples/camex-nginx-sync.sh" "$BUILD_CTX/"
 sed "s/cam\.example\.lan/$DOMAIN/g" "$REPO_DIR/examples/nginx-camex.conf" > "$BUILD_CTX/nginx-camex.conf"
 . "$SCRIPT_DIR/lib-keys.sh"
 gen_server_key "$BUILD_CTX" "$CAMEX_BINARY" || { echo "cannot create a server key"; exit 1; }
+printf '[client CAM-A]\nname=%s\n' "$NAME_A" > "$BUILD_CTX/camex.conf"
 cat > "$BUILD_CTX/Dockerfile" <<'DOCKERFILE'
 FROM ubuntu:24.04
 # New clients right after the server starts: no start hold (#81)
@@ -63,6 +72,8 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
     rm -rf /var/lib/apt/lists/* /etc/nginx/sites-enabled/default
 COPY camex /usr/local/bin/camex
 COPY server.key /etc/camex/server.key
+COPY camex.conf /etc/camex/camex.conf
+RUN mkdir -p /var/lib/camex-nginx
 COPY camex-nginx-sync.sh /usr/local/bin/camex-nginx-sync.sh
 COPY nginx-camex.conf /etc/nginx/conf.d/nginx-camex.conf
 # Counts nginx reloads for the test
@@ -88,8 +99,8 @@ client() {  # client <name>: a camex client serving "I am <name>" on port 80
 
 sync() {    # sync: the example sync script in the server container; nginx
             # reloads in the background, so give its new workers a moment
-    docker exec -e DOMAIN="$DOMAIN" -e NGINX_BIN=nginx-counting "$P-srv" \
-        camex-nginx-sync.sh 2>&1
+    docker exec -e DOMAIN="$DOMAIN" -e NGINX_BIN=nginx-counting \
+        -e INDEX="$INDEX" "$P-srv" camex-nginx-sync.sh 2>&1
     sleep 1
 }
 
@@ -114,7 +125,8 @@ wait_registered() {  # wait_registered <id>...
 echo "== 1. two clients behind nginx"
 docker run -d --name "$P-srv" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
     -e CAMEX_CLIENT_TIMEOUT=5 "$IMAGE" --mode server --port 5800 \
-    --local-cidr 10.200.0.1/24 $SERVER_KEY_ARGS --psk "$PSK" >/dev/null
+    --local-cidr 10.200.0.1/24 $SERVER_KEY_ARGS --psk "$PSK" \
+    --config /etc/camex/camex.conf >/dev/null
 sleep 1
 # An empty map so that nginx starts
 docker exec "$P-srv" sh -c 'printf "map \$host \$camex_upstream {\n}\n" > /etc/nginx/camex-map.conf && nginx'
@@ -136,20 +148,59 @@ get nobody.$DOMAIN | grep -q "is offline"
 check $? "an unknown name gets the offline page"
 ! get "<b>x.$DOMAIN" | grep -q "<b>"
 check $? "the offline page does not echo the Host header"
+echo "$out" | grep -q "start page updated: 2 devices"
+check $? "the sync writes the start page"
+home=$(get "$DOMAIN")
+echo "$home" | grep '^<tr class="dev">' | sed 's/^/      /'
+echo "$home" | grep -qF "<a href=\"//cam-a.$DOMAIN/\">$NAME_A_HTML</a></td><td class=\"id\">cam-a</td>" &&
+    echo "$home" | grep -qF "<a href=\"//cam-b.$DOMAIN/\">cam-b</a></td><td class=\"id\">cam-b</td>" &&
+    echo "$home" | grep -qF '<div class="sub">2 devices online</div>'
+check $? "the bare domain lists both, CAM-A by its escaped name, CAM-B by its ID"
+ok=0
+for host in $(echo "$home" | sed -n 's|.*<a href="//\([^/"]*\)/">.*|\1|p'); do
+    case "$(get "$host")" in "I am "*) ;; *) ok=1 ;; esac
+done
+check $ok "each link on the page reaches its client"
+docker exec "$P-srv" curl -s -m 10 -H "Host: $DOMAIN" http://127.0.0.1/other | grep -q "404"
+check $? "the bare domain serves nothing else"
+docker exec "$P-srv" camex --status --json | grep -qF '"id":"CAM-A","name":"Склад <1> & \"A\""' &&
+    docker exec "$P-srv" camex --status --json | grep -qF '"id":"CAM-B","name":null' &&
+    docker exec "$P-srv" camex --status | grep -E '^CAM-A ' | grep -qF "  $NAME_A"
+check $? "--status and --json show the name"
 
 echo "== 2. a sync without a change"
 before=$(reloads)
+page_before=$(docker exec "$P-srv" stat -c '%i %Y' "$INDEX")
+sleep 1
 sync >/dev/null
 [ "$(reloads)" = "$before" ]
 check $? "nginx is not reloaded ($before -> $(reloads))"
+[ "$(docker exec "$P-srv" stat -c '%i %Y' "$INDEX")" = "$page_before" ]
+check $? "the start page is not rewritten"
+docker exec "$P-srv" chmod 600 "$INDEX"
+sync >/dev/null
+[ "$(docker exec "$P-srv" stat -c %a "$INDEX")" = 644 ]
+check $? "an unchanged page with tight permissions is made readable for nginx"
+out=$(docker exec -e DOMAIN="$DOMAIN" -e NGINX_BIN=nginx-counting \
+    -e INDEX=/nonexistent/index.html "$P-srv" camex-nginx-sync.sh 2>&1)
+echo "$out" | grep -q "cannot write /nonexistent/index.html.tmp.* (does the directory of INDEX exist?)" &&
+    ! echo "$out" | grep -q "did not answer"
+check $? "a missing page directory is named, not blamed on the server"
+docker exec "$P-srv" sh -c 'camex --status --format nginx-index > /dev/full' 2>&1 | grep -q "cannot write the start page" &&
+    ! docker exec "$P-srv" sh -c 'camex --status --format nginx-index > /dev/full' 2>/dev/null &&
+    ! docker exec "$P-srv" sh -c 'camex --status --format nginx-map > /dev/full' 2>/dev/null
+check $? "a write that fails (a full disk) is an error, not a cut-off page or map"
 
 echo "== 3. an ID that is no host name"
 client bad_id
 wait_registered bad_id
 out=$(sync)
-echo "$out" | grep -q "client ID bad_id is not a host name label" &&
+echo "$out" | grep -q "client ID bad_id is not a host name label: left out of the map" &&
     ! docker exec "$P-srv" grep -q "bad" /etc/nginx/camex-map.conf
 check $? "it is left out with a warning"
+echo "$out" | grep -q "client ID bad_id is not a host name label: left out of the start page" &&
+    ! get "$DOMAIN" | grep -qi "bad"
+check $? "and left out of the start page"
 
 echo "== 4. a client goes away"
 docker rm -f "$P-CAM-B" >/dev/null
@@ -164,6 +215,8 @@ sync >/dev/null
 check $? "it is gone from the map"
 get cam-b.$DOMAIN | grep -q "is offline"
 check $? "its name gets the offline page"
+! get "$DOMAIN" | grep -q "cam-b" && get "$DOMAIN" | grep -qF "//cam-a.$DOMAIN/"
+check $? "it is gone from the start page"
 a=$(get cam-a.$DOMAIN)
 [ "$a" = "I am CAM-A" ]
 check $? "the other one still works (${a:-no answer})"
@@ -187,14 +240,20 @@ docker exec "$P-srv" sh -c 'printf "#!/bin/sh\n[ \"\$1\" = \"-s\" ] && exit 1\ne
 client CAM-C
 wait_registered CAM-C
 sleep 2
-out=$(docker exec -e DOMAIN="$DOMAIN" -e NGINX_BIN=nginx-down "$P-srv" camex-nginx-sync.sh 2>&1)
+out=$(docker exec -e DOMAIN="$DOMAIN" -e NGINX_BIN=nginx-down -e INDEX="$INDEX" \
+    "$P-srv" camex-nginx-sync.sh 2>&1)
 echo "$out" | grep -q "nginx did not reload" &&
     docker exec "$P-srv" grep -q "cam-c" /etc/nginx/camex-map.conf
 check $? "the failed reload is reported and the new map kept"
+echo "$out" | grep -q "the map was not applied: $INDEX left as it is" &&
+    ! docker exec "$P-srv" grep -q "cam-c" "$INDEX"
+check $? "the start page waits for the map (no link nginx does not know yet)"
 before=$(reloads)
 sync >/dev/null
 [ "$(reloads)" -gt "$before" ] && [ "$(get cam-c.$DOMAIN)" = "I am CAM-C" ]
 check $? "the next run reloads nginx although the map did not change"
+docker exec "$P-srv" grep -qF "//cam-c.$DOMAIN/" "$INDEX"
+check $? "and the start page follows"
 
 echo "== 7. one sync at a time"
 # A run that holds the lock (a slow server, say): the next one waits for it

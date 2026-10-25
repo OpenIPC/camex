@@ -338,6 +338,57 @@ int main(void)
         config_db_free(&server_db);
     }
 
+    /* name= (#105): kept for its [client ID]; not valid text, too long or
+     * in [defaults] stops the load */
+    {
+        static const char *const bad[] = {
+            "[client cam1]\nname=a\x01" "b\n",
+            "[client cam1]\nname=\xc3(\n",
+            "[client cam1]\nname=0123456789012345678901234567890123456789"
+            "0123456789012345678901234\n",
+            "[defaults]\nname=all\n",
+            "[server]\nname=all\n",
+        };
+        char path[] = "/tmp/test_proto_XXXXXX";
+        int fd = mkstemp(path);
+        FILE *fp = fd >= 0 ? fdopen(fd, "w") : NULL;
+        size_t k;
+
+        if (fp != NULL) {
+            const camex_server_profile_t *c1, *c2;
+
+            fprintf(fp, "[client cam1]\nname=  \xd0\xa1\xd0\xba\xd0\xbb\xd0"
+                    "\xb0\xd0\xb4, gate <1>  \n[client cam2]\nmtu=1400\n");
+            fclose(fp);
+            config_db_free(&server_db);
+            c1 = config_db_load_file(path) == 0
+                     ? config_db_find_client("cam1") : NULL;
+            c2 = config_db_find_client("cam2");
+            if (c1 == NULL || c2 == NULL ||
+                strcmp(c1->name, "\xd0\xa1\xd0\xba\xd0\xbb\xd0\xb0\xd0\xb4, "
+                       "gate <1>") != 0 || c2->name[0] != '\0') {
+                fprintf(stderr, "FAIL: name= not kept for its client\n");
+                ++failures;
+            }
+            config_db_free(&server_db);
+            for (k = 0U; k < sizeof(bad) / sizeof(bad[0]); ++k) {
+                fp = fopen(path, "w");
+                if (fp == NULL) {
+                    break;
+                }
+                fputs(bad[k], fp);
+                fclose(fp);
+                if (config_db_load_file(path) == 0) {
+                    fprintf(stderr, "FAIL: bad name= %u accepted\n",
+                            (unsigned)k);
+                    ++failures;
+                }
+                config_db_free(&server_db);
+            }
+            unlink(path);
+        }
+    }
+
     /* The server public key must not be all zero */
     if (crypto_set_server_pub("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=") == 0) {
         fprintf(stderr, "FAIL: an all-zero server public key was accepted\n");
