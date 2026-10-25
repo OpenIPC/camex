@@ -209,6 +209,12 @@ static void test_index(void)
     }
     free(m);
 
+    /* 0.0.0.0 is an address, "-" none */
+    m = page("O\tcam\t0.0.0.0\n", "openipc.click", &n, warn, sizeof(warn));
+    CHECK(m != NULL && strstr(m, "<td class=\"addr\">0.0.0.0</td>") != NULL,
+          "an offline client's 0.0.0.0 is shown, not a dash");
+    free(m);
+
     /* The largest traffic: no wrap to 0 */
     m = page("L\tbig\t10.0.0.1\t0\t1\t1\t1\t1\t18446744073709551615\t0\n",
              "openipc.click", &n, warn, sizeof(warn));
