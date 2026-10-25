@@ -340,9 +340,12 @@ static void control_answer(control_conn_t *c)
         c->out = server_clients_list(0, &len);
     } else if (strcmp(c->cmd, "CLIENTS NAMES") == 0) {
         c->out = server_clients_list(1, &len);
+    } else if (strcmp(c->cmd, "CLIENTS INDEX") == 0) {
+        c->out = server_clients_index(&len);
     } else {
         static const char err[] = "ERROR unknown command (STATUS, "
-                                  "STATUS JSON, CLIENTS, CLIENTS NAMES)\n";
+                                  "STATUS JSON, CLIENTS, CLIENTS NAMES, "
+                                  "CLIENTS INDEX)\n";
 
         c->out = malloc(sizeof(err));
         if (c->out != NULL) {
@@ -781,9 +784,9 @@ int control_nginx_index(const char *path, const char *domain)
     char *all = NULL, *page;
     size_t count = 0U;
 
-    /* A server older than 3.6.0 answers ERROR: the page is not built, so
+    /* A server older than 3.7.0 answers ERROR: the page is not built, so
      * a sync keeps the previous one */
-    if (control_gather(path, "CLIENTS NAMES\n", &all) != 0) {
+    if (control_gather(path, "CLIENTS INDEX\n", &all) != 0) {
         return 1;
     }
     page = nginx_index_format(all, domain, stderr, &count);

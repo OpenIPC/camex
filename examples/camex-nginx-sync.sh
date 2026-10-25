@@ -202,12 +202,14 @@ index_build() {
 }
 
 # $itmp in place of $INDEX when it changed: one rename, so nginx never
-# serves half of it
+# serves half of it. The page shows ages and traffic, so it changes with
+# almost every run: the log says so only when the devices online did
 index_publish() {
     if [ -f "$INDEX" ] && cmp -s "$itmp" "$INDEX"; then
         rm -f "$itmp"
         return 0
     fi
+    before=$(grep -c '^<tr class="dev">' "$INDEX" 2>/dev/null)
     # nginx's workers read it: readable by all, whatever the umask
     if ! { chmod 644 "$itmp" && mv -f "$itmp" "$INDEX"; }; then
         rm -f "$itmp"
@@ -215,8 +217,10 @@ index_publish() {
         return 1
     fi
     devices=$(grep -c '^<tr class="dev">' "$INDEX")
-    [ "$devices" = 1 ] && noun=device || noun=devices
-    log "start page updated: $devices $noun"
+    if [ "$devices" != "$before" ]; then
+        [ "$devices" = 1 ] && noun=device || noun=devices
+        log "start page updated: $devices $noun online"
+    fi
     return 0
 }
 

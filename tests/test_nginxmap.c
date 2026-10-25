@@ -56,7 +56,12 @@ static char *page(const char *lines, const char *domain, size_t *count,
 #define ROW "<tr class=\"dev\"><td class=\"lamp\"><span class=\"bulb\">" \
             "</span></td><td>"
 
-/* The start page (#105) and the names on it */
+/* A live CLIENTS INDEX record: 65 s connected, last packet 2 s ago,
+ * last of 3 handshakes 30 s ago, 2048 bytes in, 1024 out */
+#define LIVE(id, addr, conf, name) \
+    "L\t" id "\t" addr "\t" conf "\t65\t2\t30\t3\t2048\t1024\t" name "\n"
+
+/* The start page (#105, #110) and the names on it */
 static void test_index(void)
 {
     char warn[1024];
@@ -84,47 +89,96 @@ static void test_index(void)
     CHECK(!camex_name_valid("a\xd0"), "a cut sequence refused");
     CHECK(!camex_name_valid("a\x80"), "a lone continuation byte refused");
 
-    /* No clients: a page that says so */
+    /* No clients: both lists say so, Configured opens */
     m = page("", "cam.example.lan", &n, warn, sizeof(warn));
     CHECK(m != NULL && n == 0U && strstr(m, "<!doctype html>\n") == m &&
-              strstr(m, "<div class=\"empty\">No devices online</div>") != NULL &&
-              strstr(m, "<table>") == NULL && strstr(m, "</html>\n") != NULL,
+              strstr(m, "<div class=\"sub\">0 online &middot; 0 configured"
+                     "</div>") != NULL &&
+              strstr(m, "No [client ID] blocks in the server&#39;s file") ==
+                  NULL &&
+              strstr(m, "No [client ID] blocks") != NULL &&
+              strstr(m, "No auto devices online") != NULL &&
+              strstr(m, "<table>") == NULL &&
+              strstr(m, "id=\"tab-conf\" checked") != NULL &&
+              strstr(m, "</html>\n") != NULL,
           "an empty page");
     free(m);
 
-    /* Names, IDs as names, links, sorted by name in any case */
+    /* Live auto and configured clients, an offline configured one; names
+     * escaped, sorted by name in any case, the ID without a name */
     memset(warn, 0, sizeof(warn));
-    m = page("CAM-B 10.200.0.3 zoo gate\n"
-             "cam-c 10.200.0.4\n"
-             "Cam-A 10.200.0.2 Back <yard> & \"shed\"\n",
+    m = page(LIVE("CAM-B", "10.200.0.3", "1", "zoo gate")
+             LIVE("cam-c", "10.200.0.4", "1", "")
+             LIVE("Cam-A", "10.200.0.2", "1", "Back <yard> & \"shed\"")
+             LIVE("auto1", "10.200.0.9", "0", "")
+             "O\tcam-d\t10.200.0.20\tDock\n"
+             "O\tcam-e\t-\n",
              "cam.example.lan", &n, warn, sizeof(warn));
-    CHECK(m != NULL && n == 3U && strstr(m, "<div class=\"sub\">3 devices online</div>"),
-          "three devices");
+    CHECK(m != NULL && n == 4U &&
+              strstr(m, "<div class=\"sub\">4 online &middot; 5 configured"
+                     "</div>") != NULL,
+          "four online, five configured");
+    CHECK(m != NULL && strstr(m, "Configured <b>5</b> &middot; <i>2 offline"
+                              "</i></label><label for=\"tab-auto\">Auto <b>1"
+                              "</b>") != NULL,
+          "the tabs with their counts");
     CHECK(m != NULL && strstr(m,
               ROW "<a href=\"//cam-a.cam.example.lan/\">Back &lt;yard&gt; "
               "&amp; &quot;shed&quot;</a></td><td class=\"id\">cam-a</td>"
-              "<td class=\"addr\">10.200.0.2</td></tr>\n"
-              ROW "<a href=\"//cam-c.cam.example.lan/\">cam-c</a></td>"
-              "<td class=\"id\">cam-c</td><td class=\"addr\">10.200.0.4"
-              "</td></tr>\n"
-              ROW "<a href=\"//cam-b.cam.example.lan/\">zoo gate</a></td>"
-              "<td class=\"id\">cam-b</td><td class=\"addr\">10.200.0.3"
-              "</td></tr>\n") != NULL,
-          "escaped names, the ID without one, sorted by name");
+              "<td class=\"addr\">10.200.0.2</td><td class=\"conn\">1m05s"
+              "</td><td>2s ago</td><td class=\"hs\">30s ago &middot; 3</td>"
+              "<td class=\"tr\">2.0 / 1.0</td></tr>\n") != NULL,
+          "a live row with its values");
+    CHECK(m != NULL && strstr(m,
+              "<tr class=\"dev off\"><td class=\"lamp\"><span class=\"bulb\">"
+              "</span></td><td><span class=\"nm\">cam-e</span></td><td "
+              "class=\"id\">cam-e</td><td class=\"addr\">&mdash;</td>") !=
+                  NULL &&
+              strstr(m, "href=\"//cam-e.") == NULL &&
+              strstr(m, "<span class=\"nm\">Dock</span>") != NULL &&
+              strstr(m, ">10.200.0.20<") != NULL,
+          "offline rows: no link, the configured address or a dash");
+    {
+        const char *conf = m != NULL
+                               ? strstr(m, "<div class=\"list list-conf\">")
+                               : NULL;
+        const char *aut = m != NULL
+                              ? strstr(m, "<div class=\"list list-auto\">")
+                              : NULL;
+        const char *a1 = m != NULL ? strstr(m, "//auto1.") : NULL;
+        const char *pa = m != NULL ? strstr(m, "//cam-a.") : NULL;
+        const char *pc = m != NULL ? strstr(m, ">cam-c</a>") : NULL;
+        const char *pd = m != NULL ? strstr(m, ">Dock<") : NULL;
+        const char *pe = m != NULL ? strstr(m, ">cam-e<") : NULL;
+        const char *pb = m != NULL ? strstr(m, ">zoo gate<") : NULL;
+
+        CHECK(conf != NULL && aut != NULL && conf < aut && a1 > aut &&
+                  pa > conf && pa < aut,
+              "auto1 under Auto, the configured ones under Configured");
+        CHECK(pa != NULL && pc != NULL && pd != NULL && pe != NULL &&
+                  pb != NULL && pa < pc && pc < pe && pe < pd && pd < pb,
+              "sorted by name, offline ones among them");
+    }
     CHECK(warn[0] == '\0', "no warnings");
     free(m);
 
-    /* One device; no domain */
-    m = page("cam1 10.0.0.1\n", NULL, &n, warn, sizeof(warn));
-    CHECK(m != NULL && n == 1U && strstr(m, "<div class=\"sub\">1 device online</div>") &&
-              strstr(m, "<a href=\"//cam1/\">cam1</a>"),
-          "one device, a link without a domain");
+    /* Only auto devices: Auto opens; ages, a missing last packet, traffic */
+    m = page("L\tcam1\t10.0.0.1\t0\t93811\t-\t412\t172\t731234111\t20234111"
+             "\n", NULL, &n, warn, sizeof(warn));
+    CHECK(m != NULL && n == 1U && strstr(m, "id=\"tab-auto\" checked") &&
+              strstr(m, "<a href=\"//cam1/\">cam1</a>") &&
+              strstr(m, "<td class=\"conn\">1d02h</td><td>&mdash;</td>"
+                     "<td class=\"hs\">6m52s ago &middot; 172</td><td "
+                     "class=\"tr\">714&#8239;096 / 19&#8239;760</td>"),
+          "one auto device, a link without a domain, the values");
     free(m);
 
     /* The same state in another order: an identical page */
-    a = page("x1 10.0.0.1 Same\nx2 10.0.0.2 same\n", "d.lan", &n, warn,
+    a = page(LIVE("x1", "10.0.0.1", "1", "Same")
+             LIVE("x2", "10.0.0.2", "1", "same"), "d.lan", &n, warn,
              sizeof(warn));
-    b = page("x2 10.0.0.2 same\nx1 10.0.0.1 Same\n", "d.lan", &n, warn,
+    b = page(LIVE("x2", "10.0.0.2", "1", "same")
+             LIVE("x1", "10.0.0.1", "1", "Same"), "d.lan", &n, warn,
              sizeof(warn));
     CHECK(a != NULL && b != NULL && strcmp(a, b) == 0,
           "order of the input does not matter");
@@ -133,13 +187,19 @@ static void test_index(void)
     free(a);
     free(b);
 
-    /* Bad IDs and duplicates as in the map */
+    /* Bad IDs and duplicates as in the map; a live record wins over an
+     * offline one of the same ID (two servers) */
     memset(warn, 0, sizeof(warn));
-    m = page("bad_id 10.0.0.2 Name\ncam 10.0.0.9 First\n"
-             "CAM 10.0.0.10 Second\n", "d.lan", &n, warn, sizeof(warn));
-    CHECK(m != NULL && n == 1U && strstr(m, "bad") == NULL &&
-              strstr(m, ">First<") != NULL && strstr(m, "Second") == NULL,
-          "a bad ID left out, a duplicate keeps the lower address");
+    m = page(LIVE("bad_id", "10.0.0.2", "1", "Name")
+             LIVE("cam", "10.0.0.9", "1", "First")
+             LIVE("CAM", "10.0.0.10", "1", "Second")
+             "O\tcam2\t10.0.0.1\tOff\n"
+             LIVE("cam2", "10.0.0.30", "1", "On"),
+             "d.lan", &n, warn, sizeof(warn));
+    CHECK(m != NULL && n == 2U && strstr(m, "bad") == NULL &&
+              strstr(m, ">First<") != NULL && strstr(m, "Second") == NULL &&
+              strstr(m, ">On<") != NULL && strstr(m, "Off") == NULL,
+          "a bad ID left out, duplicates resolved");
     CHECK(strstr(warn, "bad_id is not a host name label: left out of the "
                  "start page") != NULL && strstr(warn, "listed twice"),
           "both reported");
@@ -147,9 +207,11 @@ static void test_index(void)
 
     /* The same ID and address with other names (two servers): the same
      * name is kept whatever the order */
-    a = page("cam 10.0.0.9 Zulu\ncam 10.0.0.9 Alpha\n", "d.lan", &n, warn,
+    a = page(LIVE("cam", "10.0.0.9", "1", "Zulu")
+             LIVE("cam", "10.0.0.9", "1", "Alpha"), "d.lan", &n, warn,
              sizeof(warn));
-    b = page("cam 10.0.0.9 Alpha\ncam 10.0.0.9 Zulu\n", "d.lan", &n, warn,
+    b = page(LIVE("cam", "10.0.0.9", "1", "Alpha")
+             LIVE("cam", "10.0.0.9", "1", "Zulu"), "d.lan", &n, warn,
              sizeof(warn));
     CHECK(a != NULL && b != NULL && strcmp(a, b) == 0 &&
               strstr(a, ">Alpha<") != NULL && strstr(a, "Zulu") == NULL,
@@ -159,12 +221,22 @@ static void test_index(void)
 
     /* A name that is not valid text (not from a camex server): the ID */
     memset(warn, 0, sizeof(warn));
-    m = page("cam 10.0.0.1 x\x01<script>\n", "d.lan", &n, warn,
-             sizeof(warn));
-    CHECK(m != NULL && n == 1U && strstr(m, "script") == NULL &&
-              strstr(m, ">cam</a>") != NULL &&
+    m = page(LIVE("cam", "10.0.0.1", "1", "x\x01<script>"), "d.lan", &n,
+             warn, sizeof(warn));
+    CHECK(m != NULL && n == 1U && strstr(m, "&lt;script") == NULL &&
+              strstr(m, "x\x01") == NULL && strstr(m, ">cam</a>") != NULL &&
               strstr(warn, "not valid text") != NULL,
           "an invalid name is replaced by the ID");
+    free(m);
+
+    /* Malformed records are not used: old CLIENTS NAMES lines, a bad
+     * number, too few fields */
+    m = page("cam 10.0.0.1 Name\n"
+             "L\tcam2\t10.0.0.2\t1\tx\t2\t30\t3\t2048\t1024\n"
+             "L\tcam3\t10.0.0.3\t1\t60\n"
+             "O\tcam4\n", "d.lan", &n, warn, sizeof(warn));
+    CHECK(m != NULL && n == 0U && strstr(m, "<tr class") == NULL,
+          "malformed records are skipped");
     free(m);
 
     /* Bad domain */
