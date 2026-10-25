@@ -133,9 +133,15 @@ done
 # nginx set up by hand already (docs/nginx.md: nginx-camex.conf): a second
 # file with the same names would let nginx pick either, perhaps the one
 # without the user's allow/deny/auth_basic. Update that file instead
-others=$(grep -lsE "^[[:space:]]*include[[:space:]]+$MAP;" \
-             /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/* 2>/dev/null |
-         grep -vxF "$NGINX_CONF")
+# (by their real paths: Debian's sites-enabled holds symlinks to
+# sites-available, and --nginx-conf may name either)
+NGINX_CONF_REAL=$(readlink -f "$NGINX_CONF" 2>/dev/null || echo "$NGINX_CONF")
+others=$(for f in $(grep -lsE "^[[:space:]]*include[[:space:]]+$MAP;" \
+                    /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/* \
+                    2>/dev/null); do
+             r=$(readlink -f "$f" 2>/dev/null || echo "$f")
+             [ "$r" = "$NGINX_CONF_REAL" ] || echo "$f"
+         done)
 if [ -n "$others" ]; then
     for f in $others; do
         problem "nginx already has a camex configuration: $f. Run with" \
@@ -226,7 +232,8 @@ if [ -z "$INDEX" ]; then
     awk '/^# The start page\. It lists every connected device/ {exit} {print}' \
         "$TMP/nginx.conf" > "$TMP/nginx.conf.2" && mv "$TMP/nginx.conf.2" "$TMP/nginx.conf"
 fi
-install_file "$TMP/nginx.conf" "$NGINX_CONF" 644
+# A symlink (sites-enabled -> sites-available): its target is written
+install_file "$TMP/nginx.conf" "$NGINX_CONF_REAL" 644
 if [ ! -f "$MAP" ]; then
     printf 'map $host $camex_upstream {\n}\n' > "$TMP/map"
     install_file "$TMP/map" "$MAP" 644
@@ -334,7 +341,7 @@ if [ -n "$DRY" ]; then
 fi
 # nginx must load the file written here, not only some other one
 if [ -z "$DRY" ] && ! "$NGINX_BIN" -T 2>/dev/null |
-       grep -qxF "# configuration file $NGINX_CONF:"; then
+       grep -qxE "# configuration file ($(printf '%s' "$NGINX_CONF" | sed 's/[.]/\\./g')|$(printf '%s' "$NGINX_CONF_REAL" | sed 's/[.]/\\./g')):"; then
     problem "nginx does not load $NGINX_CONF: put it where nginx.conf" \
             "includes (e.g. /etc/nginx/conf.d/) or include it"
 fi
@@ -365,11 +372,13 @@ fi
 # This version's sync script, also when an older one was kept installed
 # (it differs: reported above)
 # With the service's settings only: none inherited from this shell
-SYNC_ENV="INDEX=$INDEX MAP=$MAP CAMEX=$CAMEX NGINX_BIN=$NGINX_BIN DOMAIN= \
-CONTROL= DEFAULT= UPSTREAM_PORT="
-env $SYNC_ENV sh "$SRC/camex-nginx-sync.sh" ||
-    problem "the first sync failed (see above)"
-env $SYNC_ENV sh "$SRC/camex-nginx-sync.sh" --check || PROBLEMS=$((PROBLEMS + 1))
+sync_run() {
+    env INDEX="$INDEX" MAP="$MAP" CAMEX="$CAMEX" NGINX_BIN="$NGINX_BIN" \
+        DOMAIN= CONTROL= DEFAULT= UPSTREAM_PORT= \
+        sh "$SRC/camex-nginx-sync.sh" "$@"
+}
+sync_run || problem "the first sync failed (see above)"
+sync_run --check || PROBLEMS=$((PROBLEMS + 1))
 
 if [ "$PROBLEMS" -eq 0 ]; then
     say "done: the cameras at <ID>.$DOMAIN${INDEX:+, the start page at $DOMAIN}"

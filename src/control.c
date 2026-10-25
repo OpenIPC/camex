@@ -492,7 +492,8 @@ static int control_quiet = 0;
 
 /* Client side: send cmd to path; the whole answer, without its end
  * marker, in *buf (malloc'd, NUL-terminated). 0, or -1 with a message on
- * stderr (no answer, a cut-off one, an error). */
+ * stderr (no answer, a cut-off one); -2 when nobody listens there; -3
+ * when the server answered ERROR (an unknown command, say). */
 static int control_ask(const char *path, const char *cmd, char **buf,
                        size_t *buf_len)
 {
@@ -584,7 +585,7 @@ static int control_ask(const char *path, const char *cmd, char **buf,
         (*buf)[*buf_len] = '\0';
         if (strncmp(*buf, "ERROR", 5) == 0) {
             ASK_ERR( "camex: %s: %s", path, *buf);
-            return -1;
+            return -3;   /* the server answered: it does not know cmd */
         }
     }
     return 0;
@@ -792,15 +793,16 @@ static int control_gather(const char *path, const char *cmd, char **all)
 
 /* The domain for the map and the page (#106): --domain (given), else
  * domain= of the servers' [server] block, in out. A warning on stderr when
- * they differ, when the servers differ, or when there is none */
-static void control_domain(const char *path, const char *given, char *out,
-                           size_t size)
+ * they differ, when the servers differ, or when there is none. 0, or -1
+ * (with a message) when a server did not answer */
+static int control_domain(const char *path, const char *given, char *out,
+                          size_t size)
 {
     control_path_t one;
     control_path_t *paths = &one;
     control_path_t *listed = NULL;
     char server[254] = "";
-    int n, i, differ = 0, none = 0;
+    int n, i, differ = 0, none = 0, failed = 0;
 
     if (path != NULL && path[0] != '\0') {
         n = 1;
@@ -818,8 +820,12 @@ static void control_domain(const char *path, const char *given, char *out,
 
         int rc = control_ask(paths[i], "DOMAIN\n", &buf, &len);
 
-        if (rc == -1) {
+        if (rc == -3) {
             none = 1;   /* a server older than 3.8.0: ERROR */
+        } else if (rc == -1) {
+            /* No answer (a timeout, a cut-off one): the map must not lose
+             * this server's domain, so no map this time */
+            failed = 1;
         } else if (rc == 0) {
             while (len > 0U && (buf[len - 1U] == '\n' ||
                                 buf[len - 1U] == '\r')) {
@@ -839,6 +845,11 @@ static void control_domain(const char *path, const char *given, char *out,
     }
     control_quiet = 0;
     free(listed);
+    if (failed) {
+        fprintf(stderr, "camex: a server did not answer for its domain=: "
+                "no map or page this time\n");
+        return -1;
+    }
     /* The servers disagree: all their clients get one domain */
     if (differ) {
         fprintf(stderr, "camex: the servers have different domain= (%s "
@@ -863,6 +874,7 @@ static void control_domain(const char *path, const char *given, char *out,
                     "--domain): the names are the bare client IDs\n");
         }
     }
+    return 0;
 }
 
 int control_nginx_map(const char *path, const char *domain, int port,
@@ -874,8 +886,8 @@ int control_nginx_map(const char *path, const char *domain, int port,
 
     char dom[254];
 
-    control_domain(path, domain, dom, sizeof(dom));
-    if (control_gather(path, "CLIENTS\n", &all) != 0) {
+    if (control_domain(path, domain, dom, sizeof(dom)) != 0 ||
+        control_gather(path, "CLIENTS\n", &all) != 0) {
         return 1;
     }
     map = nginx_map_format(all, dom, port, dflt, stderr, &count);
@@ -900,8 +912,8 @@ int control_nginx_index(const char *path, const char *domain)
      * a sync keeps the previous one */
     char dom[254];
 
-    control_domain(path, domain, dom, sizeof(dom));
-    if (control_gather(path, "CLIENTS INDEX\n", &all) != 0) {
+    if (control_domain(path, domain, dom, sizeof(dom)) != 0 ||
+        control_gather(path, "CLIENTS INDEX\n", &all) != 0) {
         return 1;
     }
     page = nginx_index_format(all, dom, stderr, &count);

@@ -421,6 +421,19 @@ rc=$?
     docker exec "$P-new" grep -q "server_name \*\.$DOMAIN;" /etc/nginx/conf.d/camex.conf
 check $? "another domain changes nothing, nginx included, without --force"
 
+# Debian's layout: the file in sites-available, a symlink in sites-enabled
+docker exec "$P-new" sh -c 'mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled &&
+    mv /etc/nginx/conf.d/camex.conf /etc/nginx/sites-available/camex &&
+    ln -s ../sites-available/camex /etc/nginx/sites-enabled/camex &&
+    grep -q "sites-enabled" /etc/nginx/nginx.conf'
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh \
+    --domain "$DOMAIN" --index /var/lib/camex-nginx/start.html \
+    --nginx-conf /etc/nginx/sites-enabled/camex 2>&1)
+rc=$?
+[ $rc -eq 0 ] && echo "$out" | grep -q "unchanged: /etc/nginx/sites-available/camex" &&
+    docker exec "$P-new" test -L /etc/nginx/sites-enabled/camex
+check $? "a sites-enabled symlink is managed through its target, and stays a link"
+
 if [ "$FAILS" -ne 0 ]; then
     echo "FAIL: $FAILS check(s) failed"
     exit 1
