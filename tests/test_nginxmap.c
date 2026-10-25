@@ -199,12 +199,22 @@ static void test_index(void)
         const char *row = m != NULL ? strstr(m, "//cam.openipc.click/")
                                     : NULL;
 
+        CHECK(m != NULL && strstr(m, "//cam.openipc.click/\">Gate</a>") != NULL,
+              "and keeps the configured name");
         CHECK(m != NULL && n == 1U && conf != NULL && aut != NULL &&
                   row > conf && row < aut &&
                   strstr(m, "Configured <b>1</b></label>") != NULL &&
                   strstr(m, "Auto <b>0</b>") != NULL,
               "a configured ID live as auto elsewhere stays Configured");
     }
+    free(m);
+
+    /* The largest traffic: no wrap to 0 */
+    m = page("L\tbig\t10.0.0.1\t0\t1\t1\t1\t1\t18446744073709551615\t0\n",
+             "openipc.click", &n, warn, sizeof(warn));
+    CHECK(m != NULL && strstr(m, "18&#8239;014&#8239;398&#8239;509&#8239;"
+                              "481&#8239;984 / 0.0") != NULL,
+          "2^64 - 1 bytes are 18 014 398 509 481 984 KiB, not 0");
     free(m);
 
     /* The same state in another order: an identical page */

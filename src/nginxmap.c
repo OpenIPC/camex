@@ -583,7 +583,9 @@ static void buf_kib(map_buf_t *b, unsigned long long v)
                    (v % 1024ULL) * 10ULL / 1024ULL);
         return;
     }
-    snprintf(d, sizeof(d), "%llu", (v + 512ULL) / 1024ULL);
+    /* Rounded without v + 512, which would wrap near the top */
+    snprintf(d, sizeof(d), "%llu",
+             v / 1024ULL + ((v % 1024ULL) >= 512ULL ? 1ULL : 0ULL));
     n = strlen(d);
     for (i = 0U; i < n; ++i) {
         if (i > 0U && (n - i) % 3U == 0U) {
@@ -673,8 +675,12 @@ char *nginx_index_format(const char *lines, const char *domain, FILE *warn,
      * map */
     for (i = 0; i < n; ++i) {
         if (i > 0 && strcmp(e[i].host, e[kept - 1].host) == 0) {
-            /* A [client ID] block on any server makes it Configured */
+            /* A [client ID] block on any server makes it Configured, and
+             * its name= names it */
             e[kept - 1].conf |= e[i].conf;
+            if (e[kept - 1].name[0] == '\0' && e[i].name[0] != '\0') {
+                memcpy(e[kept - 1].name, e[i].name, sizeof(e[i].name));
+            }
             if (warn != NULL && e[i].live) {
                 fprintf(warn, "camex: %s is listed twice (two servers?): "
                         "only %s kept\n", e[i].host, e[kept - 1].addr_text);
