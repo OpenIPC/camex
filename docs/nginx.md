@@ -250,7 +250,8 @@ link works over HTTP and HTTPS alike).
   stays.
 - **DNS and TLS**: the bare domain needs its own DNS record and must be in the
   certificate next to the wildcard (see [nginx](#nginx), steps 1 and 2).
-- **With the map**: the script writes the page only after its map was applied.
+- **With the map**: the script builds the page before the map, so every device
+  on it is in the map too, and publishes it only after that map was applied.
   While nginx rejects a new map or does not reload, the page stays as it was,
   so its links never lead to names that nginx does not know yet.
 - **Access**: the page lists every camera on the server. Let in only those who

@@ -94,15 +94,22 @@ sync_once() {
     lock || return 1
     trap 'cleanup; exit 1' INT TERM HUP
     replaced=
+    # The page links to names in the map. It is built first, then the map:
+    # every device on it was connected before the map was asked for, so
+    # the map has it. It goes out only once that map is applied; while
+    # nginx rejects a new map or does not reload, the old page stays
+    index_build
+    irc=$?
     sync_locked
     rc=$?
     replaced=
-    # The page links to names in the map: while a new map is not applied
-    # (nginx rejected it, did not reload), the old page stays with it
-    if [ $rc -eq 0 ]; then
-        sync_index || rc=1
-    elif [ -n "$INDEX" ]; then
-        log "the map was not applied: $INDEX left as it is"
+    if [ $rc -ne 0 ]; then
+        [ $irc -eq 0 ] && log "the map was not applied: $INDEX left as it is"
+        rm -f "${itmp-}"
+    elif [ $irc -eq 0 ]; then
+        index_publish || rc=1
+    elif [ $irc -eq 1 ]; then
+        rc=1
     fi
     trap - INT TERM HUP
     unlock
@@ -171,10 +178,10 @@ sync_locked() {
     return 1
 }
 
-# The start page: replaced in one step (rename) when it changed, so nginx
-# never serves half of it
-sync_index() {
-    [ -n "$INDEX" ] || return 0
+# The start page into $itmp: 0, 1 (a server did not answer, logged) or 2
+# (no INDEX, no page)
+index_build() {
+    [ -n "$INDEX" ] || return 2
     itmp="$INDEX.tmp.$$"
     set -- --status --format nginx-index
     [ -n "$DOMAIN" ] && set -- "$@" --domain "$DOMAIN"
@@ -184,6 +191,12 @@ sync_index() {
         log "no start page (a server did not answer); $INDEX left as it is"
         return 1
     fi
+    return 0
+}
+
+# $itmp in place of $INDEX when it changed: one rename, so nginx never
+# serves half of it
+index_publish() {
     if [ -f "$INDEX" ] && cmp -s "$itmp" "$INDEX"; then
         rm -f "$itmp"
         return 0
