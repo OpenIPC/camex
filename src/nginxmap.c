@@ -423,7 +423,8 @@ static const char *shown_name(const map_entry_t *e)
 }
 
 /* By name, letters A-Z in any case alike (bytes otherwise), then by ID:
- * the order does not depend on the servers' order or the locale */
+ * the order does not depend on the servers' order, the locale or the
+ * case of a name */
 static int cmp_shown(const void *a, const void *b)
 {
     const map_entry_t *x = a, *y = b;
@@ -436,10 +437,7 @@ static int cmp_shown(const void *a, const void *b)
         q++;
     }
     c = tolower(*p) - tolower(*q);
-    if (c != 0) {
-        return c;
-    }
-    c = strcmp(shown_name(x), shown_name(y));
+    /* Names equal but for the case: by ID (hosts are unique here) */
     return c != 0 ? c : strcmp(x->host, y->host);
 }
 

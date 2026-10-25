@@ -132,6 +132,14 @@ static void test_index(void)
           "equal names in other case: a fixed order");
     free(a);
     free(b);
+    a = page("x2 10.0.0.2 Same\nx1 10.0.0.1 same\n", "openipc.click", &n,
+             warn, sizeof(warn));
+    b = NULL;
+    CHECK(a != NULL && strstr(a, "//x1.openipc.click/") <
+                           strstr(a, "//x2.openipc.click/"),
+          "equal names in other case: by ID, not by the spelling");
+    free(a);
+    free(b);
 
     /* Bad IDs and duplicates as in the map */
     memset(warn, 0, sizeof(warn));
