@@ -227,11 +227,23 @@ map $host $camex_upstream {
 ## Start page
 
 `camex --status --format nginx-index --domain openipc.click` prints a static
-HTML page of the live cameras: one row each with its name, ID and tunnel
-address, the name linked to `//<camera ID>.openipc.click/` (no scheme, so the
-link works over HTTP and HTTPS alike).
+HTML page of the cameras in two lists, switched with the tabs at the top:
 
-| Desktop                                    | Phone (the address column is hidden)                        |
+- **Configured**: every `[client ID]` block in the server's file, connected or
+  not. A camera that is not connected has a red lamp and no link, so a missing
+  one shows at once; the tab counts them ("Configured 5 · 2 offline").
+- **Auto**: the connected cameras with no `[client ID]` block, which got their
+  address from the auto pool.
+
+Each row has the camera's name linked to `//<camera ID>.openipc.click/` (no
+scheme, so the link works over HTTP and HTTPS alike), its ID and tunnel
+address, and as in `camex --status`: **Connected** (how long it has been on
+this connection), **Last packet**, **Handshake** (how long ago, and how many
+it has had) and **RX / TX** in KiB. The page opens Configured when there are
+blocks in the file, Auto otherwise, and the browser remembers the tab chosen
+(the tabs work without JavaScript too).
+
+| Desktop                                    | Phone (fewer columns)                                       |
 |--------------------------------------------|-------------------------------------------------------------|
 | ![Start page](images/nginx-start-page.png) | ![Start page on a phone](images/nginx-start-page-phone.png) |
 
@@ -240,14 +252,16 @@ link works over HTTP and HTTPS alike).
   one is listed by its ID. A reload (`kill -HUP`) applies new names; the server
   refuses to load a file with a name that is not valid. `camex --status` shows
   the names in a NAME column, `--json` as `"name"`.
-- **Order**: by name (A–Z in any case alike), then by ID. The page holds no
-  time, so an unchanged state gives an identical file: the script replaces the
-  page only when cameras came, went or got another name, and nginx's
-  `Last-Modified` tells when that was. The page itself reloads every 30 seconds.
+- **Order**: by name (A–Z in any case alike), then by ID, connected or not, so
+  a camera keeps its place in the list.
+- **Freshness**: the ages and the traffic are those of the last sync (every 10
+  seconds with the example timer), and the page reloads itself every 30
+  seconds. The script replaces the page at every sync and logs only when the
+  number of cameras online changed.
 - **The same rules as the map**: IDs that are not a host name label are left
-  out with a warning, of an ID on two servers the lower address is kept, and
-  when a running server does not answer nothing is printed and the old page
-  stays.
+  out with a warning, of an ID on two servers the connected one (then the
+  lower address) is kept, and when a running server does not answer nothing
+  is printed and the old page stays.
 - **DNS and TLS**: the bare domain needs its own DNS record and must be in the
   certificate next to the wildcard (see [nginx](#nginx), steps 1 and 2).
 - **With the map**: the script builds the page before the map, so every device
@@ -261,9 +275,9 @@ link works over HTTP and HTTPS alike).
 - **Access**: the page lists every camera on the server. Let in only those who
   may open the cameras: the example's start page block has commented `allow` /
   `deny` and `auth_basic` lines.
-- The sync script needs a server of camex 3.6.0 or later for the page: an older
-  one answers the page's control command with an error, and the page is not
-  written (the map still is).
+- The sync script needs a server of camex 3.7.0 or later for the page: an older
+  one answers the page's control command (`CLIENTS INDEX`) with an error, and
+  the page is not written (the map still is).
 
 ## Checks
 

@@ -4,6 +4,24 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.7.0 — 2026-10-25
+
+- nginx start page (#110): two tabs, **Configured** (every `[client ID]` block of the
+  server's file, connected or not; the offline ones with a red lamp and no link, counted
+  on the tab) and **Auto** (the connected clients from the auto pool), switched with CSS
+  and remembered by the browser. Each row adds, as in `camex --status`: how long the
+  client has been connected, its last packet, its last handshake and their number, and
+  RX / TX in KiB (thousands grouped). On a phone fewer columns are shown. Sorted by name
+  in both tabs, connected or not.
+- Control socket: a new `CLIENTS INDEX` command (one tab-separated record per live
+  client with its numbers, and per configured client that is not connected); `CLIENTS`
+  and `CLIENTS NAMES` are unchanged. `--format nginx-index` needs a 3.7.0 server.
+- `camex-nginx-sync.sh`: the page changes at every run now (ages, traffic); the log says
+  so only when the number of devices online changed.
+- Tests: unit tests of both tabs, offline rows, the values and malformed records; the
+  nginx e2e test checks an offline configured client, the tabs, the handshakes against
+  `--json`, and that the traffic on the page grows with pings.
+
 ## 3.6.0 — 2026-10-25
 
 - nginx start page (#105): `camex --status --format nginx-index [--domain …]` prints a
