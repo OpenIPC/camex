@@ -167,7 +167,7 @@ echo "$conf_part" | grep -qF '<tr class="dev off"><td class="lamp"><span class="
     echo "$home" | grep -qF 'Configured <b>2</b> &middot; <i>1 offline</i>'
 check $? "CAM-Z, configured and never connected, is listed offline without a link"
 hs=$(docker exec "$P-srv" camex --status --json | python3 -c 'import json,sys; print([c for s in json.load(sys.stdin)["servers"] for c in s["clients"] if c["id"]=="CAM-A"][0]["handshakes"])')
-echo "$home" | grep -F "//cam-a.$DOMAIN/" | grep -qE "<td class=\"hs\">[0-9dhms]+ ago &middot; $hs</td><td class=\"tr\">[0-9.]+ / [0-9.]+</td>"
+echo "$home" | grep -F "//cam-a.$DOMAIN/" | grep -qE "<td class=\"hs\">[0-9dhms]+ ago &middot; $hs</td><td class=\"tr\">[0-9.&#;]+ / [0-9.&#;]+</td>"
 check $? "CAM-A's row has its handshakes ($hs, as --json says), ages and traffic"
 ok=0
 for host in $(echo "$home" | sed -n 's|.*<a href="//\([^/"]*\)/">.*|\1|p'); do
@@ -183,7 +183,11 @@ check $? "--status and --json show the name"
 
 echo "== 2. a sync without a change"
 before=$(reloads)
-rx_before=$(get "$DOMAIN" | grep -F "//cam-a.$DOMAIN/" | sed -n 's|.*<td class="tr">\([0-9.]*\) / .*|\1|p')
+rx_of_a() {  # CAM-A's RX on the page, in KiB, without the thousands' spaces
+    get "$DOMAIN" | grep -F "//cam-a.$DOMAIN/" | sed -e 's/&#8239;//g' |
+        sed -n 's|.*<td class="tr">\([0-9.]*\) / .*|\1|p'
+}
+rx_before=$(rx_of_a)
 addr_a=$(docker exec "$P-srv" camex --status --json | python3 -c 'import json,sys; print([c for s in json.load(sys.stdin)["servers"] for c in s["clients"] if c["id"]=="CAM-A"][0]["address"])')
 docker exec "$P-srv" ping -c 20 -i 0.2 -s 1000 "$addr_a" >/dev/null 2>&1
 sleep 1
@@ -192,7 +196,7 @@ out=$(sync)
 check $? "nginx is not reloaded ($before -> $(reloads))"
 ! echo "$out" | grep -q "start page updated"
 check $? "the same devices online: the page's new values are not logged"
-rx_after=$(get "$DOMAIN" | grep -F "//cam-a.$DOMAIN/" | sed -n 's|.*<td class="tr">\([0-9.]*\) / .*|\1|p')
+rx_after=$(rx_of_a)
 python3 -c "import sys; sys.exit(0 if float('${rx_after:-0}') > float('${rx_before:-0}') else 1)"
 check $? "CAM-A's traffic on the page grows with pings ($rx_before -> $rx_after KiB)"
 docker exec "$P-srv" chmod 600 "$INDEX"
