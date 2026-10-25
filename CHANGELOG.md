@@ -4,6 +4,19 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.8.3 — 2026-10-25
+
+- The version is taken from `src/version.h` by every build (#117):
+  - Android: `android/app/build.gradle.kts` reads it at build time (`versionName` X.Y.Z,
+    `versionCode` X*10000 + Y*100 + Z). Before, the APK said 3.5.0 because the values were
+    written out by hand. The manifest has no version attributes any more, and
+    `scripts/sync-android-version.sh` is gone.
+  - The kernel module: `src/Kbuild` no longer puts `git describe` (a commit hash, as there
+    are no tags) in place of the version.
+  - `make apk` names its file after it.
+- CI checks that the APK's version matches `version.h`; the kernel module VM test checks
+  `camex.ko`'s version.
+
 ## 3.8.2 — 2026-10-25
 
 - Android: the app is "Camex", no longer "Camex VPN" (#115): the label under the launcher

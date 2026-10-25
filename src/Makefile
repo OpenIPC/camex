@@ -9,8 +9,9 @@ CC    = $(CROSS_COMPILE)gcc
 STRIP = $(CROSS_COMPILE)strip
 
 TARGET  ?= camex
-VERSION ?= $(shell git -C $(dir $(abspath $(lastword $(MAKEFILE_LIST)))) \
-                describe --tags --always --dirty 2>/dev/null || echo "unknown")
+# CAMEX_VERSION of version.h, the one place of the version (#117)
+VERSION := $(shell sed -n 's/^\#define CAMEX_VERSION "\(.*\)"/\1/p' \
+                $(dir $(abspath $(lastword $(MAKEFILE_LIST))))version.h)
 
 # Out-of-tree build directory: make BUILD_DIR=../build/x86_64
 BUILD_DIR ?= .
@@ -91,8 +92,6 @@ kmod-clean:
 
 # Android .apk package (requires Android SDK + NDK)
 apk:
-	@echo "Syncing Android version from version.h ..."
-	../scripts/sync-android-version.sh
 	cd ../android && ./gradlew assembleRelease
 	APK=$$(ls ../android/app/build/outputs/apk/release/app-release.apk ../android/app/build/outputs/apk/release/app-release-unsigned.apk 2>/dev/null | head -1); \
 	if [ -z "$$APK" ]; then echo "ERROR: APK not found" >&2; exit 1; fi; \

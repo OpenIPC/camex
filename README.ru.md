@@ -1010,9 +1010,11 @@ sudo rmmod camex
 #define CAMEX_VERSION "X.Y.Z"
 ```
 
-`versionName` и `versionCode` Android следуют за ней: `scripts/sync-android-version.sh`
-(или `make apk`, который его вызывает) обновляет `android/app/build.gradle.kts` и
-`android/app/src/main/AndroidManifest.xml`.
+Оттуда её берут все сборки: приложение, модуль ядра (`MODULE_VERSION`, не из
+git), имя файла `make apk` и `versionName` и `versionCode` Android, которые
+`android/app/build.gradle.kts` читает из `version.h` при сборке (если версию не
+прочитать, сборка падает). Больше нигде версия не хранится, синхронизировать
+нечего; CI проверяет, что версия APK совпадает с `version.h`.
 
 ### Когда поднимать версию
 
@@ -1035,8 +1037,7 @@ sudo rmmod camex
 Тегов версий и релизов по версиям нет: один релиз, `latest`, CI заменяет после
 каждого push в `master`, когда все сборки и тесты прошли.
 
-1. **В PR**: поднять `CAMEX_VERSION`, запустить `scripts/sync-android-version.sh`, добавить
-   раздел версии в `CHANGELOG.md`.
+1. **В PR**: поднять `CAMEX_VERSION` и добавить раздел версии в `CHANGELOG.md`.
 2. **Смержить в `master`**. CI удаляет старый релиз `latest` вместе с тегом и создаёт его
    заново на собранном коммите: заголовок `Camex X.Y.Z`, файлы из раздела
    [«Постоянные ссылки»](#постоянные-ссылки).

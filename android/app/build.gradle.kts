@@ -2,6 +2,18 @@ plugins {
     id("com.android.application")
 }
 
+// The version lives in src/version.h only (#117): versionName is CAMEX_VERSION,
+// versionCode MAJOR * 10000 + MINOR * 100 + PATCH. No version, no build.
+val camexVersion: String = run {
+    val header = rootProject.file("../src/version.h")
+    val m = Regex("""#define\s+CAMEX_VERSION\s+"(\d+)\.(\d+)\.(\d+)"""")
+        .find(header.readText())
+        ?: throw GradleException("no CAMEX_VERSION \"X.Y.Z\" in $header")
+    m.groupValues.drop(1).joinToString(".")
+}
+val camexVersionCode: Int = camexVersion.split(".").map { it.toInt() }
+    .let { (major, minor, patch) -> major * 10000 + minor * 100 + patch }
+
 // Release keystore path (CI secret or local env); blank/absent => unsigned build.
 val releaseKeystore: String? =
     System.getenv("CAMEX_KEYSTORE_FILE")?.takeIf { it.isNotBlank() }
@@ -14,8 +26,8 @@ android {
         applicationId = "org.openipc.camex"
         minSdk = 26
         targetSdk = 34
-        versionCode = 30500
-        versionName = "3.5.0"
+        versionCode = camexVersionCode
+        versionName = camexVersion
         // 64-bit phones and 32-bit devices (TV boxes, older phones).
         // Override with -PcamexAbis=arm64-v8a for a smaller APK.
         val abis = (project.findProperty("camexAbis") as String?)

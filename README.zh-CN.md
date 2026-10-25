@@ -939,9 +939,10 @@ linux 3.18.92 加上 `openwrt/chaos_calmer` 在 `31cce51cc7`（"kernel: bump to 
 #define CAMEX_VERSION "X.Y.Z"
 ```
 
-Android 的 `versionName` 和 `versionCode` 随之变化：`scripts/sync-android-version.sh`
-（或调用它的 `make apk`）会更新 `android/app/build.gradle.kts` 和
-`android/app/src/main/AndroidManifest.xml`。
+所有构建都从这里获取版本：应用程序、内核模块（`MODULE_VERSION`，不取自 git）、
+`make apk` 生成的文件名，以及 Android 的 `versionName` 和 `versionCode`——
+`android/app/build.gradle.kts` 在构建时从 `version.h` 读取（读不到版本则构建失败）。
+其他地方都不保存版本，无需同步；CI 会检查 APK 的版本与 `version.h` 一致。
 
 ### 何时提升版本号
 
@@ -962,8 +963,7 @@ Android 的 `versionName` 和 `versionCode` 随之变化：`scripts/sync-android
 没有版本标签，也没有按版本的发布：只有一个发布 `latest`，每次推送到 `master`
 且所有构建和测试通过后由 CI 替换。
 
-1. **在 PR 中**：更新 `CAMEX_VERSION`，运行 `scripts/sync-android-version.sh`，并在
-   `CHANGELOG.md` 中添加该版本的章节。
+1. **在 PR 中**：更新 `CAMEX_VERSION`，并在 `CHANGELOG.md` 中添加该版本的章节。
 2. **合并到 `master`**。CI 删除旧的 `latest` 发布及其标签，并在构建所用的提交上重新创建：
    标题 `Camex X.Y.Z`，以及[永久链接](#永久链接)中列出的文件。
 3. **Telegram**：当版本与之前 `latest` 的标题不同时，CI 会将 APK 发送到 OpenIPC

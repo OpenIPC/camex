@@ -162,6 +162,14 @@ fi
 wait $qemu || true
 tr -d '\r' < vm.log | grep -E "^ok:|^FAIL:|^mode:|^concurrent|^read |^RESULT|^guest-log" \
     | tee result.txt
+# The module's version is CAMEX_VERSION of version.h (#117), not git's
+want=$(sed -n 's/^#define CAMEX_VERSION "\(.*\)"/\1/p' /tmp/m/version.h)
+got=$(strings /tmp/m/camex.ko | sed -n 's/^version=//p' | head -1)
+if [ -n "$want" ] && [ "$got" = "$want" ]; then
+    echo "ok: camex.ko version $got (version.h)" | tee -a result.txt
+else
+    echo "FAIL: camex.ko version '$got', version.h '$want'" | tee -a result.txt
+fi
 if [ -n "$CLIENT" ]; then
     if [ $PINGED = 1 ]; then
         echo "ok: client: the server pings 10.200.0.2 through camex.ko" | tee -a result.txt
