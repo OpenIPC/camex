@@ -38,3 +38,19 @@ sudo systemctl daemon-reload
 sudo systemctl enable camex
 sudo systemctl start camex
 ```
+
+### nginx in front of the clients
+
+Each client's web UI at `http://<client ID>.<domain>/` and a start page of
+all devices at `http://<domain>/`, with the domain given once:
+
+```sh
+# Installs the nginx server blocks, the sync script, its service and timer;
+# sets domain= in /etc/camex/camex.conf and reloads the camex servers
+sudo examples/camex-nginx-setup.sh --domain openipc.click
+# Checks the whole setup at any time: servers, domain, nginx, start page, DNS
+sudo camex-nginx-sync.sh --check
+```
+
+DNS records for `*.<domain>` and `<domain>`, TLS, the firewall and the steps
+by hand are in [docs/nginx.md](../docs/nginx.md).
