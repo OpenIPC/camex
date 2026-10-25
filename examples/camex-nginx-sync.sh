@@ -15,14 +15,15 @@
 #        camex-nginx-sync.sh --loop 10  every 10 seconds
 #
 # Settings (environment):
-#   DOMAIN         the domain after the client ID (cam.example.lan)
+#   DOMAIN         the domain after the client ID (openipc.click)
 #   UPSTREAM_PORT  the clients' web port (80)
 #   DEFAULT        where unknown names go, <IPv4>:<port> (empty: nginx's
 #                  offline page in nginx-camex.conf)
 #   CONTROL        one server's control socket (empty: every server)
 #   MAP            the map file nginx includes (/etc/nginx/camex-map.conf)
 #   INDEX          the start page nginx serves on the bare domain, e.g.
-#                  /var/lib/camex-nginx/index.html (empty: no page); its
+#                  /var/lib/camex-nginx/index.html (empty: no updates; a
+#                  page written before stays until it is removed); its
 #                  directory must exist
 #   CAMEX, NGINX_BIN  the programs (camex, nginx; not NGINX, which nginx
 #                  itself reads)
@@ -35,7 +36,7 @@ if ! command -v flock >/dev/null 2>&1; then
     exit 2
 fi
 
-DOMAIN=${DOMAIN-cam.example.lan}
+DOMAIN=${DOMAIN-openipc.click}
 UPSTREAM_PORT=${UPSTREAM_PORT:-80}
 DEFAULT=${DEFAULT-}
 CONTROL=${CONTROL-}

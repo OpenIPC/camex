@@ -37,7 +37,7 @@ P="camex-nginx-$$"
 NET_NAME="$P-net"
 BUILD_CTX="$(mktemp -d)"
 PSK="nginx-test"
-DOMAIN="cam.test"
+DOMAIN="openipc.click"
 INDEX="/var/lib/camex-nginx/index.html"
 # CAM-A's name= has HTML characters and Cyrillic
 NAME_A='Склад <1> & "A"'
@@ -182,6 +182,10 @@ out=$(docker exec -e DOMAIN="$DOMAIN" -e NGINX_BIN=nginx-counting \
 echo "$out" | grep -q "cannot write /nonexistent/index.html.tmp.* (does the directory of INDEX exist?)" &&
     ! echo "$out" | grep -q "did not answer"
 check $? "a missing page directory is named, not blamed on the server"
+docker exec "$P-srv" sh -c 'camex --status --format nginx-index > /dev/full' 2>&1 | grep -q "cannot write the start page" &&
+    ! docker exec "$P-srv" sh -c 'camex --status --format nginx-index > /dev/full' 2>/dev/null &&
+    ! docker exec "$P-srv" sh -c 'camex --status --format nginx-map > /dev/full' 2>/dev/null
+check $? "a write that fails (a full disk) is an error, not a cut-off page or map"
 
 echo "== 3. an ID that is no host name"
 client bad_id

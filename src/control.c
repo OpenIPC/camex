@@ -686,6 +686,19 @@ int control_status(const char *path, int json)
     return ok == n ? 0 : 1;
 }
 
+/* text to stdout, whole: 0, or 1 with a message (a full disk, say), so a
+ * script never takes a cut-off map or page for a good one */
+static int control_put(const char *text, const char *what)
+{
+    if (fputs(text, stdout) == EOF || fflush(stdout) != 0 ||
+        ferror(stdout)) {
+        fprintf(stderr, "camex: cannot write the %s: %s\n", what,
+                strerror(errno));
+        return 1;
+    }
+    return 0;
+}
+
 /* cmd to every server (path: only that one): their answers one after
  * the other in *all (malloc'd). 0, or 1 with a message on stderr */
 static int control_gather(const char *path, const char *cmd, char **all)
@@ -759,6 +772,7 @@ int control_nginx_map(const char *path, const char *domain, int port,
 {
     char *all = NULL, *map;
     size_t count = 0U;
+    int rc;
 
     if (control_gather(path, "CLIENTS\n", &all) != 0) {
         return 1;
@@ -770,16 +784,16 @@ int control_nginx_map(const char *path, const char *domain, int port,
                 "--upstream-port and --default)\n");
         return 1;
     }
-    fputs(map, stdout);
-    fflush(stdout);
+    rc = control_put(map, "map");
     free(map);
-    return 0;
+    return rc;
 }
 
 int control_nginx_index(const char *path, const char *domain)
 {
     char *all = NULL, *page;
     size_t count = 0U;
+    int rc;
 
     /* A server older than 3.6.0 answers ERROR: the page is not built, so
      * a sync keeps the previous one */
@@ -793,10 +807,9 @@ int control_nginx_index(const char *path, const char *domain)
                 "--domain)\n");
         return 1;
     }
-    fputs(page, stdout);
-    fflush(stdout);
+    rc = control_put(page, "start page");
     free(page);
-    return 0;
+    return rc;
 }
 
 #else  /* _WIN32 */

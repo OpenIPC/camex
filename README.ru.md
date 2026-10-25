@@ -380,20 +380,20 @@ CAM-C  10.200.0.4       gone 6m40s
 ### nginx перед клиентами
 
 nginx на машине сервера может открывать веб-интерфейс каждого клиента по имени,
-`http://<ID клиента>.cam.example.lan/` → `http://<его адрес в туннеле>:80/`, без
+`http://<ID клиента>.openipc.click/` → `http://<его адрес в туннеле>:80/`, без
 списка адресов, который надо вести вручную: `camex --status --format nginx-map`
 печатает `map` nginx с живыми клиентами, а `examples/camex-nginx-sync.sh` пишет
 её в файл, который подключает nginx, и перезагружает nginx, когда она изменилась.
 
 ```sh
-sudo camex --status --format nginx-map --domain cam.example.lan
+sudo camex --status --format nginx-map --domain openipc.click
 ```
 
 ```
 # camex --status --format nginx-map: generated, do not edit
 map $host $camex_upstream {
-    "cam-a.cam.example.lan" 10.200.0.2:80;
-    "cam-b.cam.example.lan" 10.200.0.3:80;
+    "cam-a.openipc.click" 10.200.0.2:80;
+    "cam-b.openipc.click" 10.200.0.3:80;
 }
 ```
 
@@ -414,13 +414,13 @@ map $host $camex_upstream {
 - Настройки скрипта: `DOMAIN`, `UPSTREAM_PORT`, `DEFAULT`, `CONTROL`, `MAP`
   (`/etc/nginx/camex-map.conf`), `INDEX`, `CAMEX`, `NGINX_BIN`.
 - **Стартовая страница** (#105): `camex --status --format nginx-index --domain
-  cam.example.lan` печатает статическую HTML-страницу со всеми живыми
-  клиентами: имя и ссылка на `//<ID клиента>.cam.example.lan/`. Имя — это
+  openipc.click` печатает статическую HTML-страницу со всеми живыми
+  клиентами: имя и ссылка на `//<ID клиента>.openipc.click/`. Имя — это
   `name=` в блоке `[client ID]` клиента на сервере (UTF-8, до 64 байт), а без
   него — ID; `--status` и `--json` тоже его показывают. С `INDEX=` скрипт
   синхронизации пишет страницу, когда она изменилась, а второй блок `server` в
   `examples/nginx-camex.conf` отдаёт её на голом домене
-  (`http://cam.example.lan/`). На странице видны все устройства: ограничьте
+  (`http://openipc.click/`). На странице видны все устройства: ограничьте
   доступ к ней так же, как к камерам.
 
   ![Стартовая страница](docs/images/nginx-start-page.png)
