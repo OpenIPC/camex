@@ -192,11 +192,16 @@ static int cmp_entry(const void *a, const void *b)
     const map_entry_t *x = a, *y = b;
     int c = strcmp(x->host, y->host);
 
-    /* The same ID twice: the lower address (numerically) first */
+    /* The same ID twice: the lower address (numerically) first, and of
+     * one address the lower name, so that the one kept does not depend on
+     * the servers' order */
     if (c != 0) {
         return c;
     }
-    return x->addr < y->addr ? -1 : x->addr > y->addr ? 1 : 0;
+    if (x->addr != y->addr) {
+        return x->addr < y->addr ? -1 : 1;
+    }
+    return strcmp(x->name, y->name);
 }
 
 int camex_name_valid(const char *name)

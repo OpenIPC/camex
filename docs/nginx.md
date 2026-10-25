@@ -176,9 +176,13 @@ route other traffic.
 
 ## nginx
 
-1. **DNS**: a wildcard record `*.cam.example.lan` pointing to the server host.
-2. **TLS** (optional): a wildcard certificate for `*.cam.example.lan`; uncomment
-   the `listen 443 ssl` lines in the example.
+1. **DNS**: a wildcard record `*.cam.example.lan` pointing to the server host,
+   and for the start page a record for `cam.example.lan` itself: a wildcard
+   does not cover the bare domain.
+2. **TLS** (optional): a certificate for both `*.cam.example.lan` and
+   `cam.example.lan` (a wildcard certificate does not cover the bare domain
+   either); uncomment the `listen 443 ssl` lines in both server blocks of the
+   example.
 3. **Server block**: copy `examples/nginx-camex.conf` to `/etc/nginx/conf.d/`
    and replace `cam.example.lan` with your domain. It includes the map, proxies
    to the camera with WebSocket support and without buffering, gives up on a
@@ -242,6 +246,11 @@ link works over HTTP and HTTPS alike).
   out with a warning, of an ID on two servers the lower address is kept, and
   when a running server does not answer nothing is printed and the old page
   stays.
+- **DNS and TLS**: the bare domain needs its own DNS record and must be in the
+  certificate next to the wildcard (see [nginx](#nginx), steps 1 and 2).
+- **With the map**: the script writes the page only after its map was applied.
+  While nginx rejects a new map or does not reload, the page stays as it was,
+  so its links never lead to names that nginx does not know yet.
 - **Access**: the page lists every camera on the server. Let in only those who
   may open the cameras: the example's start page block has commented `allow` /
   `deny` and `auth_basic` lines.

@@ -97,7 +97,13 @@ sync_once() {
     sync_locked
     rc=$?
     replaced=
-    sync_index || rc=1
+    # The page links to names in the map: while a new map is not applied
+    # (nginx rejected it, did not reload), the old page stays with it
+    if [ $rc -eq 0 ]; then
+        sync_index || rc=1
+    elif [ -n "$INDEX" ]; then
+        log "the map was not applied: $INDEX left as it is"
+    fi
     trap - INT TERM HUP
     unlock
     return $rc

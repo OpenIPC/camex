@@ -145,6 +145,18 @@ static void test_index(void)
           "both reported");
     free(m);
 
+    /* The same ID and address with other names (two servers): the same
+     * name is kept whatever the order */
+    a = page("cam 10.0.0.9 Zulu\ncam 10.0.0.9 Alpha\n", "d.lan", &n, warn,
+             sizeof(warn));
+    b = page("cam 10.0.0.9 Alpha\ncam 10.0.0.9 Zulu\n", "d.lan", &n, warn,
+             sizeof(warn));
+    CHECK(a != NULL && b != NULL && strcmp(a, b) == 0 &&
+              strstr(a, ">Alpha<") != NULL && strstr(a, "Zulu") == NULL,
+          "a duplicate with another name: the same one in any order");
+    free(a);
+    free(b);
+
     /* A name that is not valid text (not from a camex server): the ID */
     memset(warn, 0, sizeof(warn));
     m = page("cam 10.0.0.1 x\x01<script>\n", "d.lan", &n, warn,

@@ -16,7 +16,7 @@
 #    its name gets the offline page.
 # 5. A socket left behind by a killed server does not stop the sync.
 # 6. A reload that failed (nginx not running) is tried again by the next
-#    sync, although the map did not change.
+#    sync, although the map did not change; the start page waits for it.
 # The start page (#105) along the way: the bare domain lists the live
 # clients with their name= (escaped) or ID and links that reach them;
 # --status shows the name; an unchanged state leaves the file alone; bad
@@ -227,14 +227,20 @@ docker exec "$P-srv" sh -c 'printf "#!/bin/sh\n[ \"\$1\" = \"-s\" ] && exit 1\ne
 client CAM-C
 wait_registered CAM-C
 sleep 2
-out=$(docker exec -e DOMAIN="$DOMAIN" -e NGINX_BIN=nginx-down "$P-srv" camex-nginx-sync.sh 2>&1)
+out=$(docker exec -e DOMAIN="$DOMAIN" -e NGINX_BIN=nginx-down -e INDEX="$INDEX" \
+    "$P-srv" camex-nginx-sync.sh 2>&1)
 echo "$out" | grep -q "nginx did not reload" &&
     docker exec "$P-srv" grep -q "cam-c" /etc/nginx/camex-map.conf
 check $? "the failed reload is reported and the new map kept"
+echo "$out" | grep -q "the map was not applied: $INDEX left as it is" &&
+    ! docker exec "$P-srv" grep -q "cam-c" "$INDEX"
+check $? "the start page waits for the map (no link nginx does not know yet)"
 before=$(reloads)
 sync >/dev/null
 [ "$(reloads)" -gt "$before" ] && [ "$(get cam-c.$DOMAIN)" = "I am CAM-C" ]
 check $? "the next run reloads nginx although the map did not change"
+docker exec "$P-srv" grep -qF "//cam-c.$DOMAIN/" "$INDEX"
+check $? "and the start page follows"
 
 echo "== 7. one sync at a time"
 # A run that holds the lock (a slow server, say): the next one waits for it
