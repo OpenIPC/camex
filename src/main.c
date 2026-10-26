@@ -412,11 +412,8 @@ int validate_config(camex_config_t *config)
         }
 
         if (config->auto_config) {
-            if (config->client_id[0] == '\0' &&
-                camex_client_id_wait(config->client_id,
-                                     sizeof(config->client_id)) != 0) {
-                return -1;
-            }
+            /* Without --name the ID is found in camex_init(), after the
+             * keys were checked (#121) */
         } else {
             char local_ip[16];
             char local_netmask[16];
@@ -693,13 +690,6 @@ int main(int argc, char *argv[])
     }
 
     if (validate_config(&config) != 0) {
-        /* Stopped while waiting for a default route (#121): no error */
-        if (!running) {
-#ifndef _WIN32
-            closelog();
-#endif
-            return 0;
-        }
         print_usage(argv[0]);
 #ifndef _WIN32
         closelog();

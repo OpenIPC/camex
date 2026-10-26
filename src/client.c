@@ -407,13 +407,15 @@ int client_wait_for_config(void)
                 continue;
             }
         }
-        /* The server answers on this socket: keep it */
-        socket_since = time(NULL);
-        if (client_handle_net_packet(buffer, (size_t)ready) == 0 &&
-            client_state.config_received &&
-            current_config.local_cidr[0] != '\0' &&
-            current_config.gateway_ip[0] != '\0') {
-            return 0;
+        if (client_handle_net_packet(buffer, (size_t)ready) == 0) {
+            /* The server answers on this socket (a packet that passed its
+             * checks, not any packet): keep it */
+            socket_since = time(NULL);
+            if (client_state.config_received &&
+                current_config.local_cidr[0] != '\0' &&
+                current_config.gateway_ip[0] != '\0') {
+                return 0;
+            }
         }
     }
 }
@@ -579,9 +581,11 @@ void client_tick(void)
          difftime(g_now, client_state.hs_started) >=
              (double)current_config.server_timeout)) {
         log_message(LOG_ERR,
-                    "Connection lost: no answer from server %s:%d for %ds",
+                    "Connection lost: no answer from server %s:%d for %.0fs",
                     current_config.server_host, current_config.port,
-                    current_config.server_timeout);
+                    client_state.established ? client_loss_after()
+                                             : (double)current_config
+                                                   .server_timeout);
         client_link_up = 0U;
         client_state.last_recv = 0;
         client_reconnect();

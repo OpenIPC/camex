@@ -5,7 +5,8 @@
 # test-e2e-client-start.sh — a client started where the network is not
 # ready waits instead of exiting (#121)
 #
-# 1. --auto without --name and no default route: the client waits; once
+# 1. --auto without --name and no default route: a bad server key is
+#    reported at once; otherwise the client waits, and once
 #    a default route is there, its ID is the MAC of that interface, and
 #    once the server answered it is kept in /tmp/camex-id.
 # 2. A restart without a default route takes the ID from /tmp/camex-id.
@@ -113,6 +114,10 @@ box a
 MAC=$(docker exec "$P-a" cat /sys/class/net/eth0/address | tr -d ':' | tr 'a-f' 'A-F')
 GW=$(docker exec "$P-a" sh -c "ip route | awk '/^default/ {print \$3}'")
 docker exec "$P-a" ip route del default
+# A bad server key is reported at once, not after a default route came
+start a --keepalive 2 --server-pubkey AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+wait_log a EXITED 5 && ! log_of a | grep -q "No default route"
+check $? "a bad server key: it stops at once, without waiting for a route"
 start a --keepalive 2
 sleep 8
 log_of a | grep -q "No default route (or no MAC on its interface) yet" &&

@@ -425,6 +425,8 @@ static int client_id_load(char *client_id, size_t client_id_size)
     n = read(fd, text, sizeof(text) - 1U);
     close(fd);
     if (n <= 0) {
+        log_message(LOG_WARNING, "%s is empty or cannot be read: ignored, "
+                    "the ID is taken from the MAC", CAMEX_ID_FILE);
         return -1;
     }
     text[n] = '\0';
@@ -751,6 +753,14 @@ int camex_init(camex_config_t *config)
     if (client_mode) {
         if (!current_config.auto_config &&
             validate_and_prepare_client(&current_config) != 0) {
+            return -1;
+        }
+        /* The ID without --name, after the keys were checked: a bad key
+         * is reported at once, not after a default route came (#121) */
+        if (current_config.auto_config &&
+            current_config.client_id[0] == '\0' &&
+            camex_client_id_wait(current_config.client_id,
+                                 sizeof(current_config.client_id)) != 0) {
             return -1;
         }
 
