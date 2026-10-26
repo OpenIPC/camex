@@ -4,6 +4,14 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.9.2 — 2026-10-26
+
+- Android: the launcher icon's logo fits the adaptive icon again (#123). The foreground drew
+  the OpenIPC logo and wordmark out to 42 dp from the centre, beyond the 72 dp the launcher
+  shows and the 66 dp circle its mask keeps, so round and squircle masks cut off the "O" and
+  the "C". It is scaled to 71% (within 30 dp) at every density; the background and the
+  pre-Android 8 icon are unchanged.
+
 ## 3.9.1 — 2026-10-26
 
 - A client started before the network is ready waits for it instead of exiting (#121):
