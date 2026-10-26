@@ -339,9 +339,11 @@ page_protected() {
             o = gsub(/\{/, "{", l); c = gsub(/\}/, "}", l)
             if (inb) {
                 text = text " " l
-                if (l ~ /^[[:space:]]*auth_basic_user_file[[:space:]]/) uf = 1
+                # The server level covers its locations; any "off" in the
+                # block may let the page out
+                if (depth == 1 && l ~ /^[[:space:]]*auth_basic_user_file[[:space:]]/) uf = 1
                 if (l ~ /^[[:space:]]*auth_basic[[:space:]]+off[[:space:]]*;/) off = 1
-                else if (l ~ /^[[:space:]]*auth_basic[[:space:]]/) ab = 1
+                else if (depth == 1 && l ~ /^[[:space:]]*auth_basic[[:space:]]/) ab = 1
             }
             depth += o - c
             if (inb && depth <= 0) {

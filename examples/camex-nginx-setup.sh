@@ -275,18 +275,25 @@ reload_nginx() {
     return 1
 }
 
-# The group nginx's workers run as: they read the htpasswd file
+# The group nginx's workers run as: they read the htpasswd file. The
+# user directive's group, else its user's group; without the directive
+# the user nginx was built with (--user=, nobody by default)
 nginx_group() {
-    u=$("$NGINX_BIN" -T 2>/dev/null |
-        sed -n 's/^[[:space:]]*user[[:space:]]\{1,\}\([^[:space:];]*\).*/\1/p' |
-        head -n 1)
-    if [ -z "$u" ]; then
-        # Without a user directive nginx runs its workers as nobody
-        for c in www-data nginx nobody; do
-            id "$c" >/dev/null 2>&1 && { u=$c; break; }
-        done
+    ug=$("$NGINX_BIN" -T 2>/dev/null |
+         sed -n 's/^[[:space:]]*user[[:space:]]\{1,\}\([^;#]*\);.*/\1/p' |
+         head -n 1)
+    # shellcheck disable=SC2086
+    set -- $ug
+    if [ $# -ge 2 ]; then
+        echo "$2"
+        return
     fi
-    [ -n "$u" ] && id -gn "$u" 2>/dev/null
+    u=${1-}
+    if [ -z "$u" ]; then
+        u=$("$NGINX_BIN" -V 2>&1 | tr ' ' '\n' | sed -n 's/^--user=//p' | head -n 1)
+        [ -n "$u" ] || u=nobody
+    fi
+    id -gn "$u" 2>/dev/null
 }
 
 # The start page's server block of nginx's file $1 (server_name $DOMAIN,
@@ -425,6 +432,15 @@ if [ -n "$INDEX" ]; then
     if [ -n "$salt" ] && [ -z "$pw_new" ] &&
        [ "camex:$(printf '%s\n' "$PW" | openssl passwd -apr1 -salt "$salt" -stdin 2>/dev/null)" = "$line" ]; then
         say "unchanged: $HTPASSWD"
+        # Its group follows nginx's workers (their user directive may
+        # have changed)
+        if [ -z "$DRY" ]; then
+            grp=$(nginx_group)
+            [ -n "$grp" ] && chgrp "$grp" "$HTPASSWD" 2>/dev/null &&
+                chmod 640 "$HTPASSWD" 2>/dev/null ||
+                problem "cannot give $HTPASSWD mode 640 and the group of" \
+                        "nginx's workers (${grp:-none found})"
+        fi
     elif [ -n "$DRY" ]; then
         say "would write the start page's password to $HTPASSWD" \
             "${pw_new:+(a new one, kept in $PASSWORD_FILE)}"

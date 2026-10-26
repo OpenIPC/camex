@@ -521,6 +521,19 @@ check $? "the setup finds it and turns the password on, the other edits stay"
 out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" --force 2>&1)
 [ $? -eq 0 ]
 check $? "--force puts the installed file back"
+# A group given in nginx's user directive is the htpasswd file's group
+docker exec "$P-new" sh -c 'cp /etc/nginx/nginx.conf /tmp/nginx.conf.orig &&
+    sed -i "s/^user www-data;/user www-data adm;/" /etc/nginx/nginx.conf && nginx -s reload'
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" --new-password 2>&1)
+pw=$(docker exec "$P-new" cat /etc/camex/nginx-password)
+[ "$(docker exec "$P-new" stat -c '%a %G' /etc/nginx/camex.htpasswd)" = "640 adm" ] &&
+    [ "$(page_code "camex:$pw")" = 200 ]
+check $? "user www-data adm: the htpasswd file belongs to group adm, the page opens"
+docker exec "$P-new" sh -c 'cp /tmp/nginx.conf.orig /etc/nginx/nginx.conf && nginx -s reload'
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
+[ "$(docker exec "$P-new" stat -c '%a %G' /etc/nginx/camex.htpasswd)" = "640 www-data" ] &&
+    [ "$(page_code "camex:$pw")" = 200 ]
+check $? "back to user www-data: a rerun gives the unchanged htpasswd file its group"
 docker exec "$P-new" sh -c 'echo "# edited" >> /etc/nginx/conf.d/camex.conf'
 out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
 rc=$?
