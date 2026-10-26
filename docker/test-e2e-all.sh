@@ -20,6 +20,7 @@ CLIENT_NAME="camex-cli-$$"
 PASS="e2e-test-pass"
 DURATION=60  # seconds to hold connection
 LOG_DIR="/tmp/camex-e2e-logs-$$"
+BUILD_DIR=""      # the image's build directory while it exists
 FAILED_MODES=""
 
 # ── helpers ──────────────────────────────────────────────────────────
@@ -30,6 +31,9 @@ cleanup() {
     docker rm -f "$SERVER_NAME" "$CLIENT_NAME" 2>/dev/null || true
     docker network rm "$NET_NAME" 2>/dev/null || true
     rm -rf "$LOG_DIR"
+    # An interrupted image build leaves its directory (the binary, the
+    # server key) behind otherwise
+    if [ -n "$BUILD_DIR" ]; then rm -rf "$BUILD_DIR"; fi
 }
 trap cleanup EXIT
 # Ctrl+C or a cancelled job ends the script; EXIT then cleans up once (#125)
@@ -204,6 +208,7 @@ gen_server_key "$BUILD_DIR" "$CAMEX_BINARY" || { echo "ERROR: cannot create a se
 cp "$SCRIPT_DIR/Dockerfile.smoke" "$BUILD_DIR/"
 docker build -t camex:e2e -f "$BUILD_DIR/Dockerfile.smoke" "$BUILD_DIR" > /dev/null 2>&1
 rm -rf "$BUILD_DIR"
+BUILD_DIR=""
 echo "  OK"
 
 # Create log dir
