@@ -159,8 +159,10 @@ docker exec "$P-b" ip route add "$SRV/32" via "${SRV%.*}.250"
 start b --name CAM-B --keepalive 2
 sleep 25
 old=$(docker exec "$P-b" sh -c "ip -4 -o addr show eth0 | awk '{print \$4}'")
-docker exec "$P-b" sh -c "ip addr add ${SRV%.*}.177/${old#*/} dev eth0 && ip addr del $old dev eth0 &&
-    ip route del $SRV/32; ip route add default via $GW 2>/dev/null; true"
+# The old address goes first, as a reconfiguration does (deleting a
+# primary address also deletes the others where promote_secondaries is off)
+docker exec "$P-b" sh -c "ip addr del $old dev eth0 && ip addr add ${SRV%.*}.177/${old#*/} dev eth0 &&
+    ip route add default via $GW; ip -4 -o addr show eth0; ip route"
 registered CAM-B 40 && ! log_of b | grep -q EXITED
 check $? "it gets through from the new address ($old -> .177) without exiting"
 log_of b | grep -q "No answer from server .*: a new connection"
