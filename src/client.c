@@ -387,8 +387,14 @@ int client_wait_for_config(void)
                 /* Closed before a CONFIG: the server had no address yet
                  * (its pool full, or it waits for returning clients after
                  * a restart, #81). Connect again within the same wait. */
-                log_message(LOG_WARNING, "Connection to the server closed "
-                            "before its config; reconnecting");
+                /* A server whose pool is full may close it for long:
+                 * said once, then every 12th time */
+                if (renewed++ % 12U == 0U) {
+                    log_message(LOG_WARNING, "Connection to the server "
+                                "closed before its config; reconnecting "
+                                "(and so every %ds while it does)",
+                                CAMEX_RECONNECT_INTERVAL);
+                }
                 if (client_wait_reconnect() != 0) {
                     return -1;
                 }
