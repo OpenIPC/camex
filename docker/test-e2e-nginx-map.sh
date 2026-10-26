@@ -261,8 +261,9 @@ out=$(docker exec "$P-srv" timeout 5 camex --mode server --port 5897 \
     --local-cidr 10.203.0.1/24 $SERVER_KEY_ARGS --psk "$PSK" \
     --config /tmp/bad-port.conf 2>&1)
 rc=$?
-[ $rc -ne 0 ] && [ $rc -ne 124 ] && echo "$out" | grep -q "Invalid peer_port: 0 (1 to 65535, or none)"
-check $? "a server refuses peer_port=0"
+[ $rc -ne 0 ] && [ $rc -ne 124 ] && echo "$out" | grep -q "Invalid peer_port: 0 (1 to 65535, or none)" &&
+    echo "$out" | grep -q "/tmp/bad-port.conf, line 2: peer_port="
+check $? "a server refuses peer_port=0 and names the line"
 docker exec "$P-srv" sed -i '/^peer_port=none$/d' /etc/camex/camex.conf
 docker kill -s HUP "$P-srv" >/dev/null
 sleep 1
@@ -500,6 +501,26 @@ docker exec "$P-new" sed -i '/^# edited$/d' /etc/nginx/conf.d/camex.conf
 out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
 [ $? -eq 0 ] && echo "$out" | grep -q "unchanged: /etc/nginx/conf.d/camex.conf"
 check $? "and without the edit it is the installed file again"
+# Edits that hid the block from a simple reading: server_name over two
+# lines, a brace in a comment after a directive, and auth_basic off in the
+# page's location
+docker exec "$P-new" sh -c "awk '
+    /^    server_name $DOMAIN;\$/ { print \"    server_name\"; print \"        $DOMAIN;\"; next }
+    /^    location = \\/ \\{\$/ { print; print \"        auth_basic off;\"; next }
+    /^    listen 80;\$/ { print \"    listen 80; # }\"; next }
+    { print }' /etc/nginx/conf.d/camex.conf > /tmp/c && cat /tmp/c > /etc/nginx/conf.d/camex.conf &&
+    sed -i '/^    auth_basic/d' /etc/nginx/conf.d/camex.conf && nginx -s reload"
+sleep 1
+[ "$(page_code)" = 200 ] && docker exec "$P-new" grep -q "auth_basic off;" /etc/nginx/conf.d/camex.conf
+check $? "an edited start page block without a password (auth_basic off in its location)"
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
+[ "$(page_code)" = 401 ] && [ "$(page_code "camex:$pw")" = 200 ] &&
+    ! docker exec "$P-new" grep -q "auth_basic off;" /etc/nginx/conf.d/camex.conf &&
+    docker exec "$P-new" grep -q "listen 80; # }" /etc/nginx/conf.d/camex.conf
+check $? "the setup finds it and turns the password on, the other edits stay"
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" --force 2>&1)
+[ $? -eq 0 ]
+check $? "--force puts the installed file back"
 docker exec "$P-new" sh -c 'echo "# edited" >> /etc/nginx/conf.d/camex.conf'
 out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
 rc=$?

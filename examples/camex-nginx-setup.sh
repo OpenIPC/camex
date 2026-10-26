@@ -281,32 +281,52 @@ nginx_group() {
         sed -n 's/^[[:space:]]*user[[:space:]]\{1,\}\([^[:space:];]*\).*/\1/p' |
         head -n 1)
     if [ -z "$u" ]; then
-        for c in www-data nginx; do
+        # Without a user directive nginx runs its workers as nobody
+        for c in www-data nginx nobody; do
             id "$c" >/dev/null 2>&1 && { u=$c; break; }
         done
     fi
     [ -n "$u" ] && id -gn "$u" 2>/dev/null
 }
 
-# The start page's server block of nginx's file $1 (server_name $DOMAIN)
-# with the password on: commented auth_basic lines taken in, "off" made
-# "camex", the user file ours, missing lines added after its allow/deny
-# lines (or server_name), where nginx-camex.conf has them. Everything else
-# stays as it is
+# The start page's server block of nginx's file $1 (server_name $DOMAIN,
+# on one line or more) with the password on: commented auth_basic lines
+# taken in, "off" made "camex" (and dropped in its locations), the user
+# file ours, missing lines added after its allow/deny lines (or
+# server_name), where nginx-camex.conf has them. Everything else stays as
+# it is
 access_patch() {
     awk -v dom="$DOMAIN" -v pwf="$HTPASSWD" '
-        function flush(   i, page, at, t, k, ab, uf, ind, out, l, w) {
+        # A line without its comment: from a # outside quotes on
+        function code(s,   i, ch, q, r) {
+            q = ""; r = ""
+            for (i = 1; i <= length(s); i++) {
+                ch = substr(s, i, 1)
+                if (q == "" && ch == "#") break
+                if (q == "" && (ch == "\"" || ch == "\047")) q = ch
+                else if (ch == q) q = ""
+                r = r ch
+            }
+            return r
+        }
+        function flush(   i, j, page, at, t, k, ab, uf, ind, out, l, w, names) {
             page = 0
             for (i = 1; i <= nb; i++) {
-                if (bd[i] == 1 && buf[i] ~ /^[[:space:]]*server_name[[:space:]]/) {
-                    l = buf[i]
-                    sub(/^[[:space:]]*server_name[[:space:]]+/, "", l)
-                    gsub(/;/, " ", l)
-                    k = split(l, w, /[[:space:]]+/)
-                    for (t = 1; t <= k; t++) {
-                        if (tolower(w[t]) == dom) {
-                            page = i
-                        }
+                if (bd[i] != 1 || code(buf[i]) !~ /^[[:space:]]*server_name([[:space:]]|$)/) {
+                    continue
+                }
+                # The directive up to its ";", over several lines too
+                names = ""
+                for (j = i; j <= nb; j++) {
+                    names = names " " code(buf[j])
+                    if (code(buf[j]) ~ /;/) break
+                }
+                sub(/^[[:space:]]*server_name/, "", names)
+                sub(/;.*$/, "", names)
+                k = split(names, w, /[[:space:]]+/)
+                for (t = 1; t <= k; t++) {
+                    if (tolower(w[t]) == dom) {
+                        page = i
                     }
                 }
             }
@@ -318,6 +338,12 @@ access_patch() {
             ind = buf[page]
             sub(/[^[:space:]].*$/, "", ind)
             at = page
+            for (i = page; i <= nb; i++) {
+                if (bd[i] == 1 && code(buf[i]) ~ /;/) {
+                    at = i
+                    break
+                }
+            }
             for (i = 1; i <= nb; i++) {
                 if (bd[i] == 1 &&
                     buf[i] ~ /^[[:space:]]*#?[[:space:]]*(allow|deny)[[:space:]]/) {
@@ -339,6 +365,10 @@ access_patch() {
                         l = "auth_basic \"camex\";"
                     }
                     l = ind l
+                } else if (bd[i] > 1 &&
+                           code(l) ~ /^[[:space:]]*auth_basic[[:space:]]+off[[:space:]]*;[[:space:]]*$/) {
+                    # A location would let the page out without it
+                    continue
                 }
                 out[i] = l
             }
@@ -352,11 +382,10 @@ access_patch() {
             nb = 0
         }
         {
-            l = $0
-            sub(/^[[:space:]]*#.*$/, "", l)
+            l = code($0)
             o = gsub(/\{/, "{", l)
             c = gsub(/\}/, "}", l)
-            if (!inb && depth == 0 && $0 ~ /^[[:space:]]*server[[:space:]]*\{/) {
+            if (!inb && depth == 0 && l ~ /^[[:space:]]*server[[:space:]]*\{/) {
                 inb = 1
             }
             if (!inb) {
@@ -402,22 +431,29 @@ if [ -n "$INDEX" ]; then
     else
         hash=$(printf '%s\n' "$PW" | openssl passwd -apr1 -stdin) && [ -n "$hash" ] ||
             { problem "openssl cannot hash the password"; exit 1; }
-        if [ -n "$pw_new" ]; then
-            printf '%s\n' "$PW" > "$TMP/password" &&
-                put_file "$TMP/password" "$PASSWORD_FILE" 600 &&
-                say "wrote: $PASSWORD_FILE (a new password)" || exit 1
-        fi
         # Other users someone added to the file stay
         { grep -v '^camex:' "$HTPASSWD" 2>/dev/null
           printf 'camex:%s\n' "$hash"; } > "$TMP/htpasswd"
         grp=$(nginx_group)
-        if [ -n "$grp" ]; then
-            put_file "$TMP/htpasswd" "$HTPASSWD" 640 "$grp" || exit 1
-        else
-            # No user for nginx's workers found: readable for all (a hash)
-            put_file "$TMP/htpasswd" "$HTPASSWD" 644 || exit 1
+        if [ -z "$grp" ]; then
+            problem "no user for nginx's workers found (user in nginx.conf):" \
+                    "$HTPASSWD not written"
+            exit 1
         fi
+        # nginx's file first: until the new password is saved, the one
+        # saved before is the one that does not work, and it is printed
+        put_file "$TMP/htpasswd" "$HTPASSWD" 640 "$grp" || exit 1
         say "wrote: $HTPASSWD (user camex)"
+        if [ -n "$pw_new" ]; then
+            if printf '%s\n' "$PW" > "$TMP/password" &&
+               put_file "$TMP/password" "$PASSWORD_FILE" 600; then
+                say "wrote: $PASSWORD_FILE (a new password)"
+            else
+                problem "the start page's password is now $PW, but" \
+                        "$PASSWORD_FILE could not keep it"
+                exit 1
+            fi
+        fi
     fi
 fi
 # Shown at the end of every run

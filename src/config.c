@@ -369,6 +369,7 @@ static int config_db_parse_file(const char *path, char *line,
     FILE *fp;
     camex_profile_t *current = NULL;
     camex_server_profile_t *client = NULL;
+    unsigned long lineno = 0UL;   /* for the errors of a value */
     enum {
         SECTION_NONE = 0,
         SECTION_DEFAULTS,
@@ -395,6 +396,8 @@ static int config_db_parse_file(const char *path, char *line,
     while (fgets(line, (int)line_size, fp) != NULL) {
         char *content;
         char *equals;
+
+        ++lineno;
         trim_whitespace(line);
         if (*line == '\0' || *line == '#' || *line == ';') {
             continue;
@@ -583,6 +586,8 @@ static int config_db_parse_file(const char *path, char *line,
             }
 
             if (rc != 0) {
+                log_message(LOG_ERR, "%s, line %lu: [server] %s=", path,
+                            lineno, content);
                 fclose(fp);
                 return -1;
             }
@@ -617,6 +622,7 @@ static int config_db_parse_file(const char *path, char *line,
         }
 
         if (config_db_apply_kv(current, content, equals + 1) != 0) {
+            log_message(LOG_ERR, "%s, line %lu: %s=", path, lineno, content);
             fclose(fp);
             return -1;
         }

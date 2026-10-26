@@ -315,6 +315,47 @@ nginx_warnings() {
             "do not reach the map (nginx-camex.conf)"
 }
 
+# Does a server block of nginx's configuration $1 (nginx -T) for the bare
+# domain $2 ask for a password: auth_basic and its user file, and no
+# auth_basic off in it (#119)
+page_protected() {
+    printf '%s\n' "$1" | awk -v dom="$2" '
+        function code(s,   i, ch, q, r) {
+            q = ""; r = ""
+            for (i = 1; i <= length(s); i++) {
+                ch = substr(s, i, 1)
+                if (q == "" && ch == "#") break
+                if (q == "" && (ch == "\"" || ch == "\047")) q = ch
+                else if (ch == q) q = ""
+                r = r ch
+            }
+            return r
+        }
+        {
+            l = code($0)
+            if (!inb && depth == 0 && l ~ /^[[:space:]]*server[[:space:]]*\{/) {
+                inb = 1; text = ""; page = 0; ab = 0; uf = 0; off = 0
+            }
+            o = gsub(/\{/, "{", l); c = gsub(/\}/, "}", l)
+            if (inb) {
+                text = text " " l
+                if (l ~ /^[[:space:]]*auth_basic_user_file[[:space:]]/) uf = 1
+                if (l ~ /^[[:space:]]*auth_basic[[:space:]]+off[[:space:]]*;/) off = 1
+                else if (l ~ /^[[:space:]]*auth_basic[[:space:]]/) ab = 1
+            }
+            depth += o - c
+            if (inb && depth <= 0) {
+                depth = 0; inb = 0
+                if (match(text, /server_name[^;]*;/)) {
+                    n = split(substr(text, RSTART + 11, RLENGTH - 12), w, /[[:space:]]+/)
+                    for (t = 1; t <= n; t++) if (tolower(w[t]) == dom) page = 1
+                }
+                if (page) { seen = 1; if (!(ab && uf && !off)) bad = 1 }
+            }
+        }
+        END { exit (seen && !bad) ? 0 : 1 }'
+}
+
 # What nginx on this host answers for host $1 on port 80, its HTTP status
 # on the last line; when port 80 only redirects to HTTPS (certbot's
 # redirect, say), what port 443 answers. More arguments go to curl
@@ -423,12 +464,12 @@ check_all() {
                              "on the bare domain"
                     fi
                     # Without curl the page is not asked below: at least
-                    # the configuration must have a password (#119)
+                    # its server block must have a password (#119)
                     if ! command -v curl >/dev/null 2>&1 &&
-                       ! printf '%s\n' "$conf" |
-                         grep -qE '^[[:space:]]*auth_basic_user_file[[:space:]]'; then
-                        warn "nginx has no auth_basic_user_file: the start" \
-                             "page has no password (camex-nginx-setup.sh)"
+                       ! page_protected "$conf" "$dom"; then
+                        warn "nginx's server block for $dom has no" \
+                             "auth_basic: the start page has no password" \
+                             "(camex-nginx-setup.sh)"
                     fi
                 fi ;;
         esac
