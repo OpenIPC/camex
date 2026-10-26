@@ -31,7 +31,10 @@ cleanup() {
     docker network rm "$P-net" >/dev/null 2>&1 || true
     rm -rf "$BUILD_CTX"
 }
-[ -n "$KEEP" ] || trap cleanup EXIT INT TERM
+[ -n "$KEEP" ] || trap cleanup EXIT
+# Ctrl+C or a cancelled job ends the script; EXIT then cleans up once (#125)
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 fail() {
     echo "FAIL: $*"

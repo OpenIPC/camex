@@ -31,7 +31,10 @@ cleanup() {
     docker network rm "$NET_NAME" 2>/dev/null || true
     rm -rf "$LOG_DIR"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+# Ctrl+C or a cancelled job ends the script; EXIT then cleans up once (#125)
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 log_section() {
     echo ""
