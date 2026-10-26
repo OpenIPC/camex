@@ -4,6 +4,30 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.9.0 — 2026-10-26
+
+- nginx start page: a **Peer** column right after Address (#119): the external IP each
+  camera connects from, as the server sees it (after NAT), linked to
+  `http://<IP>:<port>/` in a new tab (no port in the link for 80). A camera that is not
+  connected shows `—`; on a phone the column is hidden with Address. The page's panel is
+  wider (1200px) for it. `camex --status`, `--json` and the map do not change.
+- `peer_port=` in `[defaults]` or a `[client ID]` block: the port of that link, the
+  client's own value first, then `[defaults]`, then 8080; `none` shows the IP without a
+  link. 1 to 65535 or `none`, anything else stops the load; in `[server]` it is an error.
+  The server puts the port in its start page records (`CLIENTS INDEX` gets two fields
+  before the name), so a reload applies it; with an older server the column shows `—`.
+- The start page always asks for a password (#119): `examples/nginx-camex.conf` turns on
+  `auth_basic` (user `camex`, `/etc/nginx/camex.htpasswd`).
+  - `camex-nginx-setup.sh` generates the password with `openssl`, keeps it in
+    `/etc/camex/nginx-password` (0600) and prints it at the end of every run; a rerun keeps
+    it, `--new-password` makes a new one. Other users in the htpasswd file stay.
+  - In an nginx file it keeps (edited, or from an older version) it sets only the access
+    lines of the start page block, so a rerun or an update turns the password on.
+  - `camex-nginx-sync.sh --check` warns when the start page has no password, and opens it
+    with the one in `/etc/camex/nginx-password` (`PASSWORD_FILE=`).
+- Docs: `docs/nginx.md`, README (en/ru/zh-CN), `examples/README.md` and
+  `examples/camex.conf`; new screenshots of the start page.
+
 ## 3.8.3 — 2026-10-25
 
 - The version is taken from `src/version.h` by every build (#117):
