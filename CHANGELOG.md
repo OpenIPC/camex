@@ -4,6 +4,24 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.9.1 — 2026-10-26
+
+- A client started before the network is ready waits for it instead of exiting (#121):
+  - `--auto` without `--name` and no default route: it waits for one (every 5 s) to take
+    the ID from its interface's MAC; it used to exit with "Client name must be set with -n".
+  - Waiting for its config there is no 300 s limit any more ("Timeout: server did not
+    provide config"). Without an answer for `--server-timeout`, or when the handshake
+    cannot be sent, it makes a new socket and resolves the name again, so a new address or
+    route is picked up; a new address used to end it with "Initialization failed".
+  - The ID taken from the MAC is kept in `/tmp/camex-id` once the server has answered, and
+    a restart (a crash, the service, the app) takes it from there until a reboot, whatever
+    the network looks like then. `--name` still wins; the file is used only if it is a
+    regular file of camex's own user that no one else can write. Not on Windows.
+- `--keepalive 0` no longer turns off loss detection: a keepalive still goes every 60 s,
+  and a lost server is noticed after 60 s + `--server-timeout`, then the usual reconnect.
+- A new e2e test (`docker/test-e2e-client-start.sh`, run by CI); README (en/ru/zh-CN),
+  `--help`.
+
 ## 3.9.0 — 2026-10-26
 
 - nginx start page: a **Peer** column right after Address (#119): the external IP each
