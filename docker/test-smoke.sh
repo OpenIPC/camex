@@ -62,8 +62,15 @@ cleanup() {
     docker rm -f "$SERVER_NAME" "$CLIENT_NAME" 2>/dev/null || true
     docker network rm "$NET_NAME" 2>/dev/null || true
     rm -f "$PASSFILE"
+    # An interrupted image build leaves its directory (the binary, the
+    # server key) behind otherwise
+    if [ -n "$BUILD_DIR" ]; then rm -rf "$BUILD_DIR"; fi
 }
-trap cleanup EXIT INT TERM
+BUILD_DIR=""      # the image's build directory while it exists
+trap cleanup EXIT
+# Ctrl+C or a cancelled job ends the script; EXIT then cleans up once (#127)
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 echo "=== camex smoke test ==="
 echo "Binary: $CAMEX_BINARY"
@@ -101,6 +108,7 @@ gen_server_key "$BUILD_DIR" "$CAMEX_BINARY" || { echo "   cannot create a server
 cp "$SCRIPT_DIR/Dockerfile.smoke" "$BUILD_DIR/"
 docker build -t camex:smoke -f "$BUILD_DIR/Dockerfile.smoke" "$BUILD_DIR" > /dev/null
 rm -rf "$BUILD_DIR"
+BUILD_DIR=""
 echo "   OK"
 echo ""
 

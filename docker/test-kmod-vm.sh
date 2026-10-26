@@ -28,7 +28,10 @@ KVM_DEV=
 # NET_ADMIN and MKNOD: the camex server's tun device in the container
 c=$(docker create -e SMP="${SMP:-2}" --cap-add NET_ADMIN --cap-add MKNOD $KVM_DEV \
     "$IMAGE" sleep 3600)
-trap 'docker rm -f "$c" >/dev/null 2>&1 || true' EXIT INT TERM
+trap 'docker rm -f "$c" >/dev/null 2>&1 || true' EXIT
+# Ctrl+C or a cancelled job ends the script; EXIT then cleans up once (#127)
+trap 'exit 130' INT
+trap 'exit 143' TERM
 docker start "$c" >/dev/null
 docker exec "$c" mkdir -p /k/src
 for f in camex-k.c Kbuild version.h; do

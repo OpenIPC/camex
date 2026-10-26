@@ -71,7 +71,10 @@ cleanup() {
     docker network rm "$NET" >/dev/null 2>&1 || true
     rm -rf "$CTX"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+# Ctrl+C or a cancelled job ends the script; EXIT then cleans up once (#127)
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 check() { if [ "$1" = 0 ]; then echo "   ok: $2"; else echo "   FAIL: $2"; FAILS=$((FAILS + 1)); fi; }
 
