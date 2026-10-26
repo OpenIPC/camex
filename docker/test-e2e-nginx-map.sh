@@ -478,6 +478,10 @@ check $? "an older setup's start page has no password"
 out=$(docker exec -e CHECK_DNS=no "$P-new" camex-nginx-sync.sh --check 2>&1)
 echo "$out" | grep -q "WARN  the start page on $DOMAIN has no password"
 check $? "--check warns about it"
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" --dry-run 2>&1)
+[ $? -eq 0 ] && echo "$out" | grep -q "would turn on the start page's password" &&
+    echo "$out" | grep -q "then unchanged: /etc/nginx/conf.d/camex.conf" && [ "$(page_code)" = 200 ]
+check $? "--dry-run says the same as the run below, and changes nothing"
 out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
 rc=$?
 echo "$out" | sed 's/^/      /'

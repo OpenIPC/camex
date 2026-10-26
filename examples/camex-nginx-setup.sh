@@ -416,6 +416,7 @@ access_patch() {
 # password is kept, unless --new-password or there is none yet
 PW=
 PATCHED=
+DRY_SAME=
 if [ -n "$INDEX" ]; then
     if [ -z "$NEWPW" ] && [ -f "$PASSWORD_FILE" ]; then
         PW=$(head -n 1 "$PASSWORD_FILE" 2>/dev/null)
@@ -502,6 +503,8 @@ if [ -n "$INDEX" ] && [ -f "$NGINX_CONF_REAL" ]; then
         if [ -n "$DRY" ]; then
             say "would turn on the start page's password in $NGINX_CONF_REAL:"
             diff -u "$NGINX_CONF_REAL" "$TMP/patched" | sed 's/^/    /'
+            # A real run compares the installed file with the patched one
+            cmp -s "$TMP/patched" "$TMP/nginx.conf" && DRY_SAME=1
         else
             bak=$BACKUP/$(echo "$NGINX_CONF_REAL" | sed 's|^/||; s|/|_|g').$(date +%Y%m%d-%H%M%S)
             mkdir -p -m 700 "$BACKUP" && cp -p "$NGINX_CONF_REAL" "$bak" ||
@@ -515,7 +518,11 @@ if [ -n "$INDEX" ] && [ -f "$NGINX_CONF_REAL" ]; then
 fi
 # A symlink (sites-enabled -> sites-available): its target is written
 before=$PROBLEMS
-install_file "$TMP/nginx.conf" "$NGINX_CONF_REAL" 644
+if [ -n "$DRY_SAME" ]; then
+    say "then unchanged: $NGINX_CONF_REAL"
+else
+    install_file "$TMP/nginx.conf" "$NGINX_CONF_REAL" 644
+fi
 if [ "$PROBLEMS" -ne "$before" ]; then
     # nginx keeps its own file: changing camex's domain now would leave
     # the two on different domains. Its password is on already
