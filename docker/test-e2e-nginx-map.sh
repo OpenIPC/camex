@@ -20,7 +20,9 @@
 # The start page (#105) along the way: the bare domain lists the live
 # clients with their name= (escaped) or ID and links that reach them;
 # --status shows the name; an unchanged state leaves the file alone; bad
-# IDs and clients that are gone are not on it.
+# IDs and clients that are gone are not on it. It asks for a password,
+# and its Peer column links each client's external IP on its peer_port=
+# (#119).
 #
 # Usage: ./test-e2e-nginx-map.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
@@ -42,6 +44,8 @@ INDEX="/var/lib/camex-nginx/index.html"
 # CAM-A's name= has HTML characters and Cyrillic
 NAME_A='Склад <1> & "A"'
 NAME_A_HTML='Склад &lt;1&gt; &amp; &quot;A&quot;'
+# The start page's password of the hand-made setup (#119)
+PAGE_PW="e2e-page-pw"
 FAILS=0
 
 cleanup() {
@@ -64,14 +68,16 @@ sed "s/cam\.example\.lan/$DOMAIN/g" "$REPO_DIR/examples/nginx-camex.conf" > "$BU
 . "$SCRIPT_DIR/lib-keys.sh"
 gen_server_key "$BUILD_CTX" "$CAMEX_BINARY" || { echo "cannot create a server key"; exit 1; }
 # CAM-Z is configured but never connects: offline on the start page
-printf '[server]\ndomain=%s\n[client CAM-A]\nname=%s\n[client CAM-Z]\nname=Gate\n' \
+# CAM-A's peer link on port 80, the others on the default 8080 (#119)
+printf '[server]\ndomain=%s\n[client CAM-A]\nname=%s\npeer_port=80\n[client CAM-Z]\nname=Gate\n' \
     "$DOMAIN" "$NAME_A" > "$BUILD_CTX/camex.conf"
+echo "$PAGE_PW" > "$BUILD_CTX/page-pw"
 cat > "$BUILD_CTX/Dockerfile" <<'DOCKERFILE'
 FROM ubuntu:24.04
 # New clients right after the server starts: no start hold (#81)
 ENV CAMEX_POOL_HOLD=0
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
-        nginx-light curl python3 iputils-ping iproute2 >/dev/null && \
+        nginx-light curl python3 iputils-ping iproute2 openssl >/dev/null && \
     rm -rf /var/lib/apt/lists/* /etc/nginx/sites-enabled/default
 COPY camex /usr/local/bin/camex
 COPY server.key /etc/camex/server.key
@@ -80,6 +86,10 @@ RUN mkdir -p /var/lib/camex-nginx
 COPY camex-nginx-sync.sh /usr/local/bin/camex-nginx-sync.sh
 COPY nginx-camex.conf /etc/nginx/conf.d/nginx-camex.conf
 COPY examples /opt/camex-examples
+COPY page-pw /etc/camex/nginx-password
+RUN chmod 600 /etc/camex/nginx-password && \
+    printf 'camex:%s\n' "$(openssl passwd -apr1 -stdin < /etc/camex/nginx-password)" \
+        > /etc/nginx/camex.htpasswd
 # Counts nginx reloads for the test
 RUN printf '#!/bin/sh\n[ "$1" = "-s" ] && echo reload >> /tmp/reloads\nexec /usr/sbin/nginx "$@"\n' \
         > /usr/local/bin/nginx-counting && chmod +x /usr/local/bin/nginx-counting
@@ -108,8 +118,13 @@ sync() {    # sync: the example sync script in the server container; nginx
     sleep 1
 }
 
-get() {     # get <host>: what nginx serves for that name
-    docker exec "$P-srv" curl -s -m 10 -H "Host: $1" http://127.0.0.1/
+get() {     # get <host>: what nginx serves for that name (the start
+            # page's password along: the cameras ignore it)
+    docker exec "$P-srv" curl -s -m 10 -u "camex:$PAGE_PW" -H "Host: $1" http://127.0.0.1/
+}
+
+ip_of() {   # ip_of <container>: its address, the peer the server sees
+    docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$1"
 }
 
 reloads() {
@@ -177,8 +192,23 @@ for host in $(echo "$home" | sed -n 's|.*<a href="//\([^/"]*\)/">.*|\1|p'); do
     case "$(get "$host")" in "I am "*) ;; *) ok=1 ;; esac
 done
 check $ok "each link on the page reaches its client"
-docker exec "$P-srv" curl -s -m 10 -H "Host: $DOMAIN" http://127.0.0.1/other | grep -q "404"
+docker exec "$P-srv" curl -s -m 10 -u "camex:$PAGE_PW" -H "Host: $DOMAIN" http://127.0.0.1/other | grep -q "404"
 check $? "the bare domain serves nothing else"
+code=$(docker exec "$P-srv" curl -s -o /dev/null -w '%{http_code}' -m 10 -H "Host: $DOMAIN" http://127.0.0.1/)
+code2=$(docker exec "$P-srv" curl -s -o /dev/null -w '%{http_code}' -m 10 -u camex:wrong -H "Host: $DOMAIN" http://127.0.0.1/)
+[ "$code" = 401 ] && [ "$code2" = 401 ] && [ "$(get cam-a.$DOMAIN)" = "I am CAM-A" ]
+check $? "the start page asks for the password ($code, a wrong one $code2); the cameras do not"
+ip_a=$(ip_of "$P-CAM-A")
+ip_b=$(ip_of "$P-CAM-B")
+echo "$home" | grep -qF '<th class="addr">Address</th><th class="addr">Peer</th><th class="conn">'
+check $? "the Peer column right after Address"
+echo "$home" | grep -F "//cam-a.$DOMAIN/" | grep -qF "<td class=\"addr\"><a class=\"peer\" href=\"http://$ip_a/\" target=\"_blank\" rel=\"noopener\">$ip_a</a></td>" &&
+    echo "$home" | grep -F "//cam-b.$DOMAIN/" | grep -qF "<td class=\"addr\"><a class=\"peer\" href=\"http://$ip_b:8080/\" target=\"_blank\" rel=\"noopener\">$ip_b</a></td>"
+check $? "the peers: CAM-A $ip_a (peer_port=80, no port), CAM-B $ip_b:8080 (the default)"
+echo "$home" | grep -F '<span class="nm">Gate</span>' | grep -qF '<td class="addr">&mdash;</td><td class="conn">offline'
+check $? "CAM-Z, offline, has no peer"
+[ "$(docker exec "$P-srv" curl -s -m 10 "http://$ip_a/")" = "I am CAM-A" ]
+check $? "CAM-A's peer link reaches it"
 docker exec "$P-srv" camex --status --json | grep -qF '"id":"CAM-A","name":"Склад <1> & \"A\""' &&
     docker exec "$P-srv" camex --status --json | grep -qF '"id":"CAM-B","name":null' &&
     docker exec "$P-srv" camex --status | grep -E '^CAM-A ' | grep -qF "  $NAME_A"
@@ -215,6 +245,29 @@ docker exec "$P-srv" sh -c 'camex --status --format nginx-index > /dev/full' 2>&
     ! docker exec "$P-srv" sh -c 'camex --status --format nginx-index > /dev/full' 2>/dev/null &&
     ! docker exec "$P-srv" sh -c 'camex --status --format nginx-map > /dev/full' 2>/dev/null
 check $? "a write that fails (a full disk) is an error, not a cut-off page or map"
+
+echo "== 2a. peer_port= follows a reload (#119)"
+# none in [defaults]: CAM-B's IP without a link; CAM-A keeps its own 80
+docker exec "$P-srv" sh -c 'printf "[defaults]\npeer_port=none\n" >> /etc/camex/camex.conf'
+docker kill -s HUP "$P-srv" >/dev/null
+sleep 1
+sync >/dev/null
+home=$(get "$DOMAIN")
+echo "$home" | grep -F "//cam-b.$DOMAIN/" | grep -qF "<td class=\"addr\">$ip_b</td><td class=\"conn\">" &&
+    echo "$home" | grep -F "//cam-a.$DOMAIN/" | grep -qF "href=\"http://$ip_a/\""
+check $? "peer_port=none in [defaults]: CAM-B's IP is plain text, CAM-A keeps its link"
+docker exec "$P-srv" sh -c 'printf "[defaults]\npeer_port=0\n" > /tmp/bad-port.conf'
+out=$(docker exec "$P-srv" timeout 5 camex --mode server --port 5897 \
+    --local-cidr 10.203.0.1/24 $SERVER_KEY_ARGS --psk "$PSK" \
+    --config /tmp/bad-port.conf 2>&1)
+rc=$?
+[ $rc -ne 0 ] && [ $rc -ne 124 ] && echo "$out" | grep -q "Invalid peer_port: 0 (1 to 65535, or none)" &&
+    echo "$out" | grep -q "/tmp/bad-port.conf, line 2: peer_port="
+check $? "a server refuses peer_port=0 and names the line"
+docker exec "$P-srv" sed -i '/^peer_port=none$/d' /etc/camex/camex.conf
+docker kill -s HUP "$P-srv" >/dev/null
+sleep 1
+sync >/dev/null
 
 echo "== 3. an ID that is no host name"
 client bad_id
@@ -366,7 +419,8 @@ docker run -d --name "$P-new" --network "$NET_NAME" --cap-add NET_ADMIN \
 # camex.conf a symlink: the setup must change its target and keep the link
 docker exec "$P-new" sh -c 'sed -i "/^domain=/d; /^\[server\]/d" /etc/camex/camex.conf
     mv /etc/camex/camex.conf /etc/camex/real.conf && ln -s real.conf /etc/camex/camex.conf
-    rm -f /etc/nginx/conf.d/nginx-camex.conf /usr/local/bin/camex-nginx-sync.sh && nginx'
+    rm -f /etc/nginx/conf.d/nginx-camex.conf /usr/local/bin/camex-nginx-sync.sh \
+        /etc/nginx/camex.htpasswd /etc/camex/nginx-password && nginx'
 sleep 1
 out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
 rc=$?
@@ -380,19 +434,110 @@ echo "$out" | sed 's/^/      /'
     echo "$out" | grep -q "ok    nginx sends camex-check-[0-9]*\.$DOMAIN to camex" &&
     echo "$out" | grep -q "ok    nginx serves the start page on $DOMAIN"
 check $? "the setup installs it all with the domain, and --check agrees"
+pw=$(docker exec "$P-new" cat /etc/camex/nginx-password)
+page_code() {   # page_code [<user:password>]: the start page's HTTP status
+    docker exec "$P-new" curl -s -o /dev/null -w '%{http_code}' -m 10 \
+        ${1:+-u "$1"} -H "Host: $DOMAIN" http://127.0.0.1/
+}
+[ -n "$pw" ] && [ "$(docker exec "$P-new" stat -c %a /etc/camex/nginx-password)" = 600 ] &&
+    [ "$(docker exec "$P-new" stat -c '%a %G' /etc/nginx/camex.htpasswd)" = "640 www-data" ] &&
+    echo "$out" | grep -q "the start page: user camex, password $pw (in /etc/camex/nginx-password)" &&
+    [ "$(page_code)" = 401 ] && [ "$(page_code "camex:$pw")" = 200 ] &&
+    echo "$out" | grep -q "ok    the start page on $DOMAIN asks for a password"
+check $? "the start page gets a generated password, printed and kept for root only"
 docker exec "$P-new" test -L /etc/camex/camex.conf &&
     docker exec "$P-new" grep -qx "domain=$DOMAIN" /etc/camex/real.conf
 check $? "a symlinked camex.conf keeps its link, its target gets domain="
 out=$(docker exec "$P-new" camex-nginx-sync.sh --check 2>&1)
 [ $? -ne 0 ] && echo "$out" | grep -q "FAIL  camex-check-[0-9]*\.$DOMAIN does not resolve: no DNS record for \*\.$DOMAIN"
 check $? "--check fails when the domain's DNS records are missing"
-docker exec "$P-new" curl -s -m 10 -H "Host: $DOMAIN" http://127.0.0.1/ | grep -q "Camex Devices"
+docker exec "$P-new" curl -s -m 10 -u "camex:$pw" -H "Host: $DOMAIN" http://127.0.0.1/ | grep -q "Camex Devices"
 check $? "the start page answers on $DOMAIN"
 out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
 rc=$?
 [ $rc -eq 0 ] && ! echo "$out" | grep -q "wrote:" &&
-    echo "$out" | grep -q "unchanged: /etc/nginx/conf.d/camex.conf"
-check $? "run again it changes nothing"
+    echo "$out" | grep -q "unchanged: /etc/nginx/conf.d/camex.conf" &&
+    echo "$out" | grep -q "unchanged: /etc/nginx/camex.htpasswd" &&
+    [ "$(docker exec "$P-new" cat /etc/camex/nginx-password)" = "$pw" ]
+check $? "run again it changes nothing, the password stays"
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" --new-password 2>&1)
+rc=$?
+pw2=$(docker exec "$P-new" cat /etc/camex/nginx-password)
+[ $rc -eq 0 ] && [ -n "$pw2" ] && [ "$pw2" != "$pw" ] &&
+    [ "$(page_code "camex:$pw")" = 401 ] && [ "$(page_code "camex:$pw2")" = 200 ] &&
+    echo "$out" | grep -q "password $pw2 "
+check $? "--new-password makes a new one, the old one no longer opens the page"
+pw=$pw2
+# An install of an older version: its start page block with the access
+# lines commented out, as nginx-camex.conf had them. The setup takes them
+# in, and the file is then the one it installs
+docker exec "$P-new" sh -c 'sed -i "s/^    auth_basic/    # auth_basic/" /etc/nginx/conf.d/camex.conf && nginx -s reload'
+sleep 1
+[ "$(page_code)" = 200 ]
+check $? "an older setup's start page has no password"
+out=$(docker exec -e CHECK_DNS=no "$P-new" camex-nginx-sync.sh --check 2>&1)
+echo "$out" | grep -q "WARN  the start page on $DOMAIN has no password"
+check $? "--check warns about it"
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" --dry-run 2>&1)
+[ $? -eq 0 ] && echo "$out" | grep -q "would turn on the start page's password" &&
+    echo "$out" | grep -q "then unchanged: /etc/nginx/conf.d/camex.conf" && [ "$(page_code)" = 200 ]
+check $? "--dry-run says the same as the run below, and changes nothing"
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
+rc=$?
+echo "$out" | sed 's/^/      /'
+[ $rc -eq 0 ] && echo "$out" | grep -q "turned on the start page's password in /etc/nginx/conf.d/camex.conf" &&
+    echo "$out" | grep -q "unchanged: /etc/nginx/conf.d/camex.conf" &&
+    [ "$(page_code)" = 401 ] && [ "$(page_code "camex:$pw")" = 200 ]
+check $? "a rerun turns it on, and the file is the one the setup installs"
+# Edited by hand and without the access lines at all: they are added,
+# the other edits kept (and reported, as before)
+docker exec "$P-new" sh -c 'sed -i "/^    auth_basic/d" /etc/nginx/conf.d/camex.conf &&
+    echo "# edited" >> /etc/nginx/conf.d/camex.conf && nginx -s reload'
+sleep 1
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
+rc=$?
+[ $rc -ne 0 ] && echo "$out" | grep -q "turned on the start page's password" &&
+    echo "$out" | grep -q "kept /etc/nginx/conf.d/camex.conf: it differs" &&
+    docker exec "$P-new" grep -q "^# edited" /etc/nginx/conf.d/camex.conf &&
+    [ "$(page_code)" = 401 ] && [ "$(page_code "camex:$pw")" = 200 ]
+check $? "an edited file without them gets the access lines, its edits stay"
+docker exec "$P-new" sed -i '/^# edited$/d' /etc/nginx/conf.d/camex.conf
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
+[ $? -eq 0 ] && echo "$out" | grep -q "unchanged: /etc/nginx/conf.d/camex.conf"
+check $? "and without the edit it is the installed file again"
+# Edits that hid the block from a simple reading: server_name over two
+# lines, a brace in a comment after a directive, and auth_basic off in the
+# page's location
+docker exec "$P-new" sh -c "awk '
+    /^    server_name $DOMAIN;\$/ { print \"    server_name\"; print \"        $DOMAIN;\"; next }
+    /^    location = \\/ \\{\$/ { print; print \"        auth_basic off;\"; next }
+    /^    listen 80;\$/ { print \"    listen 80; # }\"; next }
+    { print }' /etc/nginx/conf.d/camex.conf > /tmp/c && cat /tmp/c > /etc/nginx/conf.d/camex.conf &&
+    sed -i '/^    auth_basic/d' /etc/nginx/conf.d/camex.conf && nginx -s reload"
+sleep 1
+[ "$(page_code)" = 200 ] && docker exec "$P-new" grep -q "auth_basic off;" /etc/nginx/conf.d/camex.conf
+check $? "an edited start page block without a password (auth_basic off in its location)"
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
+[ "$(page_code)" = 401 ] && [ "$(page_code "camex:$pw")" = 200 ] &&
+    ! docker exec "$P-new" grep -q "auth_basic off;" /etc/nginx/conf.d/camex.conf &&
+    docker exec "$P-new" grep -q "listen 80; # }" /etc/nginx/conf.d/camex.conf
+check $? "the setup finds it and turns the password on, the other edits stay"
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" --force 2>&1)
+[ $? -eq 0 ]
+check $? "--force puts the installed file back"
+# A group given in nginx's user directive is the htpasswd file's group
+docker exec "$P-new" sh -c 'cp /etc/nginx/nginx.conf /tmp/nginx.conf.orig &&
+    sed -i "s/^user www-data;/user www-data adm;/" /etc/nginx/nginx.conf && nginx -s reload'
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" --new-password 2>&1)
+pw=$(docker exec "$P-new" cat /etc/camex/nginx-password)
+[ "$(docker exec "$P-new" stat -c '%a %G' /etc/nginx/camex.htpasswd)" = "640 adm" ] &&
+    [ "$(page_code "camex:$pw")" = 200 ]
+check $? "user www-data adm: the htpasswd file belongs to group adm, the page opens"
+docker exec "$P-new" sh -c 'cp /tmp/nginx.conf.orig /etc/nginx/nginx.conf && nginx -s reload'
+out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
+[ "$(docker exec "$P-new" stat -c '%a %G' /etc/nginx/camex.htpasswd)" = "640 www-data" ] &&
+    [ "$(page_code "camex:$pw")" = 200 ]
+check $? "back to user www-data: a rerun gives the unchanged htpasswd file its group"
 docker exec "$P-new" sh -c 'echo "# edited" >> /etc/nginx/conf.d/camex.conf'
 out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" 2>&1)
 rc=$?
@@ -409,7 +554,7 @@ out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup
     --index /var/lib/camex-nginx/start.html --force 2>&1)
 rc=$?
 [ $rc -eq 0 ] && docker exec "$P-new" grep -q "try_files /start.html " /etc/nginx/conf.d/camex.conf &&
-    docker exec "$P-new" curl -s -m 10 -H "Host: $DOMAIN" http://127.0.0.1/ | grep -q "Camex Devices"
+    docker exec "$P-new" curl -s -m 10 -u "camex:$pw" -H "Host: $DOMAIN" http://127.0.0.1/ | grep -q "Camex Devices"
 check $? "another page file name (--index .../start.html) is served"
 out=$(docker exec -e CHECK_DNS=no "$P-new" /opt/camex-examples/camex-nginx-setup.sh --domain "$DOMAIN" \
     --index '/var/lib/a&b/index.html' 2>&1)

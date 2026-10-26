@@ -161,7 +161,10 @@ char *server_clients_list(int names, size_t *len);
 
 /* The start page's records (#110), tab-separated, one a line:
  *   L <ID> <address> <configured 0|1> <connected s> <last packet s|->
- *     <last handshake s> <handshakes> <rx bytes> <tx bytes> [<name>]
+ *     <last handshake s> <handshakes> <rx bytes> <tx bytes>
+ *     <peer IP|-> <peer link port|-> [<name>]
+ * (the peer fields since #119: 12 or 13 fields, a server before it gives
+ * 10 or 11)
  * for each live client with an ID and an address, and
  *   O <ID> <configured address|-> [<name>]
  * for each [client ID] block with no live client. malloc'd, NULL without

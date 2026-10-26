@@ -46,7 +46,9 @@ all devices at `http://<domain>/`, with the domain given once:
 
 ```sh
 # Installs the nginx server blocks, the sync script, its service and timer;
-# sets domain= in /etc/camex/camex.conf and reloads the camex servers
+# sets domain= in /etc/camex/camex.conf and reloads the camex servers; the
+# start page's password (user camex) is printed and kept in
+# /etc/camex/nginx-password (--new-password makes a new one)
 sudo examples/camex-nginx-setup.sh --domain openipc.click
 # Checks the whole setup at any time: servers, domain, nginx, start page, DNS
 sudo camex-nginx-sync.sh --check

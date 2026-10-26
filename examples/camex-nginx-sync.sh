@@ -32,6 +32,9 @@
 #                  directory must exist
 #   CHECK_DNS      no: --check skips the DNS records (a container, a
 #                  private network)
+#   PASSWORD_FILE  the start page's password (camex-nginx-setup.sh keeps it
+#                  in /etc/camex/nginx-password): --check opens the page
+#                  with it, and warns when the page has no password (#119)
 #   CAMEX, NGINX_BIN  the programs (camex, nginx; not NGINX, which nginx
 #                  itself reads)
 #
@@ -55,6 +58,8 @@ UPSTREAM_PORT=${UPSTREAM_PORT:-80}
 DEFAULT=${DEFAULT-}
 CONTROL=${CONTROL-}
 MAP=${MAP:-/etc/nginx/camex-map.conf}
+# The start page's password, as camex-nginx-setup.sh keeps it (#119)
+PASSWORD_FILE=${PASSWORD_FILE:-/etc/camex/nginx-password}
 INDEX_SET=${INDEX+set}    # INDEX= given, even empty: --check keeps it
 INDEX=${INDEX-}
 CAMEX=${CAMEX:-camex}
@@ -310,19 +315,66 @@ nginx_warnings() {
             "do not reach the map (nginx-camex.conf)"
 }
 
-# What nginx on this host answers for host $1 on port 80; when port 80
-# only redirects to HTTPS (certbot's redirect, say), what port 443 answers
+# Does a server block of nginx's configuration $1 (nginx -T) for the bare
+# domain $2 ask for a password: auth_basic and its user file, and no
+# auth_basic off in it (#119)
+page_protected() {
+    printf '%s\n' "$1" | awk -v dom="$2" '
+        function code(s,   i, ch, q, r) {
+            q = ""; r = ""
+            for (i = 1; i <= length(s); i++) {
+                ch = substr(s, i, 1)
+                if (q == "" && ch == "#") break
+                if (q == "" && (ch == "\"" || ch == "\047")) q = ch
+                else if (ch == q) q = ""
+                r = r ch
+            }
+            return r
+        }
+        {
+            l = code($0)
+            if (!inb && depth == 0 && l ~ /^[[:space:]]*server[[:space:]]*\{/) {
+                inb = 1; text = ""; page = 0; ab = 0; uf = 0; off = 0
+            }
+            o = gsub(/\{/, "{", l); c = gsub(/\}/, "}", l)
+            if (inb) {
+                text = text " " l
+                # The server level covers its locations; any "off" in the
+                # block may let the page out
+                if (depth == 1 && l ~ /^[[:space:]]*auth_basic_user_file[[:space:]]/) uf = 1
+                if (l ~ /^[[:space:]]*auth_basic[[:space:]]+off[[:space:]]*;/) off = 1
+                else if (depth == 1 && l ~ /^[[:space:]]*auth_basic[[:space:]]/) ab = 1
+            }
+            depth += o - c
+            if (inb && depth <= 0) {
+                depth = 0; inb = 0
+                if (match(text, /server_name[^;]*;/)) {
+                    n = split(substr(text, RSTART + 11, RLENGTH - 12), w, /[[:space:]]+/)
+                    for (t = 1; t <= n; t++) if (tolower(w[t]) == dom) page = 1
+                }
+                if (page) { seen = 1; if (!(ab && uf && !off)) bad = 1 }
+            }
+        }
+        END { exit (seen && !bad) ? 0 : 1 }'
+}
+
+# What nginx on this host answers for host $1 on port 80, its HTTP status
+# on the last line; when port 80 only redirects to HTTPS (certbot's
+# redirect, say), what port 443 answers. More arguments go to curl
+# (-u user:password)
 probe() {
-    pb=$(curl -s -m 5 -H "Host: $1" -w '\n%{http_code}' http://127.0.0.1/ 2>/dev/null)
+    ph=$1
+    shift
+    pb=$(curl -s -m 5 -H "Host: $ph" -w '\n%{http_code}' "$@" \
+             http://127.0.0.1/ 2>/dev/null)
     case "${pb##*
 }" in
         301|302|307|308)
             # The name as TLS's server name too (SNI), not only Host:
-            curl -sk -m 5 --resolve "$1:443:127.0.0.1" "https://$1/" \
-                2>/dev/null ;;
+            curl -sk -m 5 --resolve "$ph:443:127.0.0.1" -w '\n%{http_code}' \
+                "$@" "https://$ph/" 2>/dev/null ;;
         *)
-            printf '%s\n' "${pb%
-*}" ;;
+            printf '%s\n' "$pb" ;;
     esac
 }
 
@@ -413,6 +465,14 @@ check_all() {
                         warn "nginx has no server_name $dom: no start page" \
                              "on the bare domain"
                     fi
+                    # Without curl the page is not asked below: at least
+                    # its server block must have a password (#119)
+                    if ! command -v curl >/dev/null 2>&1 &&
+                       ! page_protected "$conf" "$dom"; then
+                        warn "nginx's server block for $dom has no" \
+                             "auth_basic: the start page has no password" \
+                             "(camex-nginx-setup.sh)"
+                    fi
                 fi ;;
         esac
     fi
@@ -442,7 +502,38 @@ check_all() {
             if [ -n "$INDEX" ] && command -v curl >/dev/null 2>&1; then
                 b=$(probe "$dom")
                 case "$b" in
-                    *"Camex Devices"*) ok "nginx serves the start page on $dom" ;;
+                    *"Camex Devices"*)
+                        warn "the start page on $dom has no password: run" \
+                             "camex-nginx-setup.sh (or see auth_basic in" \
+                             "nginx-camex.conf)"
+                        ok "nginx serves the start page on $dom" ;;
+                    *"
+401")
+                        ok "the start page on $dom asks for a password"
+                        # With the password the setup keeps (root only)
+                        pw=$(head -n 1 "$PASSWORD_FILE" 2>/dev/null)
+                        if [ -z "$pw" ]; then
+                            ok "nginx answers on $dom (the page itself not" \
+                               "checked: no $PASSWORD_FILE)"
+                        else
+                            # To curl in a file of its own, not in ps
+                            kf=$(mktemp) &&
+                                printf 'user = "camex:%s"\n' "$pw" > "$kf" &&
+                                b=$(probe "$dom" -K "$kf") || b=
+                            [ -n "${kf-}" ] && rm -f "$kf"
+                            case "$b" in
+                                *"Camex Devices"*)
+                                    ok "nginx serves the start page on $dom" ;;
+                                *"
+401")
+                                    warn "the password in $PASSWORD_FILE does" \
+                                         "not open the start page on $dom" \
+                                         "(camex-nginx-setup.sh sets it)" ;;
+                                *)
+                                    warn "nginx does not serve the start page" \
+                                         "on $dom" ;;
+                            esac
+                        fi ;;
                     *) warn "nginx does not serve the start page on $dom" ;;
                 esac
             fi ;;

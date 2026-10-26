@@ -206,21 +206,26 @@ sudo examples/camex-nginx-setup.sh --domain openipc.click
 ```
 
 It installs the nginx server blocks as `/etc/nginx/conf.d/camex.conf`, the sync
-script with its service and timer, and the start page's directory. It sets
+script with its service and timer, the start page's directory and its password
+(see [Start page](#start-page), **Password**). It sets
 `domain=` in `/etc/camex/camex.conf` (`--config` for another file) and reloads
 the running camex servers, then checks and reloads nginx and enables the
 timer. Run it again at any time: unchanged files stay, and a file edited since
 is kept and its difference shown (`--force` replaces it and keeps the old one
 in `/var/backups/camex/`, out of nginx's directories; `camex.conf` as
-`camex.conf.bak`). `--index none` leaves out the start page, `--dry-run` only says
-what it would do. DNS and TLS (steps 1 and 2) stay yours.
+`camex.conf.bak`). `--index none` leaves out the start page, `--new-password`
+makes a new password for it, `--dry-run` only says what it would do. It needs
+`openssl` for the password. DNS and TLS (steps 1 and 2) stay yours.
 
 **The checks**: `camex-nginx-sync.sh --check` goes through the whole setup and
 prints one line per item, `ok`, `WARN` or `FAIL`. It checks that the servers
 answer, the domain, that nginx includes the map and has `server_name` for the
 domain, and what nginx really answers on port 80 of this host: a name under
 the domain with no camera must get camex's offline page, and the bare domain
-the start page. Then the start page file, the DNS records and the timer. It
+the start page, behind its password (a `WARN` when it has none; with the
+password from `/etc/camex/nginx-password`, `PASSWORD_FILE=` for another file,
+it also opens the page). Then the start page file, the DNS records and the
+timer. It
 exits with 1 on a `FAIL`. A DNS name that does not resolve is a `FAIL`; one
 that resolves to an address that is not this host's is a `WARN`, because
 behind NAT that is normal. `CHECK_DNS=no` skips the DNS items, e.g. in a
@@ -265,7 +270,13 @@ The steps by hand:
 5. **The start page** (optional): `INDEX=` in the service (set in the
    example) makes the script write it, and `StateDirectory=` creates its
    directory, `/var/lib/camex-nginx`. The second server block of the example
-   serves it on the bare domain. See [Start page](#start-page).
+   serves it on the bare domain, behind a password (user `camex`):
+
+   ```sh
+   printf 'camex:%s\n' "$(openssl passwd -apr1)" | sudo tee /etc/nginx/camex.htpasswd
+   ```
+
+   See [Start page](#start-page).
 
 The map looks like this:
 
@@ -291,7 +302,9 @@ HTML page of the cameras in two lists, switched with the tabs at the top:
 
 Each row has the camera's name linked to `//<camera ID>.openipc.click/` (no
 scheme, so the link works over HTTP and HTTPS alike), its ID and tunnel
-address, and as in `camex --status`: **Connected** (how long it has been on
+address, its **Peer**: the external IP it connects from, as the server sees it
+(after NAT), linked to `http://<IP>:<peer_port>/` in a new tab; and as in
+`camex --status`: **Connected** (how long it has been on
 this connection), **Last packet**, **Handshake** (how long ago, and how many
 it has had) and **RX / TX** in KiB. The page opens Configured when there are
 blocks in the file, Auto otherwise, and the browser remembers the tab chosen
@@ -300,6 +313,16 @@ blocks in the file, Auto otherwise, and the browser remembers the tab chosen
 | Desktop                                    | Phone (fewer columns)                                       |
 |--------------------------------------------|-------------------------------------------------------------|
 | ![Start page](images/nginx-start-page.png) | ![Start page on a phone](images/nginx-start-page-phone.png) |
+
+- **Peer links**: `peer_port=` in `[defaults]` or in a camera's `[client ID]`
+  block sets the port of the link; the camera's own value wins, then
+  `[defaults]`, then 8080. With port 80 the link has no port. `peer_port=none`
+  shows the IP as plain text: in `[defaults]` for every camera (a camera with
+  its own number still gets a link), in a `[client ID]` block for that one. A
+  reload (`kill -HUP`) applies it. Only the page has the column: `camex
+  --status` keeps its PEER column with the port, the map does not change. A
+  camera that is not connected shows `—`, and so does every camera when the
+  server is older than 3.9.0. On a phone the column is hidden with Address.
 
 - **Names** come from the server's file: `name=` in the camera's `[client ID]`
   block, UTF-8 text up to 64 bytes without control characters. A camera without
@@ -326,9 +349,16 @@ blocks in the file, Auto otherwise, and the browser remembers the tab chosen
   not know which file it wrote before. Remove the start page's server block
   from `nginx-camex.conf` (or the file, e.g. `/var/lib/camex-nginx/index.html`)
   and reload nginx.
-- **Access**: the page lists every camera on the server. Let in only those who
-  may open the cameras: the example's start page block has commented `allow` /
-  `deny` and `auth_basic` lines.
+- **Password**: the page lists every camera on the server and where it
+  connects from, so it always asks for a password (`auth_basic`, user
+  `camex`). `camex-nginx-setup.sh` generates the password once, keeps it in
+  `/etc/camex/nginx-password` (root only), writes
+  `/etc/nginx/camex.htpasswd` (other users added there stay) and prints it at
+  the end of every run. A run keeps the password, `--new-password` makes a
+  new one. In an nginx file it keeps (edited, or from an older version), it
+  sets only the access lines of the start page block, so every rerun and
+  update turns the password back on. The example's block also has commented
+  `allow` / `deny` lines, to let in only some networks besides.
 - The sync script needs a server of camex 3.7.0 or later for the page: an older
   one answers the page's control command (`CLIENTS INDEX`) with an error, and
   the page is not written (the map still is).
@@ -342,9 +372,11 @@ blocks in the file, Auto otherwise, and the browser remembers the tab chosen
 - **A camera directly**: `curl -sI http://10.200.0.2/` on the server host. No
   answer while `camex --status` lists the camera: the camera's web server, or
   the firewall's output chain.
-- **The start page**: `curl -s -H 'Host: openipc.click' http://127.0.0.1/`
-  on the server host; a 404 means the page file is missing: compare `INDEX=`
-  with the block's `root` and run the sync script by hand.
+- **The start page**: `curl -s -u camex:<password> -H 'Host: openipc.click'
+  http://127.0.0.1/` on the server host (the password is in
+  `/etc/camex/nginx-password`); a 401 means a wrong password, a 404 that the
+  page file is missing: compare `INDEX=` with the block's `root` and run the
+  sync script by hand.
 - **Everything at once**: `sudo camex-nginx-sync.sh --check` (see [nginx](#nginx)).
 - **Through nginx**: `curl -sI -H 'Host: 001a2b3c4d5e.openipc.click'
   http://127.0.0.1/`. The offline page means the name is not in the map:

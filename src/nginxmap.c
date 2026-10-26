@@ -34,6 +34,8 @@ typedef struct {
     unsigned long hs;      /* handshakes */
     unsigned long long rx; /* bytes */
     unsigned long long tx;
+    char peer[16];         /* its external IP (#119), "" = not known */
+    long peer_port;        /* the port of its link, 0 = no link */
 } map_entry_t;
 
 typedef struct {
@@ -327,14 +329,17 @@ static int parse_record(const char *p, size_t ll, const char *domain,
             return 0;
         }
     } else {
-        char *f[11];
-        int n = split_tabs(line, f, 11);
-        unsigned long long v[7];
+        char *f[13];
+        int n = split_tabs(line, f, 13);
+        unsigned long long v[8];
         int live = strcmp(f[0], "L") == 0;
+        /* The peer and its port (#119) make 12 or 13 fields; a server
+         * before them gives 10 or 11 */
+        int peered = live && n >= 12;
 
         if ((!live && strcmp(f[0], "O") != 0) || (live && n < 10) ||
             (!live && n < 3) || strlen(f[1]) >= sizeof(id) ||
-            (live && n > 11) || (!live && n > 4)) {
+            (live && n > 13) || (!live && n > 4)) {
             return 0;
         }
         snprintf(id, sizeof(id), "%s", f[1]);
@@ -366,7 +371,26 @@ static int parse_record(const char *p, size_t ll, const char *domain,
             e->hs = (unsigned long)v[4];
             e->rx = v[5];
             e->tx = v[6];
-            name = n > 10 ? f[10] : NULL;
+            if (peered) {
+                uint32_t pa;
+
+                if ((strcmp(f[10], "-") != 0 && !parse_addr(f[10], &pa)) ||
+                    (strcmp(f[11], "-") != 0 &&
+                     (!parse_num(f[11], 65535U, &v[7]) || v[7] == 0U))) {
+                    return 0;
+                }
+                if (strcmp(f[10], "-") != 0) {
+                    snprintf(e->peer, sizeof(e->peer), "%u.%u.%u.%u",
+                             (unsigned)(pa >> 24),
+                             (unsigned)((pa >> 16) & 255U),
+                             (unsigned)((pa >> 8) & 255U),
+                             (unsigned)(pa & 255U));
+                    e->peer_port = strcmp(f[11], "-") != 0 ? (long)v[7] : 0L;
+                }
+                name = n > 12 ? f[12] : NULL;
+            } else {
+                name = n > 10 ? f[10] : NULL;
+            }
         } else {
             name = n > 3 ? f[3] : NULL;
         }
@@ -618,7 +642,8 @@ static void buf_list(map_buf_t *b, const char *cls, const map_entry_t *e,
     }
     buf_printf(b, "<div class=\"rack\">\n<table>\n<thead><tr><th></th>"
                "<th>Name</th><th class=\"id\">ID</th><th class=\"addr\">"
-               "Address</th><th class=\"conn\">Connected</th><th>Last "
+               "Address</th><th class=\"addr\">Peer</th><th class=\"conn\">"
+               "Connected</th><th>Last "
                "packet</th><th class=\"hs\">Handshake</th><th>RX / TX KiB"
                "</th></tr></thead>\n<tbody>\n");
     for (i = 0; i < n; ++i) {
@@ -632,8 +657,23 @@ static void buf_list(map_buf_t *b, const char *cls, const map_entry_t *e,
                        d->host);
             buf_html(b, shown_name(d));
             buf_printf(b, "</a></td><td class=\"id\">%s</td><td "
-                       "class=\"addr\">%s</td><td class=\"conn\">",
+                       "class=\"addr\">%s</td><td class=\"addr\">",
                        d->label, d->addr_text);
+            /* Its external IP, a link to its own web port (#119) */
+            if (d->peer[0] == '\0') {
+                buf_printf(b, "&mdash;");
+            } else if (d->peer_port == 0L) {
+                buf_printf(b, "%s", d->peer);
+            } else if (d->peer_port == 80L) {
+                buf_printf(b, "<a class=\"peer\" href=\"http://%s/\" "
+                           "target=\"_blank\" rel=\"noopener\">%s</a>",
+                           d->peer, d->peer);
+            } else {
+                buf_printf(b, "<a class=\"peer\" href=\"http://%s:%ld/\" "
+                           "target=\"_blank\" rel=\"noopener\">%s</a>",
+                           d->peer, d->peer_port, d->peer);
+            }
+            buf_printf(b, "</td><td class=\"conn\">");
             buf_dur(b, d->since);
             buf_printf(b, "</td><td>");
             if (d->last < 0L) {
@@ -655,7 +695,8 @@ static void buf_list(map_buf_t *b, const char *cls, const map_entry_t *e,
                        "class=\"bulb\"></span></td><td><span class=\"nm\">");
             buf_html(b, shown_name(d));
             buf_printf(b, "</span></td><td class=\"id\">%s</td><td "
-                       "class=\"addr\">%s</td><td class=\"conn\">offline"
+                       "class=\"addr\">%s</td><td class=\"addr\">&mdash;"
+                       "</td><td class=\"conn\">offline"
                        "</td><td>&mdash;</td><td class=\"hs\">&mdash;</td>"
                        "<td>&mdash;</td></tr>\n", d->label,
                        d->addr_text[0] != '\0' ? d->addr_text : "&mdash;");
@@ -754,7 +795,7 @@ char *nginx_index_format(const char *lines, const char *domain, FILE *warn,
         ".sub{font-family:'Courier New',monospace;font-size:12px;"
         "color:var(--dim);letter-spacing:.3em;text-transform:uppercase;"
         "margin-bottom:24px;text-align:center}\n"
-        ".panel{position:relative;width:min(1080px,100%%);"
+        ".panel{position:relative;width:min(1200px,100%%);"
         "background:linear-gradient(180deg,var(--panel2),var(--panel));"
         "border:3px solid var(--brass2);border-radius:16px;"
         "box-shadow:inset 0 0 0 2px #1a1210,inset 0 0 50px rgba(0,0,0,.6),"
@@ -818,6 +859,7 @@ char *nginx_index_format(const char *lines, const char *domain, FILE *warn,
         "letter-spacing:.04em;text-shadow:0 0 10px rgba(255,179,71,.35);"
         "word-break:break-word}\n"
         "a:hover{text-decoration:underline}\n"
+        "a.peer{font-size:13px;letter-spacing:0;text-shadow:none}\n"
         ".nm{font-size:17px;letter-spacing:.04em;color:var(--dim)}\n"
         ".off td{opacity:.75}\n"
         ".empty{margin-top:14px;font-family:'Courier New',monospace;"
