@@ -106,6 +106,10 @@ int camex_del_route(const char *cidr, const char *gateway);
 /* Derive client ID from default gateway MAC */
 int derive_client_id(char *client_id, size_t client_id_size);
 
+/* A pause of about a second (Sleep on Windows, where select() without
+ * sockets does not wait) */
+void camex_pause_1s(void);
+
 /* Where a client keeps the ID it took from the MAC until a reboot (#121) */
 #define CAMEX_ID_FILE "/tmp/camex-id"
 

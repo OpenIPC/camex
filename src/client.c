@@ -277,9 +277,7 @@ static int client_wait_reconnect(void)
         memset(&client_recv_state, 0, sizeof(client_recv_state));
         for (step = 0U; step < (unsigned int)CAMEX_RECONNECT_INTERVAL &&
                         running; ++step) {
-            struct timeval pause = { 1, 0 };
-
-            select(0, NULL, NULL, NULL, &pause);
+            camex_pause_1s();
         }
         if (!running) {
             return -1;

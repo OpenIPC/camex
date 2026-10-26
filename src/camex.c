@@ -372,8 +372,7 @@ int derive_client_id(char *client_id, size_t client_id_size)
  * server has answered (#121) */
 static uint8_t client_id_from_mac = 0U;
 
-/* A pause of about a second that a stop request ends early */
-static void pause_1s(void)
+void camex_pause_1s(void)
 {
 #ifdef _WIN32
     Sleep(1000);
@@ -462,9 +461,15 @@ static void client_id_store(const char *client_id)
                     CAMEX_ID_FILE, strerror(errno));
         return;
     }
-    if (len <= 0 || write(fd, line, (size_t)len) != (ssize_t)len ||
-        fchmod(fd, 0644) != 0 || close(fd) != 0 ||
-        rename(tmp, CAMEX_ID_FILE) != 0) {
+    if (write(fd, line, (size_t)len) != (ssize_t)len ||
+        fchmod(fd, 0644) != 0) {
+        log_message(LOG_WARNING, "Cannot keep the client ID in %s: %s",
+                    CAMEX_ID_FILE, strerror(errno));
+        close(fd);
+        unlink(tmp);
+        return;
+    }
+    if (close(fd) != 0 || rename(tmp, CAMEX_ID_FILE) != 0) {
         log_message(LOG_WARNING, "Cannot keep the client ID in %s: %s",
                     CAMEX_ID_FILE, strerror(errno));
         unlink(tmp);
@@ -507,7 +512,7 @@ int camex_client_id_wait(char *client_id, size_t client_id_size)
                         "waiting for one (--name sets the ID)");
         }
         for (step = 0U; step < 5U && running; ++step) {
-            pause_1s();
+            camex_pause_1s();
         }
     }
     return -1;
@@ -796,7 +801,7 @@ int camex_init(camex_config_t *config)
                     int step;
 
                     for (step = 0; step < 5 && running; ++step) {
-                        pause_1s();
+                        camex_pause_1s();
                     }
                 }
             }
