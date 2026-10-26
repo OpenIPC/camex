@@ -44,10 +44,10 @@ int camex_domain_valid(const char *domain);
  * (C0, DEL, C1). 1 if valid. */
 int camex_name_valid(const char *name);
 
-/* Build the start page from "<client ID> <tunnel address>[ <name>]" lines
- * (the servers' CLIENTS NAMES answers): a static HTML page with one row
- * per client, its name (the ID without one) linked to
- * //<id in lower case>[.<domain>]/, so that it works over HTTP and HTTPS.
+/* Build the start page from the servers' CLIENTS INDEX records (server.h):
+ * a static HTML page with one row per client, its name (the ID without
+ * one) linked to //<id in lower case>[.<domain>]/, so that it works over
+ * HTTP and HTTPS, and its peer IP to http://<peer>[:<port>]/ (#119).
  * IDs are checked as for the map, of an ID seen twice the lower address
  * is kept, and a name that is not valid is shown as the ID. Rows are
  * sorted by name, then by ID, and the page has no time in it: an

@@ -316,7 +316,8 @@ sudo ./camex --mode server --port 5800 --config /etc/camex/camex.conf
 客户端的地址仍按其 ID 保留，返回时会拿回该地址）。若只想为配置文件中列出的 ID 提供服务，请在 `[server]`
 块中设置 `allow_unknown_clients=no`。
 用于客户端前面的 nginx 时，`[server]` 中的 `domain=` 是客户端的域名，`[client ID]`
-块中的 `name=` 是显示名称（见[客户端前面的 nginx](#客户端前面的-nginx)）。
+块中的 `name=` 是显示名称，`[defaults]` 或 `[client ID]` 块中的 `peer_port=` 是起始页
+指向客户端外部 IP 的链接端口（默认 8080，`none` 表示不加链接；见[客户端前面的 nginx](#客户端前面的-nginx)）。
 
 修改配置文件后，向服务器发送 `kill -HUP`。正在运行的自动模式客户端会在下一次
 握手时（密钥更新，最多 10 分钟后，或重新连接）获取变更后的地址、网关、MTU 或
@@ -409,13 +410,16 @@ map $host $camex_upstream {
   openipc.click` 输出一个静态 HTML 页面，客户端分两个标签页显示：**Configured**
   列出服务器文件中所有 `[client ID]` 块，未连接的以红色标出；**Auto** 列出来自自动
   地址池的已连接客户端。每行包含指向 `//<客户端 ID>.openipc.click/` 的名称链接、
-  ID 和地址、连接时长、最后一个数据包、最近一次握手及握手次数，以及以 KiB 为单位的
+  ID 和地址、**Peer**（客户端连接所用的外部 IP，链接到 `http://<IP>:<peer_port>/`，
+  在新标签页中打开；`peer_port=` 位于 `[defaults]` 或其 `[client ID]` 块，默认 8080，
+  `none` 表示纯文本；#119）、连接时长、最后一个数据包、最近一次握手及握手次数，以及以 KiB 为单位的
   RX / TX。名称来自服务器上该客户端
   `[client ID]` 块中的 `name=`（UTF-8，最多 64 字节），没有时显示 ID；
   `--status` 和 `--json` 也会显示它。设置 `INDEX=` 后，同步脚本每次运行都会写入
   页面，`examples/nginx-camex.conf` 的第二个 server 块在裸域名
-  （`http://openipc.click/`）上提供该页面。页面列出所有设备：请像限制摄像机
-  访问一样限制对它的访问。
+  （`http://openipc.click/`）上提供该页面，并需要密码（用户 `camex`）：
+  `camex-nginx-setup.sh` 生成密码，保存在 `/etc/camex/nginx-password` 中并将其
+  输出；`--new-password` 生成新密码，页面没有密码时 `--check` 会给出警告（#119）。
 
   ![起始页](docs/images/nginx-start-page.png)
 

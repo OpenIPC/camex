@@ -2778,6 +2778,8 @@ char *server_clients_index(size_t *len)
     status_buf_t b = { NULL, 0U, 0U, 0 };
     size_t i;
     char ip[16];
+    char peer[16];
+    int port;
 
     sb_printf(&b, "%s", "");
     for (i = 0U; i < server_max_clients; ++i) {
@@ -2804,12 +2806,25 @@ char *server_clients_index(size_t *len)
         }
         /* The name is the last field: it has no control characters, so
          * no tab (checked when the file was loaded) */
-        sb_printf(&b, "\t%.0f\t%u\t%llu\t%llu%s%s\n",
+        sb_printf(&b, "\t%.0f\t%u\t%llu\t%llu",
                   c->last_hs != 0 ? age_s(c->last_hs) : 0.0,
                   (unsigned)c->handshakes,
                   (unsigned long long)c->rx_bytes,
-                  (unsigned long long)c->tx_bytes,
-                  name != NULL ? "\t" : "", name != NULL ? name : "");
+                  (unsigned long long)c->tx_bytes);
+        /* Where it connects from and the port of its link (#119) */
+        if (c->addr.sin_addr.s_addr != 0U) {
+            ip_text(ntohl(c->addr.sin_addr.s_addr), peer, sizeof(peer));
+        } else {
+            snprintf(peer, sizeof(peer), "-");
+        }
+        port = config_db_peer_port(c->client_id);
+        if (port > 0) {
+            sb_printf(&b, "\t%s\t%d", peer, port);
+        } else {
+            sb_printf(&b, "\t%s\t-", peer);
+        }
+        sb_printf(&b, "%s%s\n", name != NULL ? "\t" : "",
+                  name != NULL ? name : "");
     }
     /* The configured clients that are not connected */
     for (i = 0U; i < server_db.client_count; ++i) {

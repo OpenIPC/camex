@@ -319,7 +319,9 @@ address under its ID and gets it back, see
 [Denial of service limits](#denial-of-service-limits)). To serve only the IDs
 listed in the file, set `allow_unknown_clients=no` in the `[server]` block.
 For nginx in front of the clients, `domain=` in `[server]` is the clients'
-domain and `name=` in a `[client ID]` block a display name (see
+domain, `name=` in a `[client ID]` block a display name, and `peer_port=` in
+`[defaults]` or a `[client ID]` block the port of the start page's link to the
+client's external IP (8080 by default, `none` for no link; see
 [nginx in front of the clients](#nginx-in-front-of-the-clients)).
 
 After a change to the file, `kill -HUP` the server. A running auto-mode client
@@ -430,14 +432,19 @@ map $host $camex_upstream {
   **Configured**, every `[client ID]` block of the server's file with the
   offline ones in red, and **Auto**, the connected clients from the auto pool.
   Each row has the name linked to `//<client ID>.openipc.click/`, the ID and
-  address, how long it has been connected, its last packet, its last handshake
+  address, the **Peer** (the external IP it connects from, linked to
+  `http://<IP>:<peer_port>/` in a new tab; `peer_port=` in `[defaults]` or its
+  `[client ID]` block, 8080 by default, `none` for plain text; #119), how long
+  it has been connected, its last packet, its last handshake
   and their number, and RX / TX in KiB. The name is `name=` in the client's
   `[client ID]` block on the server (UTF-8, up to 64 bytes), or the ID without
   one; `--status` and `--json` show it too. With `INDEX=` the sync
   script writes the page at every run, and the second server block of
   `examples/nginx-camex.conf` serves it on the bare domain
-  (`http://openipc.click/`). The page lists every device: limit who may open
-  it as for the cameras.
+  (`http://openipc.click/`) behind a password (user `camex`):
+  `camex-nginx-setup.sh` generates it, keeps it in `/etc/camex/nginx-password`
+  and prints it; `--new-password` makes a new one, and `--check` warns when the
+  page has none (#119).
 
   ![Start page](docs/images/nginx-start-page.png)
 

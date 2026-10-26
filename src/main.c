@@ -557,7 +557,8 @@ void print_usage(const char *progname)
            " (<id>[.<domain>] -> <address>:<port>)\n");
     printf("      --format nginx-index  A start page of the clients (HTML:"
            " Configured and Auto tabs; name,\n"
-           "                       link, address, connection, traffic)\n");
+           "                       link, address, peer link (peer_port=),"
+           " connection, traffic)\n");
     printf("      --domain <name>  With nginx-map and nginx-index: the"
            " domain after the client ID\n"
            "                       (default: domain= in [server] of the"

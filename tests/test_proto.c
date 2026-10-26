@@ -389,6 +389,75 @@ int main(void)
         }
     }
 
+    /* peer_port= (#119): the client's own, else [defaults], else 8080;
+     * none = no link, either way round; not in [server] */
+    {
+        static const char *const bad[] = {
+            "[defaults]\npeer_port=0\n",
+            "[defaults]\npeer_port=-\n",
+            "[client cam1]\npeer_port=65536\n",
+            "[client cam1]\npeer_port=+80\n",
+            "[client cam1]\npeer_port=80x\n",
+            "[client cam1]\npeer_port=None\n",
+            "[server]\npeer_port=8080\n",
+        };
+        static const struct {
+            const char *conf;
+            int cam1, cam2, other;
+        } cases[] = {
+            { "[client cam1]\nmtu=1400\n", 8080, 8080, 8080 },
+            { "[defaults]\npeer_port=81\n[client cam1]\npeer_port=8443\n"
+              "[client cam2]\nmtu=1400\n", 8443, 81, 81 },
+            { "[defaults]\npeer_port=none\n[client cam1]\npeer_port=80\n"
+              "[client cam2]\nmtu=1400\n", 80, -1, -1 },
+            { "[defaults]\npeer_port=9000\n[client cam1]\npeer_port=none\n"
+              "[client cam2]\nmtu=1400\n", -1, 9000, 9000 },
+        };
+        char path[] = "/tmp/test_proto_XXXXXX";
+        int fd = mkstemp(path);
+        FILE *fp = fd >= 0 ? fdopen(fd, "w") : NULL;
+        size_t k;
+
+        if (fp != NULL) {
+            fclose(fp);
+            for (k = 0U; k < sizeof(cases) / sizeof(cases[0]); ++k) {
+                fp = fopen(path, "w");
+                if (fp == NULL) {
+                    break;
+                }
+                fputs(cases[k].conf, fp);
+                fclose(fp);
+                config_db_free(&server_db);
+                if (config_db_load_file(path) != 0 ||
+                    config_db_peer_port("cam1") != cases[k].cam1 ||
+                    config_db_peer_port("CAM2") != cases[k].cam2 ||
+                    config_db_peer_port("auto7") != cases[k].other) {
+                    fprintf(stderr, "FAIL: peer_port= case %u: %d %d %d\n",
+                            (unsigned)k, config_db_peer_port("cam1"),
+                            config_db_peer_port("CAM2"),
+                            config_db_peer_port("auto7"));
+                    ++failures;
+                }
+            }
+            config_db_free(&server_db);
+            for (k = 0U; k < sizeof(bad) / sizeof(bad[0]); ++k) {
+                fp = fopen(path, "w");
+                if (fp == NULL) {
+                    break;
+                }
+                fputs(bad[k], fp);
+                fclose(fp);
+                if (config_db_load_file(path) == 0) {
+                    fprintf(stderr, "FAIL: bad peer_port= %u accepted\n",
+                            (unsigned)k);
+                    ++failures;
+                }
+                config_db_free(&server_db);
+            }
+            unlink(path);
+        }
+    }
+
     /* The server public key must not be all zero */
     if (crypto_set_server_pub("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=") == 0) {
         fprintf(stderr, "FAIL: an all-zero server public key was accepted\n");

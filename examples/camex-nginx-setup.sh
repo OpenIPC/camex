@@ -9,7 +9,10 @@
 #   - nginx-camex.conf as the nginx server blocks (cameras by name, the
 #     start page on the bare domain), and an empty map so nginx starts;
 #   - camex-nginx-sync.sh, its systemd service and timer;
-#   - the start page's directory;
+#   - the start page's directory, and its password (#119): user camex,
+#     the password generated once and kept in /etc/camex/nginx-password
+#     (root only), /etc/nginx/camex.htpasswd for nginx; the password is
+#     printed at the end of every run;
 #   - domain= in [server] of the server's camex.conf, then reloads the
 #     running camex servers so they hand it to the sync script.
 # Then checks and reloads nginx, enables the timer, runs one sync and
@@ -17,7 +20,8 @@
 #
 # Run it again at any time: unchanged files stay, a file that was edited
 # since is kept and its difference shown (--force replaces it, keeping the
-# old one in /var/backups/camex/).
+# old one in /var/backups/camex/). The start page always asks for the
+# password: in a kept file only its access lines (auth_basic) are set.
 #
 # Usage: camex-nginx-setup.sh --domain <domain> [options]
 #   --domain <domain>   the cameras' domain: <ID>.<domain>, the start page on
@@ -27,11 +31,12 @@
 #                       "none": no start page
 #   --nginx-conf <file> where the server blocks go
 #                       (/etc/nginx/conf.d/camex.conf)
+#   --new-password      generate a new password for the start page
 #   --force             replace files that differ from what is installed
 #   --dry-run           say what would be done, change nothing
 #
-# Needs root (except --dry-run), nginx, camex and the files of examples/
-# next to it.
+# Needs root (except --dry-run), nginx, camex, openssl (the password) and
+# the files of examples/ next to it.
 #
 
 set -u
@@ -42,6 +47,10 @@ CONF=/etc/camex/camex.conf
 INDEX=/var/lib/camex-nginx/index.html
 NGINX_CONF=/etc/nginx/conf.d/camex.conf
 MAP=/etc/nginx/camex-map.conf
+# The start page's password (#119); the path of the htpasswd file is the
+# one in nginx-camex.conf
+HTPASSWD=/etc/nginx/camex.htpasswd
+PASSWORD_FILE=/etc/camex/nginx-password
 BIN=/usr/local/bin
 # Backups of replaced files: not next to them, where nginx's
 # sites-enabled/* would load a copy too
@@ -49,6 +58,7 @@ BACKUP=/var/backups/camex
 UNITS=/etc/systemd/system
 FORCE=
 DRY=
+NEWPW=
 CAMEX=${CAMEX:-camex}
 NGINX_BIN=${NGINX_BIN:-nginx}
 PROBLEMS=0
@@ -79,6 +89,7 @@ while [ $# -gt 0 ]; do
         --config)     [ $# -ge 2 ] || usage; CONF=$2; shift 2 ;;
         --index)      [ $# -ge 2 ] || usage; INDEX=$2; shift 2 ;;
         --nginx-conf) [ $# -ge 2 ] || usage; NGINX_CONF=$2; shift 2 ;;
+        --new-password) NEWPW=1; shift ;;
         --force)      FORCE=1; shift ;;
         --dry-run)    DRY=1; shift ;;
         -h|--help)    usage ;;
@@ -128,6 +139,10 @@ done
 for p in "$CAMEX" "$NGINX_BIN"; do
     command -v "$p" >/dev/null 2>&1 || problem "$p is not installed"
 done
+if [ -n "$INDEX" ] && ! command -v openssl >/dev/null 2>&1; then
+    problem "openssl is not installed: it makes the start page's password" \
+            "(apt install openssl, dnf install openssl or apk add openssl)"
+fi
 [ "$PROBLEMS" -eq 0 ] || exit 1
 
 # nginx set up by hand already (docs/nginx.md: nginx-camex.conf): a second
@@ -224,6 +239,194 @@ install_file() {
     say "wrote: $2"
 }
 
+# put_file <made file> <destination> <mode> [<group>]: through a new file
+# next to it, renamed in one step
+put_file() {
+    nt=
+    mkdir -p "$(dirname "$2")" && nt=$(mktemp "$2.XXXXXX") &&
+        cp "$1" "$nt" && chmod "$3" "$nt" &&
+        { [ -z "${4-}" ] || chgrp "$4" "$nt"; } && mv -f "$nt" "$2" ||
+        { [ -n "$nt" ] && rm -f "$nt"; problem "cannot write $2"; return 1; }
+}
+
+# nginx checked and reloaded: 0 when it took the configuration
+reload_nginx() {
+    if ! "$NGINX_BIN" -t >/dev/null 2>&1; then
+        problem "nginx -t rejects the configuration:"
+        "$NGINX_BIN" -t 2>&1 | sed 's/^/    /' >&2
+        return 1
+    fi
+    if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] &&
+       systemctl is-active --quiet nginx; then
+        if systemctl reload nginx; then
+            say "reloaded nginx"
+            # The new workers take a moment: the check below asks them
+            sleep 1
+            return 0
+        fi
+        problem "systemctl reload nginx failed"
+    elif "$NGINX_BIN" -s reload 2>/dev/null; then
+        say "reloaded nginx"
+        sleep 1
+        return 0
+    else
+        problem "nginx did not reload: is it running?"
+    fi
+    return 1
+}
+
+# The group nginx's workers run as: they read the htpasswd file
+nginx_group() {
+    u=$("$NGINX_BIN" -T 2>/dev/null |
+        sed -n 's/^[[:space:]]*user[[:space:]]\{1,\}\([^[:space:];]*\).*/\1/p' |
+        head -n 1)
+    if [ -z "$u" ]; then
+        for c in www-data nginx; do
+            id "$c" >/dev/null 2>&1 && { u=$c; break; }
+        done
+    fi
+    [ -n "$u" ] && id -gn "$u" 2>/dev/null
+}
+
+# The start page's server block of nginx's file $1 (server_name $DOMAIN)
+# with the password on: commented auth_basic lines taken in, "off" made
+# "camex", the user file ours, missing lines added after its allow/deny
+# lines (or server_name), where nginx-camex.conf has them. Everything else
+# stays as it is
+access_patch() {
+    awk -v dom="$DOMAIN" -v pwf="$HTPASSWD" '
+        function flush(   i, page, at, t, k, ab, uf, ind, out, l, w) {
+            page = 0
+            for (i = 1; i <= nb; i++) {
+                if (bd[i] == 1 && buf[i] ~ /^[[:space:]]*server_name[[:space:]]/) {
+                    l = buf[i]
+                    sub(/^[[:space:]]*server_name[[:space:]]+/, "", l)
+                    gsub(/;/, " ", l)
+                    k = split(l, w, /[[:space:]]+/)
+                    for (t = 1; t <= k; t++) {
+                        if (tolower(w[t]) == dom) {
+                            page = i
+                        }
+                    }
+                }
+            }
+            if (!page) {
+                for (i = 1; i <= nb; i++) print buf[i]
+                nb = 0
+                return
+            }
+            ind = buf[page]
+            sub(/[^[:space:]].*$/, "", ind)
+            at = page
+            for (i = 1; i <= nb; i++) {
+                if (bd[i] == 1 &&
+                    buf[i] ~ /^[[:space:]]*#?[[:space:]]*(allow|deny)[[:space:]]/) {
+                    at = i
+                }
+            }
+            ab = 0; uf = 0
+            for (i = 1; i <= nb; i++) {
+                l = buf[i]
+                if (bd[i] == 1 &&
+                    l ~ /^[[:space:]]*#?[[:space:]]*auth_basic_user_file[[:space:]]/) {
+                    if (uf++) continue
+                    l = ind "auth_basic_user_file " pwf ";"
+                } else if (bd[i] == 1 &&
+                           l ~ /^[[:space:]]*#?[[:space:]]*auth_basic[[:space:]]/) {
+                    if (ab++) continue
+                    sub(/^[[:space:]]*#?[[:space:]]*/, "", l)
+                    if (l ~ /^auth_basic[[:space:]]+off[[:space:]]*;/) {
+                        l = "auth_basic \"camex\";"
+                    }
+                    l = ind l
+                }
+                out[i] = l
+            }
+            for (i = 1; i <= nb; i++) {
+                if (i in out) print out[i]
+                if (i == at) {
+                    if (!ab) print ind "auth_basic \"camex\";"
+                    if (!uf) print ind "auth_basic_user_file " pwf ";"
+                }
+            }
+            nb = 0
+        }
+        {
+            l = $0
+            sub(/^[[:space:]]*#.*$/, "", l)
+            o = gsub(/\{/, "{", l)
+            c = gsub(/\}/, "}", l)
+            if (!inb && depth == 0 && $0 ~ /^[[:space:]]*server[[:space:]]*\{/) {
+                inb = 1
+            }
+            if (!inb) {
+                print
+                depth += o - c
+                next
+            }
+            buf[++nb] = $0
+            bd[nb] = depth
+            depth += o - c
+            if (depth <= 0) {
+                depth = 0
+                inb = 0
+                flush()
+            }
+        }
+        END { if (nb) flush() }' "$1"
+}
+
+# 0. The start page's password (#119): user camex, always on. The
+# password is kept, unless --new-password or there is none yet
+PW=
+PATCHED=
+if [ -n "$INDEX" ]; then
+    if [ -z "$NEWPW" ] && [ -f "$PASSWORD_FILE" ]; then
+        PW=$(head -n 1 "$PASSWORD_FILE" 2>/dev/null)
+    fi
+    pw_new=
+    if [ -z "$PW" ]; then
+        PW=$(openssl rand -hex 10) && [ -n "$PW" ] ||
+            { problem "openssl cannot make a password"; exit 1; }
+        pw_new=1
+    fi
+    # The line nginx has for camex, against the password (its salt)
+    line=$(grep '^camex:' "$HTPASSWD" 2>/dev/null | head -n 1)
+    salt=$(printf '%s\n' "$line" | sed -n 's/^camex:\$apr1\$\([^$]*\)\$.*/\1/p')
+    if [ -n "$salt" ] && [ -z "$pw_new" ] &&
+       [ "camex:$(printf '%s\n' "$PW" | openssl passwd -apr1 -salt "$salt" -stdin 2>/dev/null)" = "$line" ]; then
+        say "unchanged: $HTPASSWD"
+    elif [ -n "$DRY" ]; then
+        say "would write the start page's password to $HTPASSWD" \
+            "${pw_new:+(a new one, kept in $PASSWORD_FILE)}"
+    else
+        hash=$(printf '%s\n' "$PW" | openssl passwd -apr1 -stdin) && [ -n "$hash" ] ||
+            { problem "openssl cannot hash the password"; exit 1; }
+        if [ -n "$pw_new" ]; then
+            printf '%s\n' "$PW" > "$TMP/password" &&
+                put_file "$TMP/password" "$PASSWORD_FILE" 600 &&
+                say "wrote: $PASSWORD_FILE (a new password)" || exit 1
+        fi
+        # Other users someone added to the file stay
+        { grep -v '^camex:' "$HTPASSWD" 2>/dev/null
+          printf 'camex:%s\n' "$hash"; } > "$TMP/htpasswd"
+        grp=$(nginx_group)
+        if [ -n "$grp" ]; then
+            put_file "$TMP/htpasswd" "$HTPASSWD" 640 "$grp" || exit 1
+        else
+            # No user for nginx's workers found: readable for all (a hash)
+            put_file "$TMP/htpasswd" "$HTPASSWD" 644 || exit 1
+        fi
+        say "wrote: $HTPASSWD (user camex)"
+    fi
+fi
+# Shown at the end of every run
+show_login() {
+    [ -n "$INDEX" ] && [ -z "$DRY" ] &&
+        say "the start page: user camex, password $PW (in $PASSWORD_FILE)"
+    return 0
+}
+
 # 1. nginx: the example's domain and page directory replaced
 idir=$(dirname "${INDEX:-/var/lib/camex-nginx/index.html}")
 ifile=$(basename "${INDEX:-/var/lib/camex-nginx/index.html}")
@@ -236,14 +439,38 @@ if [ -z "$INDEX" ]; then
     awk '/^# The start page\. It lists every connected device/ {exit} {print}' \
         "$TMP/nginx.conf" > "$TMP/nginx.conf.2" && mv "$TMP/nginx.conf.2" "$TMP/nginx.conf"
 fi
+# A file there already, edited or of an older version: the start page's
+# password goes in first, whatever else differs (#119)
+if [ -n "$INDEX" ] && [ -f "$NGINX_CONF_REAL" ]; then
+    if ! access_patch "$NGINX_CONF_REAL" > "$TMP/patched"; then
+        problem "cannot read $NGINX_CONF_REAL"
+        exit 1
+    fi
+    if ! cmp -s "$TMP/patched" "$NGINX_CONF_REAL"; then
+        if [ -n "$DRY" ]; then
+            say "would turn on the start page's password in $NGINX_CONF_REAL:"
+            diff -u "$NGINX_CONF_REAL" "$TMP/patched" | sed 's/^/    /'
+        else
+            bak=$BACKUP/$(echo "$NGINX_CONF_REAL" | sed 's|^/||; s|/|_|g').$(date +%Y%m%d-%H%M%S)
+            mkdir -p -m 700 "$BACKUP" && cp -p "$NGINX_CONF_REAL" "$bak" ||
+                { problem "cannot keep $NGINX_CONF_REAL as $bak"; exit 1; }
+            put_file "$TMP/patched" "$NGINX_CONF_REAL" 644 || exit 1
+            say "turned on the start page's password in $NGINX_CONF_REAL" \
+                "(previous one kept as $bak)"
+            PATCHED=1
+        fi
+    fi
+fi
 # A symlink (sites-enabled -> sites-available): its target is written
 before=$PROBLEMS
 install_file "$TMP/nginx.conf" "$NGINX_CONF_REAL" 644
 if [ "$PROBLEMS" -ne "$before" ]; then
     # nginx keeps its own file: changing camex's domain now would leave
-    # the two on different domains
-    say "nothing else changed: merge the difference into" \
-        "$NGINX_CONF_REAL, or run with --force"
+    # the two on different domains. Its password is on already
+    [ -n "$PATCHED" ] && reload_nginx
+    say "nothing else changed${PATCHED:+ but the password of the start page}:" \
+        "merge the difference into $NGINX_CONF_REAL, or run with --force"
+    show_login
     exit 1
 fi
 if [ ! -f "$MAP" ]; then
@@ -357,23 +584,7 @@ if [ -z "$DRY" ] && ! "$NGINX_BIN" -T 2>/dev/null |
     problem "nginx does not load $NGINX_CONF: put it where nginx.conf" \
             "includes (e.g. /etc/nginx/conf.d/) or include it"
 fi
-if ! "$NGINX_BIN" -t >/dev/null 2>&1; then
-    problem "nginx -t rejects the configuration:"
-    "$NGINX_BIN" -t 2>&1 | sed 's/^/    /' >&2
-else
-    if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] &&
-       systemctl is-active --quiet nginx; then
-        if systemctl reload nginx; then
-            say "reloaded nginx"
-        else
-            problem "systemctl reload nginx failed"
-        fi
-    elif "$NGINX_BIN" -s reload 2>/dev/null; then
-        say "reloaded nginx"
-    else
-        problem "nginx did not reload: is it running?"
-    fi
-fi
+reload_nginx
 if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] &&
    [ -d "$UNITS" ]; then
     systemctl daemon-reload &&
@@ -392,6 +603,7 @@ sync_run() {
 sync_run || problem "the first sync failed (see above)"
 sync_run --check || PROBLEMS=$((PROBLEMS + 1))
 
+show_login
 if [ "$PROBLEMS" -eq 0 ]; then
     say "done: the cameras at <ID>.$DOMAIN${INDEX:+, the start page at $DOMAIN}"
     exit 0

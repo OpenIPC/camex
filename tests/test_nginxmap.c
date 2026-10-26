@@ -67,7 +67,8 @@ static char *page(const char *lines, const char *domain, size_t *count,
 #define ROW "<tr class=\"dev\"><td class=\"lamp\"><span class=\"bulb\">" \
             "</span></td><td>"
 
-/* A live CLIENTS INDEX record: 65 s connected, last packet 2 s ago,
+/* A live CLIENTS INDEX record as a server before #119 gives it (no peer
+ * fields): 65 s connected, last packet 2 s ago,
  * last of 3 handshakes 30 s ago, 2048 bytes in, 1024 out */
 #define LIVE(id, addr, conf, name) \
     "L\t" id "\t" addr "\t" conf "\t65\t2\t30\t3\t2048\t1024\t" name "\n"
@@ -136,7 +137,8 @@ static void test_index(void)
     CHECK(m != NULL && strstr(m,
               ROW "<a href=\"//cam-a.openipc.click/\">Back &lt;yard&gt; "
               "&amp; &quot;shed&quot;</a></td><td class=\"id\">cam-a</td>"
-              "<td class=\"addr\">10.200.0.2</td><td class=\"conn\">1m05s"
+              "<td class=\"addr\">10.200.0.2</td><td class=\"addr\">&mdash;"
+              "</td><td class=\"conn\">1m05s"
               "</td><td>2s ago</td><td class=\"hs\">30s ago &middot; 3</td>"
               "<td class=\"tr\">2.0 / 1.0</td></tr>\n") != NULL,
           "a live row with its values");
@@ -307,6 +309,53 @@ static void test_index(void)
              "O\tcam4\n", "openipc.click", &n, warn, sizeof(warn));
     CHECK(m != NULL && n == 0U && strstr(m, "<tr class") == NULL,
           "malformed records are skipped");
+    free(m);
+
+    /* The peer (#119): a link to its port in a new tab, without :80;
+     * plain text with no port; a dash without a peer, for a server before
+     * #119 and for an offline device */
+    m = page("L\tcam1\t10.0.0.1\t1\t65\t2\t30\t3\t2048\t1024\t"
+             "203.0.113.7\t8080\tGate\n"
+             "L\tcam2\t10.0.0.2\t1\t65\t2\t30\t3\t2048\t1024\t"
+             "198.51.100.2\t80\n"
+             "L\tcam3\t10.0.0.3\t1\t65\t2\t30\t3\t2048\t1024\t"
+             "192.0.2.9\t-\n"
+             "L\tcam4\t10.0.0.4\t1\t65\t2\t30\t3\t2048\t1024\t-\t8080\n"
+             "L\tcam5\t10.0.0.5\t1\t65\t2\t30\t3\t2048\t1024\tOld\n"
+             "O\tcam6\t10.0.0.6\tAway\n", "openipc.click", &n, warn,
+             sizeof(warn));
+    CHECK(m != NULL && n == 5U &&
+              strstr(m, "<th class=\"addr\">Address</th><th class=\"addr\">"
+                     "Peer</th><th class=\"conn\">") != NULL &&
+              strstr(m, ">Gate</a></td><td class=\"id\">cam1</td><td "
+                     "class=\"addr\">10.0.0.1</td><td class=\"addr\"><a "
+                     "class=\"peer\" href=\"http://203.0.113.7:8080/\" "
+                     "target=\"_blank\" rel=\"noopener\">203.0.113.7</a>"
+                     "</td>") != NULL &&
+              strstr(m, "<a class=\"peer\" href=\"http://198.51.100.2/\" "
+                     "target=\"_blank\" rel=\"noopener\">198.51.100.2</a>")
+                  != NULL &&
+              strstr(m, "<td class=\"addr\">192.0.2.9</td>") != NULL &&
+              strstr(m, "<td class=\"addr\">10.0.0.4</td><td class=\"addr\">"
+                     "&mdash;</td>") != NULL &&
+              strstr(m, ">Old</a></td><td class=\"id\">cam5</td><td "
+                     "class=\"addr\">10.0.0.5</td><td class=\"addr\">&mdash;"
+                     "</td>") != NULL &&
+              strstr(m, "<td class=\"addr\">10.0.0.6</td><td class=\"addr\">"
+                     "&mdash;</td><td class=\"conn\">offline") != NULL,
+          "the peer column");
+    free(m);
+
+    /* A bad peer or port: the record is not used */
+    m = page("L\tcam1\t10.0.0.1\t1\t65\t2\t30\t3\t2048\t1024\t"
+             "203.0.113.7\t0\n"
+             "L\tcam2\t10.0.0.2\t1\t65\t2\t30\t3\t2048\t1024\t"
+             "203.0.113.7\t65536\n"
+             "L\tcam3\t10.0.0.3\t1\t65\t2\t30\t3\t2048\t1024\t"
+             "203.0.113.7\"><b\t80\n", "openipc.click", &n, warn,
+             sizeof(warn));
+    CHECK(m != NULL && n == 0U && strstr(m, "<tr class") == NULL,
+          "a bad peer or port skips the record");
     free(m);
 
     /* Bad domain */

@@ -31,8 +31,12 @@ typedef struct {
     char route_cidrs[CAMEX_MAX_ROUTES][32];
     uint8_t route_count;
     int mtu;
+    int peer_port;   /* peer_port= (#119): 0 = not set, -1 = none */
     char psk[128];   /* hex: + 64 digits fits; passphrases too */
 } camex_profile_t;
+
+/* The port of the start page's peer link without peer_port= (#119) */
+#define CAMEX_PEER_PORT_DEFAULT 8080
 
 /* Server profile for a named client */
 typedef struct {
@@ -152,6 +156,11 @@ int config_db_load_file(const char *path);
 
 /* Lookup merged profile for a client */
 int config_db_lookup_profile(const char *client_id, camex_profile_t *profile);
+
+/* The port of a client's peer link on the start page (#119): its
+ * peer_port=, else that of [defaults], else CAMEX_PEER_PORT_DEFAULT;
+ * -1 for peer_port=none */
+int config_db_peer_port(const char *client_id);
 
 /* Build the keystore from global PSK and per-client PSKs */
 /* 0; -1 when no key is usable (no client could connect); KEY_ERR_NOMEM
