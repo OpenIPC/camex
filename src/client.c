@@ -537,8 +537,9 @@ static int client_keepalive_interval(void)
 {
     int cap = current_config.server_timeout / 2;
 
-    /* --keepalive 0 turns off frequent probes and loss detection, but the
-     * server still needs a sign of life before it expires the client */
+    /* --keepalive 0 turns off frequent probes, but the server still needs
+     * a sign of life before it expires the client; a lost link is then
+     * noticed later (client_loss_after, #121) */
     if (current_config.keepalive == 0) {
         return CAMEX_CLIENT_TIMEOUT / 2;
     }

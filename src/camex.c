@@ -430,8 +430,11 @@ static int client_id_load(char *client_id, size_t client_id_size)
         return -1;
     }
     text[n] = '\0';
-    text[strcspn(text, "\r\n")] = '\0';
-    if (!id_text_ok(text) || client_id_size <= 12U) {
+    /* The ID and one newline, as written below: nothing else */
+    if (n == 13 && text[12] == '\n') {
+        text[12] = '\0';
+    }
+    if ((size_t)n > 13U || !id_text_ok(text) || client_id_size <= 12U) {
         log_message(LOG_WARNING, "%s holds no client ID: ignored, the ID is "
                     "taken from the MAC", CAMEX_ID_FILE);
         return -1;
@@ -446,9 +449,14 @@ static void client_id_store(const char *client_id)
 {
     char tmp[] = CAMEX_ID_FILE ".XXXXXX";
     char line[16];
-    int fd = mkstemp(tmp);
+    int fd;
     int len = snprintf(line, sizeof(line), "%s\n", client_id);
 
+    /* Only an ID taken from a MAC: 12 hex digits */
+    if (!id_text_ok(client_id) || len != 13) {
+        return;
+    }
+    fd = mkstemp(tmp);
     if (fd < 0) {
         log_message(LOG_WARNING, "Cannot keep the client ID in %s: %s",
                     CAMEX_ID_FILE, strerror(errno));
@@ -472,6 +480,8 @@ int camex_client_id_wait(char *client_id, size_t client_id_size)
     char ifname[IFNAMSIZ];
     unsigned int attempt;
 
+    /* A run in the same process before (the Android app) does not count */
+    client_id_from_mac = 0U;
 #ifndef _WIN32
     if (client_id_load(client_id, client_id_size) == 0) {
         log_message(LOG_INFO, "Client ID %s, kept in %s by an earlier run",
@@ -624,14 +634,16 @@ int camex_init(camex_config_t *config)
     }
 
     memcpy(&current_config, config, sizeof(current_config));
+    client_id_from_mac = 0U;   /* found anew below, if at all (#121) */
     client_mode = (config->mode == CAMEX_MODE_CLIENT) ? 1U : 0U;
     server_mode = (config->mode == CAMEX_MODE_SERVER) ? 1U : 0U;
     client_state_init(&client_state);
 
     if (client_mode && current_config.keepalive == 0) {
-        log_message(LOG_WARNING,
-                    "Keepalive is off: a lost server is not detected "
-                    "(the server timeout needs keepalives)");
+        log_message(LOG_INFO,
+                    "Keepalive every %ds only: a lost server is noticed "
+                    "after %ds", CAMEX_CLIENT_TIMEOUT / 2,
+                    CAMEX_CLIENT_TIMEOUT / 2 + current_config.server_timeout);
     }
 
     if (server_mode) {

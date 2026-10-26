@@ -147,6 +147,11 @@ start a --keepalive 2
 wait_log a "is not a file of this user that only it can write: ignored" 10 &&
     wait_log a "Client ID $MAC: the MAC of eth0" 10
 check $? "it is ignored with a warning, the ID is the MAC"
+docker exec "$P-a" sh -c 'printf "AAAAAAAAAAAA\nmore\n" > /tmp/camex-id && chmod 644 /tmp/camex-id'
+start a --keepalive 2
+wait_log a "holds no client ID: ignored" 10 &&
+    wait_log a "Client ID $MAC: the MAC of eth0" 10
+check $? "an ID with more after it is ignored too"
 
 echo "== 4. no answer, then a new address and the right route"
 box b
