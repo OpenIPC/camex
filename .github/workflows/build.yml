@@ -137,6 +137,10 @@ jobs:
         run: ./docker/test-e2e-persistent-tun.sh
         if: matrix.target == 'x86_64'
 
+      - name: E2E test (a client started without a working network waits, issue #121)
+        run: ./docker/test-e2e-client-start.sh
+        if: matrix.target == 'x86_64'
+
       - name: Cache toolchain
         uses: actions/cache@v6
         with:

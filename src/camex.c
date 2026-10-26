@@ -41,6 +41,11 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifndef _WIN32
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 /* Windows (MinGW) compatibility */
 #ifdef _WIN32
@@ -326,26 +331,24 @@ static int read_mac(const char *ifname, uint8_t mac[6])
 }
 #endif
 
-int derive_client_id(char *client_id, size_t client_id_size)
+/* The ID from the MAC of the default route's interface; that interface
+ * in ifname. -1 without a default route or a MAC */
+static int derive_client_id_from(char *client_id, size_t client_id_size,
+                                 char *ifname, size_t ifname_size)
 {
-    char ifname[IFNAMSIZ];
     uint8_t mac[6];
     size_t i;
 
-    if (client_id == NULL || client_id_size == 0U) {
+    if (client_id == NULL || client_id_size <= 12U) {
         return -1;
     }
 
-    read_default_gateway(ifname, sizeof(ifname));
+    read_default_gateway(ifname, ifname_size);
     if (ifname[0] == '\0') {
         return -1;
     }
 
     if (read_mac(ifname, mac) != 0) {
-        return -1;
-    }
-
-    if (client_id_size <= 12U) {
         return -1;
     }
 
@@ -355,6 +358,147 @@ int derive_client_id(char *client_id, size_t client_id_size)
     }
     client_id[12] = '\0';
     return 0;
+}
+
+int derive_client_id(char *client_id, size_t client_id_size)
+{
+    char ifname[IFNAMSIZ];
+
+    return derive_client_id_from(client_id, client_id_size, ifname,
+                                 sizeof(ifname));
+}
+
+/* The ID came from the MAC this run: kept in CAMEX_ID_FILE once the
+ * server has answered (#121) */
+static uint8_t client_id_from_mac = 0U;
+
+/* A pause of about a second that a stop request ends early */
+static void pause_1s(void)
+{
+#ifdef _WIN32
+    Sleep(1000);
+#else
+    struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
+
+    select(0, NULL, NULL, NULL, &tv);
+#endif
+}
+
+#ifndef _WIN32
+/* A derived ID: 12 hex digits in upper case */
+static int id_text_ok(const char *s)
+{
+    size_t i;
+
+    for (i = 0U; i < 12U; ++i) {
+        if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'A' && s[i] <= 'F'))) {
+            return 0;
+        }
+    }
+    return s[12] == '\0';
+}
+
+/* The ID an earlier run kept (#121): only from a regular file of our own
+ * user that no one else can write, not a symlink. 0 and the ID, or -1 */
+static int client_id_load(char *client_id, size_t client_id_size)
+{
+    char text[32];
+    struct stat st;
+    ssize_t n;
+    int fd = open(CAMEX_ID_FILE, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+
+    if (fd < 0) {
+        if (errno != ENOENT) {
+            log_message(LOG_WARNING, "%s cannot be read (%s): the ID is "
+                        "taken from the MAC", CAMEX_ID_FILE, strerror(errno));
+        }
+        return -1;
+    }
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) ||
+        st.st_uid != geteuid() || (st.st_mode & (S_IWGRP | S_IWOTH)) != 0) {
+        log_message(LOG_WARNING, "%s is not a file of this user that only "
+                    "it can write: ignored, the ID is taken from the MAC",
+                    CAMEX_ID_FILE);
+        close(fd);
+        return -1;
+    }
+    n = read(fd, text, sizeof(text) - 1U);
+    close(fd);
+    if (n <= 0) {
+        return -1;
+    }
+    text[n] = '\0';
+    text[strcspn(text, "\r\n")] = '\0';
+    if (!id_text_ok(text) || client_id_size <= 12U) {
+        log_message(LOG_WARNING, "%s holds no client ID: ignored, the ID is "
+                    "taken from the MAC", CAMEX_ID_FILE);
+        return -1;
+    }
+    memcpy(client_id, text, 13U);
+    return 0;
+}
+
+/* Keep the ID for the next runs until a reboot: a new file renamed over
+ * the old one (in sticky /tmp, never over another user's file) */
+static void client_id_store(const char *client_id)
+{
+    char tmp[] = CAMEX_ID_FILE ".XXXXXX";
+    char line[16];
+    int fd = mkstemp(tmp);
+    int len = snprintf(line, sizeof(line), "%s\n", client_id);
+
+    if (fd < 0) {
+        log_message(LOG_WARNING, "Cannot keep the client ID in %s: %s",
+                    CAMEX_ID_FILE, strerror(errno));
+        return;
+    }
+    if (len <= 0 || write(fd, line, (size_t)len) != (ssize_t)len ||
+        fchmod(fd, 0644) != 0 || close(fd) != 0 ||
+        rename(tmp, CAMEX_ID_FILE) != 0) {
+        log_message(LOG_WARNING, "Cannot keep the client ID in %s: %s",
+                    CAMEX_ID_FILE, strerror(errno));
+        unlink(tmp);
+        return;
+    }
+    log_message(LOG_INFO, "Client ID %s kept in %s until a reboot",
+                client_id, CAMEX_ID_FILE);
+}
+#endif
+
+int camex_client_id_wait(char *client_id, size_t client_id_size)
+{
+    char ifname[IFNAMSIZ];
+    unsigned int attempt;
+
+#ifndef _WIN32
+    if (client_id_load(client_id, client_id_size) == 0) {
+        log_message(LOG_INFO, "Client ID %s, kept in %s by an earlier run",
+                    client_id, CAMEX_ID_FILE);
+        return 0;
+    }
+#endif
+    /* Without a default route there is nothing to take it from yet: wait
+     * for one (#121) instead of giving up */
+    for (attempt = 0U; running; ++attempt) {
+        unsigned int step;
+
+        if (derive_client_id_from(client_id, client_id_size, ifname,
+                                  sizeof(ifname)) == 0) {
+            log_message(LOG_INFO, "Client ID %s: the MAC of %s, the "
+                        "interface of the default route", client_id, ifname);
+            client_id_from_mac = 1U;
+            return 0;
+        }
+        if (attempt % 12U == 0U) {
+            log_message(LOG_WARNING, "No default route (or no MAC on its "
+                        "interface) yet to take the client ID from: "
+                        "waiting for one (--name sets the ID)");
+        }
+        for (step = 0U; step < 5U && running; ++step) {
+            pause_1s();
+        }
+    }
+    return -1;
 }
 
 static const char *mode_to_string(camex_mode_t mode)
@@ -630,9 +774,7 @@ int camex_init(camex_config_t *config)
                     int step;
 
                     for (step = 0; step < 5 && running; ++step) {
-                        struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
-
-                        select(0, NULL, NULL, NULL, &tv);
+                        pause_1s();
                     }
                 }
             }
@@ -653,6 +795,12 @@ int camex_init(camex_config_t *config)
                 net_close();
                 return -1;
             }
+#ifndef _WIN32
+            /* The server answered with this ID: keep it (#121) */
+            if (client_id_from_mac) {
+                client_id_store(current_config.client_id);
+            }
+#endif
         }
 
         if (parse_local_cidr(current_config.local_cidr, local_ip,

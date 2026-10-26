@@ -413,10 +413,8 @@ int validate_config(camex_config_t *config)
 
         if (config->auto_config) {
             if (config->client_id[0] == '\0' &&
-                derive_client_id(config->client_id,
-                                 sizeof(config->client_id)) != 0) {
-                log_message(LOG_ERR,
-                    "Client name must be set with -n in auto mode");
+                camex_client_id_wait(config->client_id,
+                                     sizeof(config->client_id)) != 0) {
                 return -1;
             }
         } else {
@@ -577,8 +575,10 @@ void print_usage(const char *progname)
            " always encrypted\n");
     printf("  -P, --pid-file <path> Write PID to file on startup\n");
     printf("  -R, --transport <t>  Transport protocol: udp (default) or tcp\n");
-    printf("  -K, --keepalive <s>  Keepalive interval in seconds, 0=off"
-           " (default: 10)\n");
+    printf("  -K, --keepalive <s>  Keepalive interval in seconds (default:"
+           " 10); 0: one every 60 s,\n"
+           "                       a lost link noticed after 60 s +"
+           " --server-timeout\n");
     printf("      --genkey         Print a new server key pair and exit\n");
     printf("      --server-key-file <path> Server: file with its private key\n"
            "                       (or server_key= in [server])\n");
@@ -693,6 +693,13 @@ int main(int argc, char *argv[])
     }
 
     if (validate_config(&config) != 0) {
+        /* Stopped while waiting for a default route (#121): no error */
+        if (!running) {
+#ifndef _WIN32
+            closelog();
+#endif
+            return 0;
+        }
         print_usage(argv[0]);
 #ifndef _WIN32
         closelog();

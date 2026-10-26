@@ -263,7 +263,7 @@ sudo ./camex \
 |----------------------------|-------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `--mode <mode>`            | `-M`  | Operation mode: `client` or `server` (required)                                                                                                                  |
 | `--auto`                   | `-a`  | Fetch tunnel parameters from the server                                                                                                                          |
-| `--name <id>`              | `-n`  | Client ID (auto mode; optional in manual mode)                                                                                                                   |
+| `--name <id>`              | `-n`  | Client ID (auto mode). Without it: the MAC of the default route's interface, kept in `/tmp/camex-id` until a reboot                                              |
 | `--local-cidr <cidr>`      | `-l`  | Tunnel address in `address/prefix` form                                                                                                                          |
 | `--gateway-ip <addr>`      | `-g`  | Client gateway inside the tunnel                                                                                                                                 |
 | `--server-host <addr>`     | `-s`  | Server hostname or IP for client mode                                                                                                                            |
@@ -1061,6 +1061,14 @@ To rebuild and republish `latest` without a new commit, run the workflow with
 - The server relays packets based on the inner IPv4 destination address.
 - Client sockets are outbound only; no listening port is opened on the client side.
 - In auto mode, `-l`, `-g`, and `-c` are supplied by the server.
+- A client started before the network is ready waits for it (#121): without
+  `--name` for a default route to take the ID from, then for the server as long
+  as it takes, with a new socket (and the name resolved again) every
+  `--server-timeout` without an answer, so a changed address or route is picked
+  up. The ID taken from the MAC is kept in `/tmp/camex-id` until a reboot, so a
+  restart keeps it whatever the network looks like then. With `--keepalive 0` a
+  keepalive still goes every 60 s, and a lost server is noticed after 60 s +
+  `--server-timeout`.
 - `examples/camex.conf` shows the server-side parameter database format.
 - Protocol v2 works over both UDP and TCP transport; every session starts with
   a handshake (`--server-key-file` on the server, `--server-pubkey` and `--psk`

@@ -262,6 +262,46 @@ int client_handle_net_packet(const uint8_t *buffer, size_t len)
     return packet_write(plain, plain_len);
 }
 
+/* While waiting for the config (#121): a new socket after a pause, the
+ * name resolved again (the network may have changed: a new address, a
+ * route, DNS), then a new handshake. 0 once one was sent, -1 when
+ * stopped */
+static int client_wait_reconnect(void)
+{
+    unsigned int attempt;
+
+    for (attempt = 0U; ; ++attempt) {
+        unsigned int step;
+
+        net_close();
+        memset(&client_recv_state, 0, sizeof(client_recv_state));
+        for (step = 0U; step < (unsigned int)CAMEX_RECONNECT_INTERVAL &&
+                        running; ++step) {
+            struct timeval pause = { 1, 0 };
+
+            select(0, NULL, NULL, NULL, &pause);
+        }
+        if (!running) {
+            return -1;
+        }
+        if (client_socket_create(current_config.server_host,
+                                 current_config.port,
+                                 current_config.bind_dev) != 0) {
+            if (attempt % 12U == 0U) {
+                log_message(LOG_WARNING, "Cannot reach server %s:%d, "
+                            "retrying every %ds...",
+                            current_config.server_host, current_config.port,
+                            CAMEX_RECONNECT_INTERVAL);
+            }
+            continue;
+        }
+        g_now = time(NULL);
+        if (client_start_handshake() == 0) {
+            return 0;
+        }
+    }
+}
+
 int client_wait_for_config(void)
 {
     uint8_t buffer[V2_RESP_HDR + NOISE_MSG2_OVERHEAD + CAMEX_CONTROL_MAX];
@@ -270,21 +310,51 @@ int client_wait_for_config(void)
     struct timeval tv;
     int ready;
     int maxfd;
-    unsigned int waited;
     time_t wait_start;
+    time_t socket_since;   /* this socket's first handshake */
+    time_t next_note;
+    unsigned int renewed = 0U;
 
     log_message(LOG_INFO, "Waiting for auto-config from server...");
     wait_start = time(NULL);
+    socket_since = wait_start;
+    next_note = wait_start + 10;
 
-    for (waited = 0U; waited < 300U; ) {
+    /* As long as it takes (#121): a server or a network that is not there
+     * yet is waited for, not given up on */
+    for (;;) {
         if (!running) {
             return -1;
         }
         g_now = time(NULL);
-        if (client_state.hs_pending &&
-            difftime(g_now, client_state.hs_sent) >= V2_HANDSHAKE_RETRY &&
-            client_send_init() != 0) {
-            return -1;
+        if (difftime(g_now, next_note) >= 0.0) {
+            double waited = difftime(g_now, wait_start);
+
+            log_message(LOG_INFO, "Still waiting for server config (%.0fs)...",
+                        waited);
+            /* Every 10 s for a minute, then every minute */
+            next_note = g_now + (waited < 60.0 ? 10 : 60);
+        }
+        /* No answer on this socket for --server-timeout, or a handshake
+         * that cannot be sent: the socket may hold a source address or a
+         * route that is gone. Start over with a new one */
+        if ((net_fd < 0 ||
+             difftime(g_now, socket_since) >=
+                 (double)current_config.server_timeout ||
+             (client_state.hs_pending &&
+              difftime(g_now, client_state.hs_sent) >= V2_HANDSHAKE_RETRY &&
+              client_send_init() != 0))) {
+            if (renewed++ % 12U == 0U) {
+                log_message(LOG_INFO, "No answer from server %s:%d: a new "
+                            "connection (and so every %ds)",
+                            current_config.server_host, current_config.port,
+                            current_config.server_timeout);
+            }
+            if (client_wait_reconnect() != 0) {
+                return -1;
+            }
+            socket_since = time(NULL);
+            continue;
         }
 
         FD_ZERO(&readset);
@@ -308,11 +378,6 @@ int client_wait_for_config(void)
             return -1;
         }
         if (ready == 0 || !FD_ISSET(net_fd, &readset)) {
-            ++waited;
-            if (waited % 10U == 0U) {
-                log_message(LOG_INFO,
-                            "Still waiting for server config (%us)...", waited);
-            }
             continue;
         }
 
@@ -326,32 +391,10 @@ int client_wait_for_config(void)
                  * a restart, #81). Connect again within the same wait. */
                 log_message(LOG_WARNING, "Connection to the server closed "
                             "before its config; reconnecting");
-                for (;;) {
-                    unsigned int step;
-
-                    net_close();
-                    memset(&client_recv_state, 0, sizeof(client_recv_state));
-                    for (step = 0U; step < 2U && running; ++step) {
-                        struct timeval pause = { 1, 0 };
-
-                        select(0, NULL, NULL, NULL, &pause);
-                    }
-                    /* The whole wait, connection attempts included */
-                    if (!running ||
-                        difftime(time(NULL), wait_start) >= 300.0) {
-                        return -1;
-                    }
-                    if (client_socket_create(current_config.server_host,
-                                             current_config.port,
-                                             current_config.bind_dev) != 0) {
-                        continue;
-                    }
-                    g_now = time(NULL);
-                    if (client_start_handshake() == 0) {
-                        break;
-                    }
+                if (client_wait_reconnect() != 0) {
+                    return -1;
                 }
-                waited = (unsigned int)difftime(time(NULL), wait_start);
+                socket_since = time(NULL);
                 continue;
             }
             if (rc != 0) {
@@ -364,6 +407,8 @@ int client_wait_for_config(void)
                 continue;
             }
         }
+        /* The server answers on this socket: keep it */
+        socket_since = time(NULL);
         if (client_handle_net_packet(buffer, (size_t)ready) == 0 &&
             client_state.config_received &&
             current_config.local_cidr[0] != '\0' &&
@@ -371,9 +416,6 @@ int client_wait_for_config(void)
             return 0;
         }
     }
-
-    log_message(LOG_ERR, "Timeout: server did not provide config");
-    return -1;
 }
 
 int client_apply_config_response(const uint8_t *payload, size_t payload_len)
@@ -504,6 +546,20 @@ static int client_keepalive_interval(void)
     return current_config.keepalive < cap ? current_config.keepalive : cap;
 }
 
+/* Seconds without an answer after which the link counts as lost: the
+ * server timeout, as a keepalive goes at least every half of it; with
+ * --keepalive 0 (one every CAMEX_CLIENT_TIMEOUT / 2) a whole interval
+ * more (#121) */
+static double client_loss_after(void)
+{
+    double t = (double)current_config.server_timeout;
+
+    if (current_config.keepalive == 0) {
+        t += (double)client_keepalive_interval();
+    }
+    return t;
+}
+
 void client_tick(void)
 {
     if (net_fd < 0 || client_reconnect_at > 0) {
@@ -514,14 +570,11 @@ void client_tick(void)
         return;
     }
 
-    /* The server answers every keepalive, so with keepalives on a quiet
-     * link means the server is gone (#10); with --keepalive 0 probes are
-     * too rare to tell. A handshake that gets no answer counts the same
-     * way, keepalives or not. */
-    if ((current_config.keepalive > 0 && client_state.established &&
-         client_state.last_recv > 0 &&
-         difftime(g_now, client_state.last_recv) >=
-             (double)current_config.server_timeout) ||
+    /* The server answers every keepalive, so a quiet link means the
+     * server is gone (#10); with --keepalive 0 too, only later (#121). A
+     * handshake that gets no answer counts the same way. */
+    if ((client_state.established && client_state.last_recv > 0 &&
+         difftime(g_now, client_state.last_recv) >= client_loss_after()) ||
         (!client_state.established && client_state.hs_pending &&
          difftime(g_now, client_state.hs_started) >=
              (double)current_config.server_timeout)) {
