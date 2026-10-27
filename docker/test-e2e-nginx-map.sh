@@ -18,7 +18,8 @@
 # 6. A reload that failed (nginx not running) is tried again by the next
 #    sync, although the map did not change; the start page waits for it.
 # 10. --follow (#130): a sync as soon as a client comes or goes, none while
-#    nothing changes; a server too old for it is synced every 10 seconds.
+#    nothing changes; a server too old for it is synced every 10 seconds; a
+#    server that starts during the wait ends it (#138).
 # The start page (#105) along the way: the bare domain lists the live
 # clients with their name= (escaped) or ID and links that reach them;
 # --status shows the name; an unchanged state leaves the file alone; bad
@@ -428,6 +429,20 @@ out2=$(docker exec "$P-srv" camex --status --control /run/camex/camex-udp-5899.s
 t1=$(date +%s)
 [ "$out" = none ] && [ "$out2" = none ] && [ $((t1 - t0)) -ge 2 ]
 check $? "a socket left behind: no state (none), and a wait on it takes its time ($((t1 - t0)) s)"
+# A server that starts during the wait wakes it (#138), not its timeout
+TOKEN=$(docker exec "$P-srv" camex --status --wait - 2>/dev/null)
+docker exec -d "$P-srv" sh -c 'sleep 2; exec camex-run --mode server --port 5802 \
+    --local-cidr 10.202.0.1/24 '"$SERVER_KEY_ARGS"' --psk "'"$PSK"'" > /tmp/srv5802.log 2>&1'
+t0=$(date +%s)
+out=$(docker exec "$P-srv" camex --status --wait "$TOKEN" --wait-timeout 30 2>&1)
+t1=$(date +%s)
+[ $((t1 - t0)) -le 6 ] && [ "$out" = "$TOKEN" ]
+check $? "a server that starts during the wait ends it in $((t1 - t0)) s, not 30"
+out=$(docker exec "$P-srv" camex --status --wait "$TOKEN" --wait-timeout 30 2>&1)
+echo "$out" | grep -q "/run/camex/camex-udp-5802.sock"
+check $? "the next wait has its state in the token"
+docker exec "$P-srv" sh -c 'pkill -f "camex --mode server --port 5802"; true'
+sleep 1
 # Counts the map runs of the sync script
 docker exec "$P-srv" sh -c 'printf "#!/bin/sh\ncase \"\$*\" in *nginx-map*) echo x >> /tmp/maps;; esac\nexec camex \"\$@\"\n" \
     > /usr/local/bin/camex-counting && chmod +x /usr/local/bin/camex-counting && rm -f /tmp/maps'

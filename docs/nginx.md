@@ -415,8 +415,8 @@ camex-nginx-sync --check       # check the whole setup; exit code 1 on a FAIL
 
 **`--follow`** (#130), what `camex-nginx-sync.service` runs: a sync as soon
 as a client of any server on the host comes, goes, gets another address or
-peer, or the server's file is reloaded with other names or domain, within
-about a second, and none while nothing changes. The start page's live columns
+peer, the server's file is reloaded with other names or domain, or a server
+starts or stops, within about a second, and none while nothing changes. The start page's live columns
 (connected for, last packet, traffic) change without such an event, so with
 `INDEX` it also syncs every 10 seconds (without `INDEX` every 300; `--follow
 <seconds>` sets it). It waits with `camex --status --wait <token>`: the
