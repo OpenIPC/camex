@@ -586,26 +586,26 @@ if [ "${1-}" = "--follow" ]; then
     polling=
     # The state before the sync: a change while it runs wakes the wait
     token=$("$CAMEX" --status "$@" --wait - 2>/dev/null)
-    rc=$?
+    frc=$?
     while :; do
         sync_once
-        if [ "$rc" -eq 0 ]; then
+        if [ "$frc" -eq 0 ]; then
             new=$("$CAMEX" --status "$@" --wait "$token" \
                   --wait-timeout "$interval" 2>/dev/null)
-            rc=$?
-            if [ "$rc" -eq 0 ]; then
+            frc=$?
+            if [ "$frc" -eq 0 ]; then
                 token=$new
                 continue
             fi
         fi
-        if [ "$rc" -eq 3 ] && [ -z "$polling" ]; then
+        if [ "$frc" -eq 3 ] && [ -z "$polling" ]; then
             log "a server before camex 3.11.0 cannot report its changes:" \
                 "a sync every 10 seconds"
             polling=1
         fi
         sleep 10 || exit 1
         token=$("$CAMEX" --status "$@" --wait - 2>/dev/null)
-        rc=$?
+        frc=$?
     done
 fi
 

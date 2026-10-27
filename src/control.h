@@ -76,7 +76,8 @@ int control_nginx_index(const char *path, const char *domain);
 /* camex --status --wait <token> (#130): wait until the state of the
  * clients changes on any server (or the one at path), at most timeout
  * seconds, then print the token of the state now. The token is opaque
- * ("<hash>:<socket>,..."); "-" asks for the state at once. Exit code 0
+ * ("<hash>:<socket>,...", "none" with no server); "-" asks for the
+ * state at once. Exit code 0
  * (changed or timed out), 3 when a server is too old for it, 1 on an
  * error. */
 int control_wait(const char *path, const char *token, int timeout);

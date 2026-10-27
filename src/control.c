@@ -361,23 +361,31 @@ static void control_bad_command(control_conn_t *c, size_t *len)
 /* The state's fingerprint (server_state_hash()), worked out again at
  * most every 250 ms while someone waits for it: a busy server runs its
  * loop for every packet */
+static uint64_t state_hash;
+static struct timespec state_hash_at;
+static int state_hash_have = 0;
+
+/* Worked out now: also what the next 250 ms answer with */
+static uint64_t control_state_hash_now(void)
+{
+    state_hash = server_state_hash();
+    clock_gettime(CLOCK_MONOTONIC, &state_hash_at);
+    state_hash_have = 1;
+    return state_hash;
+}
+
 static uint64_t control_state_hash(void)
 {
-    static uint64_t hash;
-    static struct timespec last;
-    static int have = 0;
     struct timespec now;
     long ms;
 
     clock_gettime(CLOCK_MONOTONIC, &now);
-    ms = (long)(now.tv_sec - last.tv_sec) * 1000L +
-         (now.tv_nsec - last.tv_nsec) / 1000000L;
-    if (!have || ms >= 250L || ms < 0L) {
-        hash = server_state_hash();
-        last = now;
-        have = 1;
+    ms = (long)(now.tv_sec - state_hash_at.tv_sec) * 1000L +
+         (now.tv_nsec - state_hash_at.tv_nsec) / 1000000L;
+    if (!state_hash_have || ms >= 250L || ms < 0L) {
+        return control_state_hash_now();
     }
-    return hash;
+    return state_hash;
 }
 
 /* WAIT's answer: the state's fingerprint, 16 hex digits */
@@ -424,9 +432,10 @@ static int control_wait_start(control_conn_t *c)
     if (end == p + 1 || *end != '\0' || secs < 0 || secs > CONTROL_WAIT_MAX) {
         return -1;
     }
-    /* Not since the last 250 ms: the caller may have read the state just
-     * now */
-    h = server_state_hash();
+    /* Not the one of the last 250 ms: the caller may have read the state
+     * just now; and the cache gets this one, so that the loop's next look
+     * does not compare with an older state */
+    h = control_state_hash_now();
     if (any || h != given || secs == 0) {
         control_wait_answer(c, h);
         return 0;
@@ -1092,12 +1101,42 @@ typedef struct {
     size_t len;
 } control_waiter_t;
 
+/* A socket path as the token has it: ',' and '%' as %2C and %25, so that
+ * any path makes one entry. 0, or -1 when it does not fit */
+static int token_path(const char *path, char *out, size_t size)
+{
+    size_t o = 0U;
+
+    for (; *path != '\0'; ++path) {
+        const char *e = *path == ',' ? "%2C" : *path == '%' ? "%25" : NULL;
+        size_t n = e != NULL ? 3U : 1U;
+
+        if (o + n >= size) {
+            return -1;
+        }
+        if (e != NULL) {
+            memcpy(out + o, e, 3U);
+        } else {
+            out[o] = *path;
+        }
+        o += n;
+    }
+    out[o] = '\0';
+    return 0;
+}
+
 /* The fingerprint of path in the token ("<hash>:<path>,..."): 1 and *h,
  * or 0 */
-static int token_find(const char *token, const char *path, uint64_t *h)
+static int token_find(const char *token, const char *rawpath, uint64_t *h)
 {
     const char *p = token;
-    size_t plen = strlen(path);
+    char path[3U * sizeof(control_path_t)];
+    size_t plen;
+
+    if (token_path(rawpath, path, sizeof(path)) != 0) {
+        return 0;
+    }
+    plen = strlen(path);
 
     while (p != NULL && *p != '\0') {
         const char *colon = strchr(p, ':');
@@ -1135,10 +1174,15 @@ static int token_lost(const char *token, const control_waiter_t *w, int n)
             return 1;   /* not a token of ours: start again */
         }
         for (i = 0; i < n; ++i) {
-            size_t plen = strlen(w[i].path);
+            char path[3U * sizeof(control_path_t)];
+            size_t plen;
 
+            if (token_path(w[i].path, path, sizeof(path)) != 0) {
+                continue;
+            }
+            plen = strlen(path);
             if ((size_t)(p + elen - colon - 1) == plen &&
-                memcmp(colon + 1, w[i].path, plen) == 0) {
+                memcmp(colon + 1, path, plen) == 0) {
                 found = 1;
                 break;
             }
@@ -1183,9 +1227,14 @@ int control_wait(const char *path, const char *token, int timeout)
     int secs;
     time_t deadline;
     int printed = 0;
+    int snapshot = 0;   /* "-": the state now, no waiting at all */
+    int scoped = path != NULL && path[0] != '\0';
 
     if (token == NULL || strcmp(token, "-") == 0) {
         token = "";
+        snapshot = 1;
+    } else if (strcmp(token, "none") == 0) {
+        token = "";   /* no server last time: wait for one */
     }
     if (path != NULL && path[0] != '\0') {
         if (strlen(path) >= sizeof(control_path_t)) {
@@ -1216,18 +1265,21 @@ int control_wait(const char *path, const char *token, int timeout)
         w[i].has_old = token_find(token, w[i].path, &w[i].old);
     }
     free(paths);
-    /* A server gone since the token, or a token not of ours: a change */
-    changed = token_lost(token, w, n);
+    /* A server gone since the token, or a token not of ours: a change.
+     * With --control only that server counts: a token of all of them may
+     * name others */
+    changed = scoped ? 0 : token_lost(token, w, n);
     if (n == 0) {
-        if (!changed) {
+        if (!changed && !snapshot) {
             sleep((unsigned)timeout);   /* no server: nothing to wait on */
         }
-        printf("-\n");
+        printf("none\n");
         free(w);
         return 0;
     }
     /* Changed already: only the fingerprints of now, no waiting */
     secs = changed ? 0 : timeout;
+    deadline = time(NULL) + secs + 5;
     for (i = 0; i < n; ++i) {
         struct sockaddr_un sa;
         char cmd[48];
@@ -1248,11 +1300,16 @@ int control_wait(const char *path, const char *token, int timeout)
         memset(&sa, 0, sizeof(sa));
         sa.sun_family = AF_UNIX;
         snprintf(sa.sun_path, sizeof(sa.sun_path), "%s", w[i].path);
-        if (fd >= FD_SETSIZE ||
+        /* Never blocks: a server whose backlog is full must not hold up
+         * the others (it counts as unchanged, its fingerprint kept) */
+        if (fd >= FD_SETSIZE || set_nonblock(fd) != 0 ||
             connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
-            int err = errno;
+            int err = fd >= FD_SETSIZE ? EMFILE : errno;
 
             close(fd);
+            if (err == EAGAIN || err == EWOULDBLOCK || err == EINPROGRESS) {
+                continue;   /* busy: as it was */
+            }
             if (err == ECONNREFUSED || err == ENOENT) {
                 /* A socket left behind: a change only for a server the
                  * token had (else every round would be one) */
@@ -1284,7 +1341,18 @@ int control_wait(const char *path, const char *token, int timeout)
         }
         w[i].fd = fd;
     }
-    deadline = time(NULL) + secs + 5;
+    /* Only sockets left behind (or a --control nobody listens on), and no
+     * change: wait as with no server at all, or a follower would spin */
+    if (rc == 0 && !changed && !snapshot) {
+        int open_fds = 0;
+
+        for (i = 0; i < n; ++i) {
+            open_fds += w[i].fd >= 0;
+        }
+        if (open_fds == 0) {
+            sleep((unsigned)secs);
+        }
+    }
     while (rc == 0) {
         fd_set rset;
         struct timeval tv;
@@ -1371,11 +1439,16 @@ int control_wait(const char *path, const char *token, int timeout)
             if (w[i].gone || (!w[i].has_now && !w[i].has_old)) {
                 continue;
             }
+            char enc[3U * sizeof(control_path_t)];
+
+            if (token_path(w[i].path, enc, sizeof(enc)) != 0) {
+                continue;
+            }
             h = w[i].has_now ? w[i].now : w[i].old;
-            printf("%s%016" PRIx64 ":%s", printed ? "," : "", h, w[i].path);
+            printf("%s%016" PRIx64 ":%s", printed ? "," : "", h, enc);
             printed = 1;
         }
-        printf("%s\n", printed ? "" : "-");
+        printf("%s\n", printed ? "" : "none");
     }
     free(w);
     return rc;

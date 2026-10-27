@@ -415,6 +415,19 @@ out=$(docker exec "$P-srv" camex --status --wait "$TOKEN" --wait-timeout 2 2>&1)
 t1=$(date +%s)
 [ "$out" = "$TOKEN" ] && [ $((t1 - t0)) -ge 2 ] && [ $((t1 - t0)) -le 4 ]
 check $? "with no change it waits for --wait-timeout and gives the same token ($((t1 - t0)) s)"
+# --control with a token of more servers: only that server counts
+out=$(docker exec "$P-srv" sh -c "t0=\$(date +%s); camex --status --control /run/camex/camex-udp-5800.sock \
+    --wait '$TOKEN,0000000000000000:/run/camex/other.sock' --wait-timeout 2 >/dev/null; echo \$((\$(date +%s) - t0))")
+[ "$out" -ge 2 ] 2>/dev/null
+check $? "--control waits for its own server, whatever else the token names (${out} s)"
+# Only a socket left behind (section 5): "-" answers at once, "none"
+# waits instead of spinning
+out=$(docker exec "$P-srv" camex --status --control /run/camex/camex-udp-5899.sock --wait - 2>&1)
+t0=$(date +%s)
+out2=$(docker exec "$P-srv" camex --status --control /run/camex/camex-udp-5899.sock --wait none --wait-timeout 2 2>&1)
+t1=$(date +%s)
+[ "$out" = none ] && [ "$out2" = none ] && [ $((t1 - t0)) -ge 2 ]
+check $? "a socket left behind: no state (none), and a wait on it takes its time ($((t1 - t0)) s)"
 # Counts the map runs of the sync script
 docker exec "$P-srv" sh -c 'printf "#!/bin/sh\ncase \"\$*\" in *nginx-map*) echo x >> /tmp/maps;; esac\nexec camex \"\$@\"\n" \
     > /usr/local/bin/camex-counting && chmod +x /usr/local/bin/camex-counting && rm -f /tmp/maps'
