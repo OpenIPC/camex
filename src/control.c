@@ -1099,6 +1099,10 @@ typedef struct {
     int gone;
     char buf[64];
     size_t len;
+    dev_t dev;              /* the socket file at the start: another one */
+    ino_t ino;              /* at its path is a server started there; */
+    time_t ctime;           /* (the inode may be the old one's, reused) */
+    int have_ino;
 } control_waiter_t;
 
 /* A socket path as the token has it: ',' and '%' as %2C and %25, so that
@@ -1219,6 +1223,88 @@ static int waiter_parse(control_waiter_t *w)
     return 1;
 }
 
+/* A control socket that is not one of w's, or another file at the path
+ * of one (a server started where one left its socket behind): a server
+ * started since the list was read (#138) */
+static int wait_new_socket(const control_waiter_t *w, int n)
+{
+    control_path_t *paths = NULL;
+    int m = control_list(&paths), i, j, found = 0;
+
+    for (i = 0; i < m && !found; ++i) {
+        int known = 0;
+
+        for (j = 0; j < n; ++j) {
+            if (strcmp(paths[i], w[j].path) == 0) {
+                struct stat st;
+
+                known = !w[j].have_ino || stat(paths[i], &st) != 0 ||
+                        (st.st_dev == w[j].dev && st.st_ino == w[j].ino &&
+                         st.st_ctime == w[j].ctime);
+                break;
+            }
+        }
+        found = !known;
+    }
+    free(paths);
+    return found;
+}
+
+/* Nothing to wait on (no server, or only sockets left behind): wait the
+ * seconds, looking every second for a server that starts (not with
+ * --control: one server only). 1 when one did */
+static int wait_for_server(const control_waiter_t *w, int n, int secs,
+                           int scoped)
+{
+    time_t deadline = time(NULL) + secs;
+
+    while (time(NULL) < deadline) {
+        sleep(1);
+        if (!scoped && wait_new_socket(w, n)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The WAIT command to fd, non-blocking, by the deadline: 0 sent, 1 the
+ * server is busy (it counts as unchanged), -1 it is gone */
+static int wait_send(int fd, const char *cmd, time_t deadline)
+{
+    size_t len = strlen(cmd), off = 0U;
+
+    while (off < len) {
+        ssize_t k;
+#ifdef MSG_NOSIGNAL
+        k = send(fd, cmd + off, len - off, MSG_NOSIGNAL);
+#else
+        k = send(fd, cmd + off, len - off, 0);
+#endif
+        if (k > 0) {
+            off += (size_t)k;
+        } else if (k < 0 && (errno == EAGAIN || errno == EWOULDBLOCK ||
+                             errno == EINTR)) {
+            fd_set wset;
+            struct timeval tv;
+            time_t left = deadline - time(NULL);
+
+            if (left <= 0) {
+                return 1;
+            }
+            FD_ZERO(&wset);
+            FD_SET(fd, &wset);
+            tv.tv_sec = left;
+            tv.tv_usec = 0;
+            if (select(fd + 1, NULL, &wset, NULL, &tv) <= 0 && errno != EINTR) {
+                return 1;
+            }
+        } else {
+            return -1;
+        }
+    }
+    return 0;
+}
+
 int control_wait(const char *path, const char *token, int timeout)
 {
     control_path_t *paths = NULL;
@@ -1263,6 +1349,16 @@ int control_wait(const char *path, const char *token, int timeout)
         memcpy(w[i].path, paths[i], sizeof(w[i].path));
         w[i].fd = -1;
         w[i].has_old = token_find(token, w[i].path, &w[i].old);
+        {
+            struct stat st;
+
+            if (stat(w[i].path, &st) == 0) {
+                w[i].dev = st.st_dev;
+                w[i].ino = st.st_ino;
+                w[i].ctime = st.st_ctime;
+                w[i].have_ino = 1;
+            }
+        }
     }
     free(paths);
     /* A server gone since the token, or a token not of ours: a change.
@@ -1271,7 +1367,12 @@ int control_wait(const char *path, const char *token, int timeout)
     changed = scoped ? 0 : token_lost(token, w, n);
     if (n == 0) {
         if (!changed && !snapshot) {
-            sleep((unsigned)timeout);   /* no server: nothing to wait on */
+            /* no server: wait for one; one that starts answers with its
+             * state at once */
+            if (wait_for_server(w, n, timeout, scoped)) {
+                free(w);
+                return control_wait(path, "-", timeout);
+            }
         }
         printf("none\n");
         free(w);
@@ -1329,15 +1430,18 @@ int control_wait(const char *path, const char *token, int timeout)
         } else {
             snprintf(cmd, sizeof(cmd), "WAIT - 0\n");
         }
-#ifdef MSG_NOSIGNAL
-        if (send(fd, cmd, strlen(cmd), MSG_NOSIGNAL) != (ssize_t)strlen(cmd)) {
-#else
-        if (send(fd, cmd, strlen(cmd), 0) != (ssize_t)strlen(cmd)) {
-#endif
-            close(fd);
-            w[i].gone = 1;
-            changed |= w[i].has_old;
-            continue;
+        {
+            /* A second at most: 30 bytes on a new connection */
+            int sent = wait_send(fd, cmd, time(NULL) + 1);
+
+            if (sent != 0) {
+                close(fd);
+                if (sent < 0) {
+                    w[i].gone = 1;
+                    changed |= w[i].has_old;
+                }
+                continue;   /* busy: as it was */
+            }
         }
         w[i].fd = fd;
     }
@@ -1349,8 +1453,10 @@ int control_wait(const char *path, const char *token, int timeout)
         for (i = 0; i < n; ++i) {
             open_fds += w[i].fd >= 0;
         }
-        if (open_fds == 0) {
-            sleep((unsigned)secs);
+        /* What is left of the wait, not all of it again */
+        if (open_fds == 0 && deadline - 5 > time(NULL) &&
+            wait_for_server(w, n, (int)(deadline - 5 - time(NULL)), scoped)) {
+            changed = 1;
         }
     }
     while (rc == 0) {
@@ -1381,9 +1487,15 @@ int control_wait(const char *path, const char *token, int timeout)
         if (left <= 0) {
             break;
         }
-        tv.tv_sec = left;
+        /* A second at a time: a server that starts meanwhile is a change
+         * (#138) */
+        tv.tv_sec = left < 1 ? left : 1;
         tv.tv_usec = 0;
         ready = select(maxfd + 1, &rset, NULL, NULL, &tv);
+        if (ready == 0 && !scoped && wait_new_socket(w, n)) {
+            changed = 1;
+            break;
+        }
         if (ready < 0) {
             if (errno == EINTR) {
                 continue;
