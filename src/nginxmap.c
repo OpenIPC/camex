@@ -653,8 +653,8 @@ static void buf_list(map_buf_t *b, const char *cls, const map_entry_t *e,
          * in them */
         if (d->live) {
             buf_printf(b, "<tr class=\"dev\"><td class=\"lamp\"><span "
-                       "class=\"bulb\"></span></td><td><a href=\"//%s%s/\">",
-                       d->host, port);
+                       "class=\"bulb\"></span></td><td><a href=\"%s//%s%s/\">",
+                       port[0] != '\0' ? "http:" : "", d->host, port);
             buf_html(b, shown_name(d));
             buf_printf(b, "</a></td><td class=\"id\">%s</td><td "
                        "class=\"addr\">%s</td><td class=\"addr\">",
@@ -708,7 +708,8 @@ static void buf_list(map_buf_t *b, const char *cls, const map_entry_t *e,
 char *nginx_index_format(const char *lines, const char *domain,
                          int http_port, FILE *warn, size_t *count)
 {
-    /* The links' port: nginx's, when it is not HTTP's own (#141) */
+    /* The links' port: nginx's, when it is not HTTP's own (#141). Then
+     * the links say http: the port is that of HTTP, not of HTTPS */
     char port[8] = "";
     map_entry_t *e = NULL, *conf = NULL, *autos = NULL;
     size_t dlen = domain != NULL ? strlen(domain) : 0U;

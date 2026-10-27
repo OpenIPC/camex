@@ -53,7 +53,7 @@ Options:
 | `--psk <key>`               | the clients' pre-shared key: `hex:<64 hex digits>`, `base64:<44 characters>` or a passphrase (a random `hex:` key)  |
 | `--pool <network>/<prefix>` | the clients' pool, `/8` to `/30`; the server gets its first address (`10.200.0.0/24`, the server `10.200.0.1`)      |
 | `--password <password>`     | with `--domain`: the start page's password, user `camex` (a random one)                                             |
-| `--http-port <port>`        | with `--domain`: the port nginx listens on for the cameras and the start page (80); the start page's links carry it |
+| `--http-port <port>`        | with `--domain`: the port nginx listens on for the cameras and the start page (80); the start page's links are then `http://<ID>.<domain>:<port>/` |
 | `--upstream-port <port>`    | with `--domain`: the cameras' web port in their tunnel (80)                                                         |
 | `--uninstall`               | list every file of camex and the commands to remove them; removes nothing                                           |
 | `-h`, `--help`              | the options                                                                                                         |

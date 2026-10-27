@@ -209,6 +209,12 @@ uninstall_list() {
 }
 
 while [ $# -gt 0 ]; do
+    # An option given with an empty value is a mistake, not "the default"
+    case "$1" in
+        --domain|--port|--transport|--psk|--pool|--password|--http-port|--upstream-port)
+            [ $# -ge 2 ] || usage
+            [ -n "$2" ] || die "$1: empty" ;;
+    esac
     case "$1" in
         --domain)    [ $# -ge 2 ] || usage; DOMAIN=$2; shift 2 ;;
         --port)      [ $# -ge 2 ] || usage; PORT=$2; shift 2 ;;
@@ -243,15 +249,29 @@ case "${TRANSPORT:-udp}" in
     udp|tcp) ;;
     *) die "--transport: udp or tcp, not $TRANSPORT" ;;
 esac
-# As camex reads them: hex:<64 hex digits>, base64:<44 characters>, or a
-# passphrase; one line
+# As camex reads them: hex:<64 hex digits>, base64:<44 characters>, both
+# 32 bytes and not all zero, or a passphrase; one line, below 128
+# characters, no blank at its ends (camex trims those off)
 if [ -n "$PSK_OPT" ]; then
     case "$PSK_OPT" in
         *"
 "*) die "--psk: one line" ;;
-        hex:*) printf '%s\n' "${PSK_OPT#hex:}" | grep -qxE '[0-9a-fA-F]{64}' ||
-                   die "--psk: hex: needs 64 hex digits" ;;
-        base64:*) [ ${#PSK_OPT} -eq 51 ] || die "--psk: base64: needs 44 characters" ;;
+        [[:space:]]*|*[[:space:]]) die "--psk: no blank at its start or end" ;;
+    esac
+    [ ${#PSK_OPT} -lt 128 ] || die "--psk: below 128 characters"
+    case "$PSK_OPT" in
+        hex:*)
+            printf '%s\n' "${PSK_OPT#hex:}" | grep -qxE '[0-9a-fA-F]{64}' ||
+                die "--psk: hex: needs 64 hex digits"
+            printf '%s\n' "${PSK_OPT#hex:}" | grep -qxE '0{64}' &&
+                die "--psk: an all-zero key" ;;
+        base64:*)
+            b=${PSK_OPT#base64:}
+            printf '%s\n' "$b" | grep -qxE '[A-Za-z0-9+/]{43}=' ||
+                die "--psk: base64: needs 44 characters (32 bytes)"
+            raw=$(printf '%s' "$b" | base64 -d 2>/dev/null | od -An -tx1 | tr -d ' \n')
+            [ ${#raw} -eq 64 ] || die "--psk: base64: not 32 bytes"
+            [ "$raw" != "$(printf '%064d' 0)" ] || die "--psk: an all-zero key" ;;
     esac
 fi
 case "$PASSWORD" in
@@ -467,13 +487,14 @@ if [ ! -f "$DEFAULTS" ]; then
     say "created: $DEFAULTS"
 else
     say "kept: $DEFAULTS"
-    if [ -n "$TRANSPORT" ]; then
-        have=udp
-        grep -qE -- '(--transport|-R)[ =]tcp' "$DEFAULTS" && have=tcp
-        [ "$have" = "$TRANSPORT" ] ||
-            say "kept the server's transport $have, not --transport $TRANSPORT:" \
-                "edit CAMEX_ARGS in $DEFAULTS, then systemctl restart camex"
-    fi
+fi
+# Also when an older unit's arguments were moved there
+if [ -n "$TRANSPORT" ]; then
+    have=udp
+    grep -qE -- '(--transport|-R)[ =]tcp' "$DEFAULTS" && have=tcp
+    [ "$have" = "$TRANSPORT" ] ||
+        say "kept the server's transport $have, not --transport $TRANSPORT:" \
+            "edit CAMEX_ARGS in $DEFAULTS, then systemctl restart camex"
 fi
 fetch "$CAMEX_SRC/examples/camex.service" "$TMP/camex.service"
 NEW_UNIT=
@@ -576,14 +597,24 @@ else
             *) sed -i "s|^Environment=INDEX=.*|Environment=INDEX=$index|" "$TMP/sync.service" ;;
         esac
     fi
-    # Its ports: the option, else what the installed service has (#141)
+    # Its ports (#141), settings made once: those of the installed service
+    # (none there: 80), else the option
     for v in HTTP_PORT UPSTREAM_PORT; do
-        eval "val=\$$v"
-        [ -n "$val" ] || val=$(sed -n "s/^Environment=$v=\([0-9]*\)\$/\1/p" \
-                               "$UNITS/camex-nginx-sync.service" 2>/dev/null | tail -n 1)
-        [ -n "$val" ] && [ "$val" != 80 ] &&
+        eval "opt=\$$v"
+        if [ -f "$UNITS/camex-nginx-sync.service" ]; then
+            val=$(sed -n "s/^Environment=$v=\([0-9]*\)\$/\1/p" \
+                  "$UNITS/camex-nginx-sync.service" | tail -n 1)
+            val=${val:-80}
+            [ -z "$opt" ] || [ "$opt" = "$val" ] ||
+                say "kept $v=$val of camex-nginx-sync.service, not $opt: edit it" \
+                    "in $UNITS/camex-nginx-sync.service$([ $v = HTTP_PORT ] &&
+                    echo " and the listen lines of $NGINX_CONF")"
+        else
+            val=${opt:-80}
+        fi
+        [ "$val" != 80 ] &&
             sed -i "/^Environment=INDEX=/a Environment=$v=$val" "$TMP/sync.service"
-        [ "$v" = HTTP_PORT ] && WEB_PORT=${val:-80}
+        [ "$v" = HTTP_PORT ] && WEB_PORT=$val
     done
     put "$TMP/sync.service" "$UNITS/camex-nginx-sync.service" 644 || true
     # camex 3.10's timer: the service follows the servers itself now

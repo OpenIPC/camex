@@ -193,8 +193,8 @@ static void test_index(void)
     page_http_port = 85;
     m = page(LIVE("cam1", "10.0.0.1", "1", "One"), "openipc.click", &n, warn,
              sizeof(warn));
-    CHECK(m != NULL && strstr(m, "<a href=\"//cam1.openipc.click:85/\">"),
-          "--http-port 85: the links to the devices carry :85");
+    CHECK(m != NULL && strstr(m, "<a href=\"http://cam1.openipc.click:85/\">"),
+          "--http-port 85: the links to the devices are http:// with :85");
     free(m);
     page_http_port = 80;
     m = page(LIVE("cam1", "10.0.0.1", "1", "One"), "openipc.click", &n, warn,
