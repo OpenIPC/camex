@@ -46,5 +46,11 @@ const flush = () => new Promise((r) => setTimeout(r, 50));
     reply = { ok: true, text: () => Promise.resolve(c) };
     tick(); await flush();
     check(navigated, 'another camex version: a full reload');
+    // A link with nginx's HTTP port, the page opened over HTTPS (#141)
+    const tlsPage = a.replace(/<\/tbody>/, '<tr><td><a href="http://cam9.cams.test:85/">x</a></td></tr></tbody>');
+    const t = new JSDOM(tlsPage, { url: 'https://cams.test/', runScripts: 'dangerously',
+        virtualConsole: new VirtualConsole(), beforeParse(w) { w.setInterval = () => 1; } });
+    check(t.window.document.querySelector('a[href="https://cam9.cams.test/"]') !== null,
+          'over HTTPS, a link with the HTTP port goes to https:// without it');
     process.exit(fails ? 1 : 0);
 })();
