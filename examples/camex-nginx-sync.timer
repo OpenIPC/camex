@@ -1,4 +1,9 @@
-# camex-nginx-sync.timer — run camex-nginx-sync.service every 10 seconds (#84)
+#
+# Copyright (c) OpenIPC  https://openipc.org  MIT License
+#
+# Installed as: /etc/systemd/system/camex-nginx-sync.timer
+# Docs: https://github.com/OpenIPC/camex/blob/master/docs/nginx.md#sync-script
+#
 
 [Unit]
 Description=Update the nginx map of camex clients every 10 seconds

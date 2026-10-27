@@ -152,6 +152,11 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}   # toolchain digest lookup (ci/build-musl.sh)
         run: QEMU=1 ci/build-musl.sh ${{ matrix.target }} "${{ env.BUILD_DIR }}"
 
+      # The release binary, as install.sh downloads it
+      - name: E2E test (install.sh on Debian with systemd, issue #129)
+        run: CAMEX_BINARY="${{ env.BUILD_DIR }}/${{ env.TARGET }}-x86_64" ./docker/test-e2e-install.sh
+        if: matrix.target == 'x86_64'
+
       - name: Report size
         run: |
           echo "## ${{ matrix.target }} binary sizes" | tee -a sizes.md

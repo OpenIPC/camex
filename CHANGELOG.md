@@ -1,8 +1,50 @@
+<!-- Copyright (c) OpenIPC  https://openipc.org  MIT License -->
+
 # Changelog
 
 The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries are
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
+
+## 3.10.0 — 2026-10-27
+
+- `install.sh`: the camex server on Debian or Ubuntu in one command, run straight from
+  GitHub (#129): `curl -fsSL https://raw.githubusercontent.com/OpenIPC/camex/master/install.sh
+  | sudo sh`. Its steps are listed at the top of the script and printed before it starts,
+  then `[n/8]` at each one:
+  - camex of the `latest` release for the host's architecture in `/usr/local/bin`, the
+    server's key pair, `/etc/camex/camex.conf` (0600: port, pool, client isolation, a new
+    `psk=`), `/etc/default/camex` and the service; it prints the clients' public key, psk
+    and command line.
+  - `--domain <domain>` also installs nginx in front of the clients: nginx's file, the
+    sync script with its service and timer, the start page's password; `domain=` is added
+    to `camex.conf`, then `camex-nginx-sync --check` runs. A rerun without `--domain` keeps
+    nginx's part up to date; another domain is refused.
+  - A rerun updates camex, the scripts and the units; the settings made once (`camex.conf`,
+    `server.key`, `/etc/default/camex`, nginx's file, the password) stay as they are.
+  - `--uninstall` lists every file of camex, which are there, and the commands to remove
+    them; it removes nothing itself.
+  - Other systems are refused with a message: install by hand.
+- `examples/camex-nginx-setup.sh` is removed: `install.sh --domain` replaces it. Its setup
+  moves to the new names on the first run: `/etc/nginx/conf.d/camex.conf` becomes
+  `camex-nginx.conf` with its edits, `/usr/local/bin/camex-nginx-sync.sh` becomes
+  `camex-nginx-sync` (the old one kept in `/var/backups/camex/`).
+- `examples/camex.service`: the arguments in `/etc/default/camex` (`EnvironmentFile=`), so
+  a new unit never loses them (the arguments of an older unit move there on the first run
+  of `install.sh`); `RuntimeDirectory=camex` for the control socket of `camex --status`
+  under `ProtectSystem=strict`; `systemctl reload camex` sends SIGHUP.
+- `examples/camex-nginx-sync.service` runs `/usr/local/bin/camex-nginx-sync`.
+- A new e2e test (`docker/test-e2e-install.sh`, run by CI on the release binary): Debian 12
+  with systemd, a client connecting with what the installer printed, nginx, reruns, the
+  older layout, `--uninstall`.
+- Docs: the README (en/ru/zh-CN) keeps what camex is for, the installation, the Android and
+  web screenshots, the release links and a list of the docs; the rest moved to `docs/`
+  (English): `install.md` (with the files on the server and a clean reinstall),
+  `usage.md`, `server.md` (with the keys of `camex.conf`), `nginx.md` (with the sync
+  script), `security.md`, `android.md`, `kernel-module.md`, `build.md`, `releases.md`.
+  Every file has the OpenIPC header (the kernel module stays GPL-2.0). The scripts and
+  configs of `examples/` and `install.sh` keep only that header,
+  where the file is installed and a link to its docs.
 
 ## 3.9.2 — 2026-10-26
 

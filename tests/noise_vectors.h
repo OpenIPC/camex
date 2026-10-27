@@ -1,3 +1,9 @@
+/*
+ *
+ * Copyright (c) OpenIPC  https://openipc.org  MIT License
+ *
+ */
+
 /* Noise_NKpsk0_25519_ChaChaPoly_BLAKE2b test vector from cacophony
  * (https://github.com/haskell-cryptography/cacophony, vectors/cacophony.txt) */
 

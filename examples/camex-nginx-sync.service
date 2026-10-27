@@ -1,9 +1,9 @@
-# camex-nginx-sync.service — update nginx's map of camex clients (#84)
-# Runs once; camex-nginx-sync.timer starts it every 10 seconds.
-#   sudo cp examples/camex-nginx-sync.sh /usr/local/bin/
-#   sudo cp examples/camex-nginx-sync.service examples/camex-nginx-sync.timer \
-#       /etc/systemd/system/
-#   sudo systemctl daemon-reload && sudo systemctl enable --now camex-nginx-sync.timer
+#
+# Copyright (c) OpenIPC  https://openipc.org  MIT License
+#
+# Installed as: /etc/systemd/system/camex-nginx-sync.service
+# Docs: https://github.com/OpenIPC/camex/blob/master/docs/nginx.md#sync-script
+#
 
 [Unit]
 Description=Update the nginx map of camex clients
@@ -11,11 +11,7 @@ After=camex.service nginx.service
 
 [Service]
 Type=oneshot
-# The domain comes from domain= in [server] of camex.conf (#106);
-# Environment=DOMAIN=... overrides it
 Environment=MAP=/etc/nginx/camex-map.conf
-# The start page of the clients (#105); empty: none. StateDirectory
-# creates /var/lib/camex-nginx
 Environment=INDEX=/var/lib/camex-nginx/index.html
 StateDirectory=camex-nginx
-ExecStart=/usr/local/bin/camex-nginx-sync.sh
+ExecStart=/usr/local/bin/camex-nginx-sync
