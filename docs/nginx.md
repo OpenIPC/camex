@@ -343,9 +343,14 @@ blocks in the file, Auto otherwise, and the browser remembers the tab chosen
 - **Order**: by name (A–Z in any case alike), then by ID, connected or not, so
   a camera keeps its place in the list.
 - **Freshness**: the ages and the traffic are those of the last sync (at
-  least every 10 seconds with `--follow` and `INDEX`), and the page reloads itself every 30
-  seconds. The script replaces the page at every sync and logs only when the
-  number of cameras online changed.
+  least every 10 seconds with `--follow` and `INDEX`; a client that comes or
+  goes at once). An open page refreshes itself in place every 5 seconds
+  (#142): its script fetches the same file again and swaps the counts and the
+  lists, keeping the chosen tab and the scroll; when the fetch fails (the
+  server down, a new password) the data stays and the page says "no
+  connection"; after an update of camex it reloads once. Without JavaScript
+  the page reloads every 30 seconds. The script replaces the page at every
+  sync and logs only when the number of cameras online changed.
 - **The same rules as the map**: IDs that are not a host name label are left
   out with a warning, of an ID on two servers the connected one (then the
   lower address) is kept, and when a running server does not answer nothing

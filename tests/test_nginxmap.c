@@ -8,6 +8,7 @@
  */
 
 #include "nginxmap.h"
+#include "version.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -187,6 +188,22 @@ static void test_index(void)
                      "<td class=\"hs\">6m52s ago &middot; 172</td><td "
                      "class=\"tr\">714&#8239;096 / 19&#8239;760</td>"),
           "one auto device, a link without a domain, the values");
+    free(m);
+
+    /* The page's script (#142): its version for the script, the 30-second
+     * reload only without JavaScript, the refresh in place */
+    m = page(LIVE("cam1", "10.0.0.1", "1", "One"), "openipc.click", &n, warn,
+             sizeof(warn));
+    CHECK(m != NULL &&
+              strstr(m, "<noscript><meta http-equiv=\"refresh\" "
+                     "content=\"30\"></noscript>") &&
+              strstr(m, "<meta name=\"camex-version\" content=\""
+                     CAMEX_VERSION "\">") &&
+              strstr(m, "setInterval(tick,5000)") &&
+              strstr(m, "class=\"stale-mark\""),
+          "the page refreshes in place, its version, no bare meta refresh");
+    CHECK(m != NULL && strstr(m, "<meta http-equiv=\"refresh\" content=\"30\">\n") == NULL,
+          "no meta refresh outside <noscript>");
     free(m);
 
     /* nginx on another port (#141): the links carry it; 80 none */
