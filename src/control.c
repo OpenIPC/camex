@@ -1062,7 +1062,7 @@ int control_nginx_map(const char *path, const char *domain, int port,
     return rc;
 }
 
-int control_nginx_index(const char *path, const char *domain)
+int control_nginx_index(const char *path, const char *domain, int http_port)
 {
     char *all = NULL, *page;
     size_t count = 0U;
@@ -1076,7 +1076,7 @@ int control_nginx_index(const char *path, const char *domain)
         control_gather(path, "CLIENTS INDEX\n", &all) != 0) {
         return 1;
     }
-    page = nginx_index_format(all, dom, stderr, &count);
+    page = nginx_index_format(all, dom, http_port, stderr, &count);
     free(all);
     if (page == NULL) {
         fprintf(stderr, "camex: cannot build the start page (check "
@@ -1577,7 +1577,7 @@ int control_wait(const char *path, const char *token, int timeout)
     return 1;
 }
 
-int control_nginx_index(const char *path, const char *domain)
+int control_nginx_index(const char *path, const char *domain, int http_port)
 {
     (void)path;
     (void)domain;

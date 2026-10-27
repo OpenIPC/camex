@@ -430,6 +430,7 @@ Settings (environment; `camex-nginx-sync.service` sets `MAP` and `INDEX`, and
 | Variable             | Meaning                                                                                                                         |
 |----------------------|---------------------------------------------------------------------------------------------------------------------------------|
 | `DOMAIN`             | the domain after the client ID; empty (default): `domain=` in `[server]` of the server                                          |
+| `HTTP_PORT`          | nginx's port, in the start page's links and what `--check` asks (80)                                                            |
 | `UPSTREAM_PORT`      | the clients' web port (80)                                                                                                      |
 | `DEFAULT`            | where unknown names go, `<IPv4>:<port>` (an address: `proxy_pass` with a variable has no resolver); empty: nginx's offline page |
 | `CONTROL`            | one server's control socket; empty: every server                                                                                |

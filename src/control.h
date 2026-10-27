@@ -71,7 +71,7 @@ int control_nginx_map(const char *path, const char *domain, int port,
 /* camex --status --format nginx-index (#105): the same clients, with
  * their name= from the server's file, as a start page (nginxmap.h).
  * Exit code 1, and no page, when a server does not answer. */
-int control_nginx_index(const char *path, const char *domain);
+int control_nginx_index(const char *path, const char *domain, int http_port);
 
 /* camex --status --wait <token> (#130): wait until the state of the
  * clients changes on any server (or the one at path), at most timeout

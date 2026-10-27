@@ -116,6 +116,7 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         { "default", required_argument, NULL, 'E' },
         { "wait", required_argument, NULL, 'w' },
         { "wait-timeout", required_argument, NULL, 'x' },
+        { "http-port", required_argument, NULL, 'z' },
         { NULL, 0, NULL, 0 }
     };
     int opt;
@@ -345,6 +346,20 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
             if (copy_option(config->map_default, sizeof(config->map_default),
                             optarg, "default") != 0) {
                 return -1;
+            }
+            break;
+        case 'z':
+            /* Long only: nginx's port, in the start page's links (#141) */
+            {
+                char *end = NULL;
+                long val = strtol(optarg, &end, 10);
+
+                if (end == optarg || *end != '\0' || val < 1 || val > 65535) {
+                    log_message(LOG_ERR, "--http-port must be 1..65535, "
+                                "got: %s", optarg);
+                    return -1;
+                }
+                config->map_http_port = (int)val;
             }
             break;
         case 'w':
@@ -581,6 +596,8 @@ void print_usage(const char *progname)
            " server)\n");
     printf("      --upstream-port <port>  With nginx-map: the clients'"
            " web port (default: 80)\n");
+    printf("      --http-port <port>  With nginx-index: nginx's port, in the"
+           " links (default: 80)\n");
     printf("      --default <ip:port>  With nginx-map: where unknown"
            " names go\n");
     printf("      --wait <token>   Wait until the clients change"
@@ -695,7 +712,8 @@ int main(int argc, char *argv[])
                                          config.map_default)
                  : config.status_nginx_index
                      ? control_nginx_index(config.control_path,
-                                           config.map_domain)
+                                           config.map_domain,
+                                           config.map_http_port)
                      : control_status(config.control_path,
                                       config.status_json);
 

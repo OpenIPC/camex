@@ -22,6 +22,8 @@
 #    names; a unit with its own CAMEX_ARGS keeps them in /etc/default/camex;
 #    camex 3.10's timer is removed.
 # 7. --uninstall lists the files and removes nothing.
+# 8. Every option on a new host (#141): TCP, port, pool, psk, password,
+#    nginx's port and the cameras' port; a rerun with others changes none.
 #
 # Usage: ./test-e2e-install.sh
 #   CAMEX_BINARY=path/to/camex  binary to install (default: ../camex; it must
@@ -301,6 +303,61 @@ echo "$out" | grep -qx "  + /usr/local/bin/camex" && echo "$out" | grep -qx "  +
     echo "$out" | grep -qx "  rm /usr/local/bin/camex-nginx-sync" &&
     echo "$out" | grep -qx "  systemctl disable --now camex-nginx-sync.service camex.service"
 check $? "it lists the files, which are there, and the commands to remove them"
+
+echo "== 8. every option, on a new host; a rerun with others changes nothing (#141)"
+docker run -d --name "$P-opt" --hostname opt --network "$NET_NAME" --privileged \
+    --cgroupns=private --tmpfs /run --tmpfs /run/lock "$IMAGE" >/dev/null
+for _ in $(seq 1 30); do
+    case "$(docker exec "$P-opt" systemctl is-system-running 2>/dev/null)" in
+        running|degraded) break ;;
+    esac
+    sleep 1
+done
+o() {       # o <command>: in the second server
+    docker exec "$P-opt" sh -c "$1"
+}
+orun() {    # orun <args>: install.sh there
+    docker exec -e CAMEX_SRC=file:///opt/src -e CAMEX_RELEASE=file:///opt/release \
+        "$P-opt" sh -c 'cat /opt/src/install.sh | sh -s -- "$@"' sh "$@" 2>&1
+}
+out=$(orun --domain opts.test --port 5900 --transport tcp --pool 10.60.1.7/22 \
+    --psk "my long passphrase" --password "pa:ss word" --http-port 85 --upstream-port 8080)
+rc=$?
+echo "$out" | sed 's/^/      /'
+[ $rc -eq 0 ] && o 'grep -qx "local_cidr=10.60.0.1/22" /etc/camex/camex.conf &&
+    grep -qx "auto_pool=10.60.0.0/22" /etc/camex/camex.conf &&
+    grep -qx "psk=my long passphrase" /etc/camex/camex.conf && grep -qx "port=5900" /etc/camex/camex.conf'
+check $? "camex.conf: port, the pool's network with the server first, the given psk"
+o 'grep -q -- "--transport tcp" /etc/default/camex && camex --status | grep -q "tcp port 5900"'
+check $? "the server runs over TCP on the given port"
+echo "$out" | grep -qF -- "--port 5900 --transport tcp" && echo "$out" | grep -qF -- "--psk 'my long passphrase'"
+check $? "the printed client command has the transport, the port and the psk"
+o 'grep -qE "^[[:space:]]*listen[[:space:]]+85;" /etc/nginx/conf.d/camex-nginx.conf &&
+   ! grep -qE "^[[:space:]]*listen[[:space:]]+80;" /etc/nginx/conf.d/camex-nginx.conf &&
+   grep -qx "Environment=HTTP_PORT=85" /etc/systemd/system/camex-nginx-sync.service &&
+   grep -qx "Environment=UPSTREAM_PORT=8080" /etc/systemd/system/camex-nginx-sync.service'
+check $? "nginx listens on 85; the sync service has HTTP_PORT and UPSTREAM_PORT"
+code() {    # code [<user:password>]: the start page's status on port 85
+    o "curl -s -o /dev/null -w '%{http_code}' -m 10 ${1:+-u '$1'} -H 'Host: opts.test' http://127.0.0.1:85/"
+}
+[ "$(code)" = 401 ] && [ "$(code 'camex:pa:ss word')" = 200 ]
+check $? "the start page on port 85 opens with the given password"
+echo "$out" | grep -q "ok    nginx sends camex-check-[0-9]*\.opts\.test to camex" &&
+    echo "$out" | grep -q "Start page:       http://opts.test:85/"
+check $? "--check asks nginx on port 85; the addresses printed with :85"
+out=$(orun --domain opts.test --transport udp --pool 10.70.0.0/24 --psk other \
+    --password other --http-port 86)
+rc=$?
+[ $rc -eq 0 ] && echo "$out" | grep -q "kept psk= of /etc/camex/camex.conf, not --psk" &&
+    echo "$out" | grep -q "kept auto_pool= of /etc/camex/camex.conf, not --pool 10.70.0.0/24" &&
+    echo "$out" | grep -q "kept the server's transport tcp, not --transport udp" &&
+    echo "$out" | grep -q "kept the start page's password, not --password" &&
+    echo "$out" | grep -q "kept the listen lines of /etc/nginx/conf.d/camex-nginx.conf, not --http-port 86" &&
+    o 'grep -qx "psk=my long passphrase" /etc/camex/camex.conf' && [ "$(code 'camex:pa:ss word')" = 200 ]
+check $? "a rerun with other values changes none of them and says what to edit"
+out=$(orun --password x)
+[ $? -ne 0 ] && echo "$out" | grep -q "give --domain"
+check $? "--password without --domain is refused"
 
 if [ "$FAILS" -ne 0 ]; then
     echo "FAIL: $FAILS check(s) failed"

@@ -50,13 +50,16 @@ static char *fmt(const char *lines, const char *domain, int port,
     return m;
 }
 
+/* nginx's port for page() (#141) */
+static int page_http_port = 0;
+
 static char *page(const char *lines, const char *domain, size_t *count,
                   char *warn, size_t wsize)
 {
     FILE *w = fmemopen(warn, wsize, "w");
     char *m;
 
-    m = nginx_index_format(lines, domain, w, count);
+    m = nginx_index_format(lines, domain, page_http_port, w, count);
     if (w != NULL) {
         fclose(w);
     }
@@ -185,6 +188,21 @@ static void test_index(void)
                      "class=\"tr\">714&#8239;096 / 19&#8239;760</td>"),
           "one auto device, a link without a domain, the values");
     free(m);
+
+    /* nginx on another port (#141): the links carry it; 80 none */
+    page_http_port = 85;
+    m = page(LIVE("cam1", "10.0.0.1", "1", "One"), "openipc.click", &n, warn,
+             sizeof(warn));
+    CHECK(m != NULL && strstr(m, "<a href=\"//cam1.openipc.click:85/\">"),
+          "--http-port 85: the links to the devices carry :85");
+    free(m);
+    page_http_port = 80;
+    m = page(LIVE("cam1", "10.0.0.1", "1", "One"), "openipc.click", &n, warn,
+             sizeof(warn));
+    CHECK(m != NULL && strstr(m, "<a href=\"//cam1.openipc.click/\">"),
+          "--http-port 80: no port in the links");
+    free(m);
+    page_http_port = 0;
 
     /* Only configured devices: Configured opens, Auto says it is empty */
     m = page(LIVE("cam1", "10.0.0.1", "1", "One") "O\tcam2\t-\tTwo\n",
