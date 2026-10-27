@@ -354,7 +354,7 @@ check_all() {
 
     echo "camex-nginx-sync --check"
     u=/etc/systemd/system/camex-nginx-sync.service
-    # Run by hand: the timer's settings, for those not given here
+    # Run by hand: the service's settings, for those not given here
     if [ -f "$u" ]; then
         for v in INDEX DOMAIN DEFAULT UPSTREAM_PORT CONTROL MAP; do
             eval "given=\${${v}_SET-}"
@@ -388,7 +388,7 @@ check_all() {
     # The map nginx uses against the servers' state now
     if [ -f "$MAP" ] && ! cmp -s "$cdir/map" "$MAP"; then
         warn "$MAP differs from the servers' state now: run the sync" \
-             "(is the timer running?)"
+             "(is camex-nginx-sync.service running?)"
     fi
     rm -rf "$cdir"
     case "$dom" in
@@ -550,11 +550,11 @@ check_all() {
     esac
 
     if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
-        if systemctl is-active --quiet camex-nginx-sync.timer; then
-            ok "camex-nginx-sync.timer is active"
+        if systemctl is-active --quiet camex-nginx-sync.service; then
+            ok "camex-nginx-sync.service is running"
         else
-            warn "camex-nginx-sync.timer is not active (systemctl enable" \
-                 "--now camex-nginx-sync.timer)"
+            warn "camex-nginx-sync.service is not running (systemctl" \
+                 "enable --now camex-nginx-sync.service)"
         fi
     fi
     [ "$fails" -eq 0 ] && echo "all good" || echo "$fails problem(s)"
@@ -564,6 +564,49 @@ check_all() {
 if [ "${1-}" = "--check" ]; then
     check_all
     exit $?
+fi
+
+# --follow [<seconds>] (#130): a sync as soon as the servers' clients
+# change (camex --status --wait), and at least every <seconds> for the start
+# page's live columns: 10 with INDEX, else 300. Servers before 3.11.0 do
+# not know the wait: then every 10 seconds
+if [ "${1-}" = "--follow" ]; then
+    interval=${2-}
+    if [ -z "$interval" ]; then
+        interval=300
+        [ -n "$INDEX" ] && interval=10
+    fi
+    case "$interval" in
+        ''|*[!0-9]*|0) log "--follow needs a whole number of seconds above 0"
+                       exit 2 ;;
+    esac
+    [ "$interval" -le 3600 ] || interval=3600
+    set --
+    [ -n "$CONTROL" ] && set -- --control "$CONTROL"
+    polling=
+    # The state before the sync: a change while it runs wakes the wait
+    token=$("$CAMEX" --status "$@" --wait - 2>/dev/null)
+    rc=$?
+    while :; do
+        sync_once
+        if [ "$rc" -eq 0 ]; then
+            new=$("$CAMEX" --status "$@" --wait "$token" \
+                  --wait-timeout "$interval" 2>/dev/null)
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+                token=$new
+                continue
+            fi
+        fi
+        if [ "$rc" -eq 3 ] && [ -z "$polling" ]; then
+            log "a server before camex 3.11.0 cannot report its changes:" \
+                "a sync every 10 seconds"
+            polling=1
+        fi
+        sleep 10 || exit 1
+        token=$("$CAMEX" --status "$@" --wait - 2>/dev/null)
+        rc=$?
+    done
 fi
 
 if [ "${1-}" = "--loop" ]; then

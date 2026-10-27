@@ -114,6 +114,8 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         { "domain", required_argument, NULL, 'D' },
         { "upstream-port", required_argument, NULL, 'U' },
         { "default", required_argument, NULL, 'E' },
+        { "wait", required_argument, NULL, 'w' },
+        { "wait-timeout", required_argument, NULL, 'x' },
         { NULL, 0, NULL, 0 }
     };
     int opt;
@@ -345,6 +347,25 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
                 return -1;
             }
             break;
+        case 'w':
+            /* Long only (not in the short options): the token of the last
+             * --wait, "-" for the state now */
+            config->status_wait = optarg;
+            config->status_query = 1U;
+            break;
+        case 'x':
+            {
+                char *end = NULL;
+                long val = strtol(optarg, &end, 10);
+
+                if (end == optarg || *end != '\0' || val < 1 || val > 3600) {
+                    log_message(LOG_ERR, "--wait-timeout must be 1..3600, "
+                                "got: %s", optarg);
+                    return -1;
+                }
+                config->status_wait_timeout = (int)val;
+            }
+            break;
         case 'J':
             config->status_json = 1U;
             config->status_nginx_map = 0U;
@@ -561,7 +582,12 @@ void print_usage(const char *progname)
     printf("      --upstream-port <port>  With nginx-map: the clients'"
            " web port (default: 80)\n");
     printf("      --default <ip:port>  With nginx-map: where unknown"
-           " names go\n\n");
+           " names go\n");
+    printf("      --wait <token>   Wait until the clients change"
+           " (\"-\": print the state now), then\n"
+           "                       print the token of the new state"
+           " (camex-nginx-sync --follow)\n");
+    printf("      --wait-timeout <s>  The longest wait (default 60)\n\n");
 
     printf("Common options:\n");
     printf("  -t, --mtu <size>     Tunnel MTU, 576-9000 (default: 1500)\n");
@@ -657,7 +683,11 @@ int main(int argc, char *argv[])
     parse_result = parse_arguments(argc, argv, &config);
     if (parse_result == 0 && config.status_query) {
         /* camex --status (#82): ask the running server(s), nothing else */
-        int rc = config.status_nginx_map
+        int rc = config.status_wait != NULL
+                     ? control_wait(config.control_path, config.status_wait,
+                                    config.status_wait_timeout > 0
+                                        ? config.status_wait_timeout : 60)
+                 : config.status_nginx_map
                      ? control_nginx_map(config.control_path,
                                          config.map_domain,
                                          config.map_port > 0 ? config.map_port

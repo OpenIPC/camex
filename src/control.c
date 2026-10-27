@@ -7,7 +7,8 @@
  * The server never blocks on it: connections are non-blocking, a command
  * is one short line, the answer is built at once and sent as the socket
  * takes it, and a connection that takes longer than CONTROL_TIMEOUT
- * seconds is closed.
+ * seconds is closed. WAIT (#130) is the exception: its answer waits until
+ * the state of the clients changes or its own time is up.
  *
  */
 
@@ -20,6 +21,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,10 +37,12 @@
 #include <unistd.h>
 #endif
 
-#define CONTROL_CONNS   4
+/* WAIT holds a connection for a while: room for those and the others */
+#define CONTROL_CONNS   8
 #define CONTROL_TIMEOUT 10
 #define CONTROL_CMD_MAX 64
 #define CONTROL_END     ".\n"   /* last line of every answer */
+#define CONTROL_WAIT_MAX 3600   /* WAIT: the longest wait, seconds */
 
 void control_default_path(char *buf, size_t size, int transport, int port)
 {
@@ -70,6 +74,9 @@ typedef struct {
     size_t out_len;
     size_t out_off;
     time_t since;
+    int waiting;            /* WAIT: no answer until a change or wait_until */
+    uint64_t wait_hash;
+    time_t wait_until;
 } control_conn_t;
 
 static int control_fd = -1;
@@ -77,10 +84,14 @@ static char control_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
 static char control_spec[sizeof(control_path)];   /* as asked: "", "none" */
 static int control_spec_ok = 0;   /* control_spec is in effect */
 static time_t control_paused_until = 0;   /* accept() failed: wait */
+#define CONTROL_CONN_FREE { -1, "", 0U, NULL, 0U, 0U, 0, 0, 0U, 0 }
 static control_conn_t control_conns[CONTROL_CONNS] = {
-    { -1, "", 0U, NULL, 0U, 0U, 0 }, { -1, "", 0U, NULL, 0U, 0U, 0 },
-    { -1, "", 0U, NULL, 0U, 0U, 0 }, { -1, "", 0U, NULL, 0U, 0U, 0 }
+    CONTROL_CONN_FREE, CONTROL_CONN_FREE, CONTROL_CONN_FREE, CONTROL_CONN_FREE,
+    CONTROL_CONN_FREE, CONTROL_CONN_FREE, CONTROL_CONN_FREE, CONTROL_CONN_FREE
 };
+
+static uint64_t control_state_hash(void);
+static void control_wait_answer(control_conn_t *c, uint64_t h);
 
 static int set_nonblock(int fd)
 {
@@ -308,16 +319,122 @@ int control_fdset(fd_set *readset, fd_set *writeset, int maxfd)
         if (c->fd < 0) {
             continue;
         }
-        if (difftime(time(NULL), c->since) > (double)CONTROL_TIMEOUT) {
+        if (c->waiting) {
+            uint64_t h = control_state_hash();
+
+            if (h != c->wait_hash || time(NULL) >= c->wait_until) {
+                control_wait_answer(c, h);
+                if (c->fd < 0) {
+                    continue;
+                }
+                c->since = time(NULL);
+            }
+        } else if (difftime(time(NULL), c->since) > (double)CONTROL_TIMEOUT) {
             control_conn_close(c);
             continue;
         }
+        /* A waiting one is read only to see the other side go away */
         FD_SET(c->fd, c->out != NULL ? writeset : readset);
         if (c->fd > maxfd) {
             maxfd = c->fd;
         }
     }
     return maxfd;
+}
+
+static void control_finish(control_conn_t *c, size_t len);
+
+static void control_bad_command(control_conn_t *c, size_t *len)
+{
+    static const char err[] = "ERROR unknown command (STATUS, "
+                              "STATUS JSON, CLIENTS, CLIENTS NAMES, "
+                              "CLIENTS INDEX, DOMAIN, "
+                              "WAIT <hash|-> <seconds>)\n";
+
+    c->out = malloc(sizeof(err));
+    if (c->out != NULL) {
+        memcpy(c->out, err, sizeof(err));
+        *len = sizeof(err) - 1U;
+    }
+}
+
+/* The state's fingerprint (server_state_hash()), worked out again at
+ * most every 250 ms while someone waits for it: a busy server runs its
+ * loop for every packet */
+static uint64_t control_state_hash(void)
+{
+    static uint64_t hash;
+    static struct timespec last;
+    static int have = 0;
+    struct timespec now;
+    long ms;
+
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    ms = (long)(now.tv_sec - last.tv_sec) * 1000L +
+         (now.tv_nsec - last.tv_nsec) / 1000000L;
+    if (!have || ms >= 250L || ms < 0L) {
+        hash = server_state_hash();
+        last = now;
+        have = 1;
+    }
+    return hash;
+}
+
+/* WAIT's answer: the state's fingerprint, 16 hex digits */
+static void control_wait_answer(control_conn_t *c, uint64_t h)
+{
+    c->waiting = 0;
+    c->out = malloc(18U);
+    if (c->out != NULL) {
+        snprintf(c->out, 18U, "%016" PRIx64 "\n", h);
+    }
+    control_finish(c, 17U);
+}
+
+/* WAIT <hash|-> <seconds> (#130): answers at once when the state's
+ * fingerprint is not <hash> ("-": never), else when it changes or the
+ * seconds are up; the answer is the fingerprint. -1: malformed */
+static int control_wait_start(control_conn_t *c)
+{
+    const char *p = c->cmd + 5;
+    char *end = NULL;
+    uint64_t given = 0U;
+    int any = 0;
+    long secs;
+    uint64_t h;
+
+    if (*p == '-') {
+        any = 1;
+        p++;
+    } else {
+        unsigned long long v;
+
+        errno = 0;
+        v = strtoull(p, &end, 16);
+        if (end == p || end - p > 16 || errno != 0) {
+            return -1;
+        }
+        given = (uint64_t)v;
+        p = end;
+    }
+    if (*p != ' ') {
+        return -1;
+    }
+    secs = strtol(p + 1, &end, 10);
+    if (end == p + 1 || *end != '\0' || secs < 0 || secs > CONTROL_WAIT_MAX) {
+        return -1;
+    }
+    /* Not since the last 250 ms: the caller may have read the state just
+     * now */
+    h = server_state_hash();
+    if (any || h != given || secs == 0) {
+        control_wait_answer(c, h);
+        return 0;
+    }
+    c->waiting = 1;
+    c->wait_hash = given;
+    c->wait_until = time(NULL) + secs;
+    return 0;
 }
 
 /* The command is in: build the answer */
@@ -335,7 +452,13 @@ static void control_answer(control_conn_t *c)
     if (nl != NULL && nl > c->cmd && nl[-1] == '\r') {
         nl[-1] = '\0';
     }
-    if (strcmp(c->cmd, "STATUS") == 0) {
+    if (strncmp(c->cmd, "WAIT ", 5U) == 0) {
+        if (control_wait_start(c) == 0) {
+            return;   /* waiting, or answered already */
+        }
+        c->out = NULL;   /* a malformed WAIT: the ERROR below */
+        control_bad_command(c, &len);
+    } else if (strcmp(c->cmd, "STATUS") == 0) {
         c->out = server_status(0, &len);
     } else if (strcmp(c->cmd, "STATUS JSON") == 0) {
         c->out = server_status(1, &len);
@@ -361,16 +484,14 @@ static void control_answer(control_conn_t *c)
             c->out[len] = '\0';
         }
     } else {
-        static const char err[] = "ERROR unknown command (STATUS, "
-                                  "STATUS JSON, CLIENTS, CLIENTS NAMES, "
-                                  "CLIENTS INDEX, DOMAIN)\n";
-
-        c->out = malloc(sizeof(err));
-        if (c->out != NULL) {
-            memcpy(c->out, err, sizeof(err));
-            len = sizeof(err) - 1U;
-        }
+        control_bad_command(c, &len);
     }
+    control_finish(c, len);
+}
+
+/* An answer in c->out, len bytes: the end marker added, sent from now on */
+static void control_finish(control_conn_t *c, size_t len)
+{
     if (c->out != NULL) {
         /* The end marker: the client tells a whole answer from one that
          * was cut off */
@@ -445,6 +566,16 @@ void control_handle(const fd_set *readset, const fd_set *writeset)
         control_conn_t *c = &control_conns[i];
 
         if (c->fd < 0) {
+            continue;
+        }
+        if (c->waiting && FD_ISSET(c->fd, readset)) {
+            char drop[64];
+            ssize_t n = recv(c->fd, drop, sizeof(drop), 0);
+
+            if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK &&
+                           errno != EINTR)) {
+                control_conn_close(c);
+            }
             continue;
         }
         if (c->out == NULL && FD_ISSET(c->fd, readset)) {
@@ -948,7 +1079,318 @@ int control_nginx_index(const char *path, const char *domain)
     return rc;
 }
 
+/* One server of camex --status --wait */
+typedef struct {
+    control_path_t path;
+    uint64_t old;           /* its fingerprint in the token */
+    int has_old;
+    uint64_t now;           /* its answer */
+    int has_now;
+    int fd;                 /* -1: answered, or gone */
+    int gone;
+    char buf[64];
+    size_t len;
+} control_waiter_t;
+
+/* The fingerprint of path in the token ("<hash>:<path>,..."): 1 and *h,
+ * or 0 */
+static int token_find(const char *token, const char *path, uint64_t *h)
+{
+    const char *p = token;
+    size_t plen = strlen(path);
+
+    while (p != NULL && *p != '\0') {
+        const char *colon = strchr(p, ':');
+        const char *comma = strchr(p, ',');
+        size_t elen = comma != NULL ? (size_t)(comma - p) : strlen(p);
+
+        if (colon != NULL && colon < p + elen && colon - p == 16 &&
+            (size_t)(p + elen - colon - 1) == plen &&
+            memcmp(colon + 1, path, plen) == 0) {
+            char hex[17];
+            char *end = NULL;
+
+            memcpy(hex, p, 16U);
+            hex[16] = '\0';
+            *h = (uint64_t)strtoull(hex, &end, 16);
+            return end == hex + 16;
+        }
+        p = comma != NULL ? comma + 1 : NULL;
+    }
+    return 0;
+}
+
+/* Is a server of the token gone from the list? */
+static int token_lost(const char *token, const control_waiter_t *w, int n)
+{
+    const char *p = token;
+
+    while (p != NULL && *p != '\0') {
+        const char *colon = strchr(p, ':');
+        const char *comma = strchr(p, ',');
+        size_t elen = comma != NULL ? (size_t)(comma - p) : strlen(p);
+        int i, found = 0;
+
+        if (colon == NULL || colon >= p + elen) {
+            return 1;   /* not a token of ours: start again */
+        }
+        for (i = 0; i < n; ++i) {
+            size_t plen = strlen(w[i].path);
+
+            if ((size_t)(p + elen - colon - 1) == plen &&
+                memcmp(colon + 1, w[i].path, plen) == 0) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            return 1;
+        }
+        p = comma != NULL ? comma + 1 : NULL;
+    }
+    return 0;
+}
+
+/* A whole WAIT answer in w->buf: 1 with w->now, 0 not yet, -1 malformed,
+ * -3 ERROR (a server before #130) */
+static int waiter_parse(control_waiter_t *w)
+{
+    char *end = NULL;
+
+    w->buf[w->len] = '\0';
+    if (strncmp(w->buf, "ERROR", 5U) == 0) {
+        return -3;
+    }
+    if (w->len < 19U) {
+        return 0;
+    }
+    if (w->buf[16] != '\n' || strcmp(w->buf + 17, CONTROL_END) != 0) {
+        return -1;
+    }
+    w->now = (uint64_t)strtoull(w->buf, &end, 16);
+    if (end != w->buf + 16) {
+        return -1;
+    }
+    w->has_now = 1;
+    return 1;
+}
+
+int control_wait(const char *path, const char *token, int timeout)
+{
+    control_path_t *paths = NULL;
+    control_waiter_t *w;
+    int n, i, changed = 0, rc = 0;
+    int secs;
+    time_t deadline;
+    int printed = 0;
+
+    if (token == NULL || strcmp(token, "-") == 0) {
+        token = "";
+    }
+    if (path != NULL && path[0] != '\0') {
+        if (strlen(path) >= sizeof(control_path_t)) {
+            fprintf(stderr, "camex: control socket path too long: %s\n",
+                    path);
+            return 1;
+        }
+        paths = malloc(sizeof(*paths));
+        if (paths == NULL) {
+            return 1;
+        }
+        snprintf(paths[0], sizeof(paths[0]), "%s", path);
+        n = 1;
+    } else {
+        n = control_list(&paths);
+        if (n < 0) {
+            n = 0;   /* no directory: no server yet */
+        }
+    }
+    w = calloc(n > 0 ? (size_t)n : 1U, sizeof(*w));
+    if (w == NULL) {
+        free(paths);
+        return 1;
+    }
+    for (i = 0; i < n; ++i) {
+        memcpy(w[i].path, paths[i], sizeof(w[i].path));
+        w[i].fd = -1;
+        w[i].has_old = token_find(token, w[i].path, &w[i].old);
+    }
+    free(paths);
+    /* A server gone since the token, or a token not of ours: a change */
+    changed = token_lost(token, w, n);
+    if (n == 0) {
+        if (!changed) {
+            sleep((unsigned)timeout);   /* no server: nothing to wait on */
+        }
+        printf("-\n");
+        free(w);
+        return 0;
+    }
+    /* Changed already: only the fingerprints of now, no waiting */
+    secs = changed ? 0 : timeout;
+    for (i = 0; i < n; ++i) {
+        struct sockaddr_un sa;
+        char cmd[48];
+        int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+
+        if (fd < 0) {
+            fprintf(stderr, "camex: socket: %s\n", strerror(errno));
+            rc = 1;
+            break;
+        }
+#ifdef SO_NOSIGPIPE
+        {
+            int one = 1;
+
+            setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+        }
+#endif
+        memset(&sa, 0, sizeof(sa));
+        sa.sun_family = AF_UNIX;
+        snprintf(sa.sun_path, sizeof(sa.sun_path), "%s", w[i].path);
+        if (fd >= FD_SETSIZE ||
+            connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+            int err = errno;
+
+            close(fd);
+            if (err == ECONNREFUSED || err == ENOENT) {
+                /* A socket left behind: a change only for a server the
+                 * token had (else every round would be one) */
+                w[i].gone = 1;
+                changed |= w[i].has_old;
+                continue;
+            }
+            fprintf(stderr, "camex: cannot connect to %s: %s%s\n", w[i].path,
+                    strerror(err), err == EACCES
+                        ? " (run it as the server's user, normally root)" : "");
+            rc = 1;
+            break;
+        }
+        if (w[i].has_old) {
+            snprintf(cmd, sizeof(cmd), "WAIT %016" PRIx64 " %d\n", w[i].old,
+                     secs);
+        } else {
+            snprintf(cmd, sizeof(cmd), "WAIT - 0\n");
+        }
+#ifdef MSG_NOSIGNAL
+        if (send(fd, cmd, strlen(cmd), MSG_NOSIGNAL) != (ssize_t)strlen(cmd)) {
+#else
+        if (send(fd, cmd, strlen(cmd), 0) != (ssize_t)strlen(cmd)) {
+#endif
+            close(fd);
+            w[i].gone = 1;
+            changed |= w[i].has_old;
+            continue;
+        }
+        w[i].fd = fd;
+    }
+    deadline = time(NULL) + secs + 5;
+    while (rc == 0) {
+        fd_set rset;
+        struct timeval tv;
+        int maxfd = -1, waiting_new = 0, open_fds = 0, ready;
+        time_t left;
+
+        FD_ZERO(&rset);
+        for (i = 0; i < n; ++i) {
+            if (w[i].fd >= 0) {
+                FD_SET(w[i].fd, &rset);
+                if (w[i].fd > maxfd) {
+                    maxfd = w[i].fd;
+                }
+                open_fds++;
+                if (!w[i].has_old) {
+                    waiting_new++;
+                }
+            }
+        }
+        /* Done: every server answered, or one changed and the new ones
+         * (they answer at once) have told their fingerprints */
+        if (open_fds == 0 || (changed && waiting_new == 0)) {
+            break;
+        }
+        left = deadline - time(NULL);
+        if (left <= 0) {
+            break;
+        }
+        tv.tv_sec = left;
+        tv.tv_usec = 0;
+        ready = select(maxfd + 1, &rset, NULL, NULL, &tv);
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            rc = 1;
+            break;
+        }
+        for (i = 0; i < n && ready > 0; ++i) {
+            ssize_t got;
+            int r;
+
+            if (w[i].fd < 0 || !FD_ISSET(w[i].fd, &rset)) {
+                continue;
+            }
+            got = recv(w[i].fd, w[i].buf + w[i].len,
+                       sizeof(w[i].buf) - 1U - w[i].len, 0);
+            if (got < 0 && (errno == EINTR || errno == EAGAIN)) {
+                continue;
+            }
+            if (got > 0) {
+                w[i].len += (size_t)got;
+            }
+            r = waiter_parse(&w[i]);
+            if (r == -3) {
+                fprintf(stderr, "camex: %s: the server does not know WAIT "
+                        "(camex 3.11.0 or later)\n", w[i].path);
+                rc = 3;
+                break;
+            }
+            if (r == 0 && got > 0 && w[i].len < sizeof(w[i].buf) - 1U) {
+                continue;   /* more to come */
+            }
+            close(w[i].fd);
+            w[i].fd = -1;
+            if (r != 1) {
+                w[i].gone = 1;   /* stopped while we waited */
+                changed = 1;
+            } else if (!w[i].has_old || w[i].now != w[i].old) {
+                changed = 1;
+            }
+        }
+    }
+    for (i = 0; i < n; ++i) {
+        if (w[i].fd >= 0) {
+            close(w[i].fd);
+        }
+    }
+    if (rc == 0) {
+        /* The new token: the answers, else what the token had */
+        for (i = 0; i < n; ++i) {
+            uint64_t h;
+
+            if (w[i].gone || (!w[i].has_now && !w[i].has_old)) {
+                continue;
+            }
+            h = w[i].has_now ? w[i].now : w[i].old;
+            printf("%s%016" PRIx64 ":%s", printed ? "," : "", h, w[i].path);
+            printed = 1;
+        }
+        printf("%s\n", printed ? "" : "-");
+    }
+    free(w);
+    return rc;
+}
+
 #else  /* _WIN32 */
+
+int control_wait(const char *path, const char *token, int timeout)
+{
+    (void)path;
+    (void)token;
+    (void)timeout;
+    fprintf(stderr, "camex: --status is not available on Windows\n");
+    return 1;
+}
 
 int control_nginx_index(const char *path, const char *domain)
 {

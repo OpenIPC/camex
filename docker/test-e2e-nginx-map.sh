@@ -17,6 +17,8 @@
 # 5. A socket left behind by a killed server does not stop the sync.
 # 6. A reload that failed (nginx not running) is tried again by the next
 #    sync, although the map did not change; the start page waits for it.
+# 10. --follow (#130): a sync as soon as a client comes or goes, none while
+#    nothing changes; a server too old for it is synced every 10 seconds.
 # The start page (#105) along the way: the bare domain lists the live
 # clients with their name= (escaped) or ID and links that reach them;
 # --status shows the name; an unchanged state leaves the file alone; bad
@@ -401,6 +403,65 @@ echo "$out" | sed 's/^/      /'
 [ $rc -ne 0 ] && echo "$out" | grep -q "FAIL  nginx has no server_name \*\.wrong\.test" &&
     echo "$out" | grep -q "ok    nginx includes the map"
 check $? "--check fails on it and says why"
+
+echo "== 10. --follow: a sync at each change, none while nothing changes (#130)"
+out=$(docker exec "$P-srv" camex --status --wait - 2>&1)
+echo "      token: $out"
+echo "$out" | grep -Eq '^[0-9a-f]{16}:/run/camex/camex-udp-5800.sock$'
+check $? "camex --status --wait - prints the state's token at once (the stale socket left out)"
+TOKEN=$out
+t0=$(date +%s)
+out=$(docker exec "$P-srv" camex --status --wait "$TOKEN" --wait-timeout 2 2>&1)
+t1=$(date +%s)
+[ "$out" = "$TOKEN" ] && [ $((t1 - t0)) -ge 2 ] && [ $((t1 - t0)) -le 4 ]
+check $? "with no change it waits for --wait-timeout and gives the same token ($((t1 - t0)) s)"
+# Counts the map runs of the sync script
+docker exec "$P-srv" sh -c 'printf "#!/bin/sh\ncase \"\$*\" in *nginx-map*) echo x >> /tmp/maps;; esac\nexec camex \"\$@\"\n" \
+    > /usr/local/bin/camex-counting && chmod +x /usr/local/bin/camex-counting && rm -f /tmp/maps'
+docker exec -d -e CAMEX=camex-counting -e NGINX_BIN=nginx-counting "$P-srv" \
+    sh -c 'exec camex-nginx-sync --follow 2>/tmp/follow.log'
+sleep 3
+maps() { docker exec "$P-srv" sh -c 'wc -l < /tmp/maps 2>/dev/null || echo 0'; }
+m0=$(maps)
+sleep 12
+m1=$(maps)
+[ "$m0" -ge 1 ] && [ "$m1" = "$m0" ]
+check $? "after its first sync, no sync for 12 s while nothing changes ($m0 -> $m1)"
+client CAM-F
+for _ in $(seq 1 20); do
+    docker logs "$P-srv" 2>&1 | grep -q "Registered auto client CAM-F" && break
+    sleep 0.5
+done
+t0=$(date +%s)
+for _ in $(seq 1 30); do
+    docker exec "$P-srv" grep -q '"cam-f\.' /etc/nginx/camex-map.conf && break
+    sleep 0.2
+done
+t1=$(date +%s)
+docker exec "$P-srv" grep -q '"cam-f\.' /etc/nginx/camex-map.conf && [ $((t1 - t0)) -le 2 ]
+check $? "a new client is in the map within 2 s of registering ($((t1 - t0)) s)"
+docker rm -f "$P-CAM-F" >/dev/null
+for _ in $(seq 1 40); do
+    docker exec "$P-srv" grep -q '"cam-f\.' /etc/nginx/camex-map.conf || break
+    sleep 0.5
+done
+! docker exec "$P-srv" grep -q '"cam-f\.' /etc/nginx/camex-map.conf
+check $? "a client that is gone leaves the map as soon as the server drops it"
+docker exec "$P-srv" sh -c 'pkill -f "camex-nginx-sync --follow"; true'
+# A server before 3.11.0 answers WAIT with ERROR: camex exits 3
+docker exec "$P-srv" sh -c 'printf "#!/bin/sh\ncase \"\$*\" in *--wait*) echo \"camex: too old\" >&2; exit 3;; esac\nexec camex \"\$@\"\n" \
+    > /usr/local/bin/camex-old && chmod +x /usr/local/bin/camex-old'
+docker exec -d -e CAMEX=camex-old -e NGINX_BIN=nginx-counting "$P-srv" \
+    sh -c 'exec camex-nginx-sync --follow 2>/tmp/follow-old.log'
+client CAM-G
+for _ in $(seq 1 30); do
+    docker exec "$P-srv" grep -q '"cam-g\.' /etc/nginx/camex-map.conf && break
+    sleep 1
+done
+docker exec "$P-srv" grep -q '"cam-g\.' /etc/nginx/camex-map.conf &&
+    docker exec "$P-srv" grep -q "cannot report its changes: a sync every 10 seconds" /tmp/follow-old.log
+check $? "with a server too old for it: a sync every 10 seconds, said once"
+docker exec "$P-srv" sh -c 'pkill -f "camex-nginx-sync --follow"; true'
 
 if [ "$FAILS" -ne 0 ]; then
     echo "FAIL: $FAILS check(s) failed"

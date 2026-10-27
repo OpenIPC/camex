@@ -38,7 +38,7 @@ The steps, printed before it starts and numbered as it goes:
 7. With `--domain` (or when nginx was installed before): nginx's server blocks
    `/etc/nginx/conf.d/camex-nginx.conf`, an empty map, the start page's
    password (user `camex`, kept in `/etc/camex/nginx-password`, for nginx in
-   `/etc/nginx/camex.htpasswd`), the sync script with its service and timer;
+   `/etc/nginx/camex.htpasswd`), the sync script with its service;
    then `nginx -t`, a reload, one sync and `camex-nginx-sync --check`.
 8. Print what the clients need: the server's public key, the psk, a client
    command line; with `--domain` the addresses and the start page's password.
@@ -138,7 +138,6 @@ removes nothing itself.
 # With --domain: nginx in front of the clients
 /usr/local/bin/camex-nginx-sync               from examples/camex-nginx-sync.sh
 /etc/systemd/system/camex-nginx-sync.service  from examples/camex-nginx-sync.service
-/etc/systemd/system/camex-nginx-sync.timer    from examples/camex-nginx-sync.timer
 /etc/nginx/conf.d/camex-nginx.conf            from examples/nginx-camex.conf
 /etc/nginx/camex-map.conf                     the map, empty at first
 /etc/camex/nginx-password                     the start page's password, mode 0600
@@ -160,15 +159,17 @@ The packages it installs with apt-get: `curl`, `ca-certificates`; with
 /var/backups/camex/                           copies of files install.sh replaced
 ```
 
-### Left by camex 3.9 and before
+### Left by camex 3.10 and before
 
-`camex-nginx-setup.sh` used other names; `install.sh` moves them to the new
-ones on its first run:
+`camex-nginx-setup.sh` (3.9 and before) used other names, and camex 3.10 ran
+the sync from a timer; `install.sh` moves them to the new ones on its first
+run:
 
 ```
 /usr/local/bin/camex-nginx-sync.sh            now /usr/local/bin/camex-nginx-sync
 /etc/nginx/conf.d/camex.conf                  now /etc/nginx/conf.d/camex-nginx.conf
 /etc/camex/camex.conf.bak                     a copy of camex.conf before domain= was set
+/etc/systemd/system/camex-nginx-sync.timer    stopped and removed (3.10)
 ```
 
 It could also put nginx's file and the start page elsewhere (`--nginx-conf`,

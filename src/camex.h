@@ -72,6 +72,8 @@ typedef struct {
     char map_domain[254];      /* --domain */
     int map_port;              /* --upstream-port (default 80) */
     char map_default[130];     /* --default */
+    const char *status_wait;   /* --wait <token> (#130), NULL = none */
+    int status_wait_timeout;   /* --wait-timeout, seconds (default 60) */
 } camex_config_t;
 
 /* Global state shared across modules */
