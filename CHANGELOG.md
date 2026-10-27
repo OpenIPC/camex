@@ -6,7 +6,24 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
-## 3.12.0 — 2026-10-27
+## 3.13.0 — 2026-10-28
+
+- `client_timeout=` in `[server]` (#143): how long a silent client stays before its session
+  ends, 60 to 120 s (default 120, as before); a reload applies it, and the minimum time an
+  address stays leased to a client that is gone follows it (10 minutes plus it).
+  `install.sh` writes `client_timeout=60` into a new `camex.conf` (`--client-timeout <s>`), so
+  a device that goes off turns red on the start page after about a minute instead of two.
+- Clients send a keepalive at least every 20 s (a third of the lowest `client_timeout=`), also
+  with `--keepalive 0` (every 20 s, was 60) or a larger `--keepalive`, so they stay alive
+  against any server. A client before 3.13.0 with `--keepalive 0` or above 20 s needs a server
+  with `client_timeout=120`.
+- `camex --status --wait`: the WAIT commands to servers that do not take them share the
+  wait's deadline (#144).
+- Tests: the key's range (unit); a silent client dropped after 61 s with `client_timeout=60`,
+  one with `--keepalive 3600` kept (e2e); `install.sh` writes and takes it. Docs:
+  `docs/server.md`, `docs/security.md`, `docs/nginx.md`, `docs/usage.md`, `docs/install.md`.
+
+## 3.12.0 — 2026-10-28
 
 - `install.sh` takes more options (#141), settings made once like the files they go to: on
   a rerun a different value is not applied, and the installer says which line to edit
