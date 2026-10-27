@@ -7,7 +7,9 @@ The server reads a flat key=value config file, by default
 [examples/camex.conf](../examples/camex.conf).
 
 ```sh
-sudo ./camex --mode server --port 5800 --config /etc/camex/camex.conf
+# The key pair first: (umask 077; camex --genkey > /etc/camex/server.key)
+sudo camex --mode server --config /etc/camex/camex.conf \
+    --server-key-file /etc/camex/server.key
 ```
 
 Auto-mode clients get their addresses from the config file. A client whose ID

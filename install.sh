@@ -151,7 +151,7 @@ uninstall_list() {
         "$NGINX_CONF" "$OLD_NGINX_CONF" "$HTPASSWD" \
         "$MAP" "$MAP.applied" "$MAP.lock" "$MAP.warnings" \
         "$MAP.warnings-index" \
-        "$PAGE_DIR" /run/camex "$BACKUP"; do
+        "$PAGE_DIR/index.html" "$PAGE_DIR" /run/camex "$BACKUP"; do
         if [ -e "$f" ]; then
             echo "  + $f"
             found="$found $f"
@@ -172,6 +172,7 @@ uninstall_list() {
         case "$f" in
             "$ETC"/*|"$BACKUP"|/run/camex) ;;
             "$PAGE_DIR") echo "  rm -r $f" ;;
+            "$PAGE_DIR"/*) ;;   # with its directory
             *) echo "  rm $f" ;;
         esac
     done
@@ -516,8 +517,15 @@ if [ "$USED_CONF" != "$CONF" ]; then
     say "WARNING: camex.service reads $USED_CONF, not $CONF" \
         "(CAMEX_ARGS in $DEFAULTS): the settings made here are not used"
 fi
-[ -n "$USED_KEY" ] && [ "$USED_KEY" != "$KEY" ] && [ -r "$USED_KEY" ] &&
-    PUBKEY=$(sed -n 's/^public_key=//p' "$USED_KEY")
+if [ -n "$USED_KEY" ]; then
+    [ "$USED_KEY" != "$KEY" ] && [ -r "$USED_KEY" ] &&
+        PUBKEY=$(sed -n 's/^public_key=//p' "$USED_KEY")
+elif [ -n "$(conf_server server_key "$USED_CONF")" ]; then
+    # Its key is server_key= of camex.conf, whose public key is not kept
+    PUBKEY="<the public key of server_key= in $USED_CONF>"
+    say "WARNING: camex uses server_key= of $USED_CONF, not $KEY: give the" \
+        "clients the public key made with it"
+fi
 PSK=${ARG_PSK:-$(conf_server psk "$USED_CONF")}
 PORT_NOW=${ARG_PORT:-$(conf_server port "$USED_CONF")}
 # Quoted for the shell the command is pasted into: ' as '\''
