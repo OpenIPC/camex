@@ -204,8 +204,11 @@ the device:
    `CONFIG_KALLSYMS_ALL`) and `/proc/net`. Options that change `struct sock`,
    `struct sk_buff` or `struct net_device` matter most, for example `IPV6`,
    `XFRM`, `BRIDGE_NETFILTER`, `NET_CLS_ACT`, `NETWORK_SECMARK`,
-   `NET_RX_BUSY_POLL`, `NF_CONNTRACK`. An option turned on by `select` goes
-   off only together with the options that select it.
+   `NET_RX_BUSY_POLL`, `NF_CONNTRACK`, `WIRELESS_EXT`. An option turned on by
+   `select` goes off only together with the options that select it. An option
+   with no prompt (`WIRELESS_EXT`, say) cannot be turned on in `.config` alone:
+   `olddefconfig` drops it again unless something selects it; enable an option
+   that selects it, or give it `default y` in its `Kconfig`.
 3. **Prepare the tree and build:**
 
    ```sh
@@ -221,10 +224,17 @@ the device:
    and compare it with the device's `/lib/modules/$(uname -r)/tun.ko`: the
    `.text` size (`objdump -h`) and the offsets in every load and store
    (`objdump -d`, e.g. `lw v0,452(a0)`) must be the same. Instruction order may
-   differ with another build of the same compiler; offsets must not.
-5. **Symptom of a mismatch.** The handshake and auto-config work, but there is
+   differ with another build of the same compiler; offsets must not. Without
+   such a module on the device, compare one field in the firmware's kernel
+   image: disassemble a function that reads it (`register_netdevice` reads
+   `dev->netdev_ops`) and compare the offset with
+   `offsetof(struct net_device, netdev_ops)` of your tree.
+5. **Symptoms of a mismatch.** The handshake and auto-config work, but there is
    no traffic, and `rx_dropped` of `camex` (`cat /proc/net/dev`) grows with
-   every packet from the server. Stop the client and `rmmod camex` at once.
+   every packet from the server: stop the client and `rmmod camex` at once. Or
+   `insmod` itself ends in a kernel oops (`NULL pointer dereference` in
+   `register_netdevice`, from `camex_init`): the module wrote `netdev_ops` where
+   the kernel does not read it.
 
 Tested example: OpenWrt 15.05.1 ramips/mt7620 (MT7620N, MIPS 24KEc) with a
 custom kernel 3.18.92 — linux 3.18.92 with the patches of `openwrt/chaos_calmer`
@@ -234,6 +244,19 @@ OpenWrt SDK 15.05.1 ramips/mt7620 with `IPV6`, `XFRM` (and `INET_AH`,
 `XFRM_IPCOMP`, `XFRM_ALGO`, which select it) and `BRIDGE_NETFILTER` turned off.
 With the unchanged SDK config the module loaded but dropped every packet
 ([#73](https://github.com/OpenIPC/camex/issues/73)).
+
+Tested example: HiSilicon hi3516cv500 with the camera's stock kernel 4.9.37
+(zenotech firmware). The HiSilicon SDK kernel tree and the OpenIPC kernel of the
+same version build without `WIRELESS_EXT`, the stock kernel has it: its two
+pointers in `struct net_device` (8 bytes on ARM32) put `netdev_ops` at 312 in
+the running kernel and at 304 in the module, and `insmod camex.ko` oopsed in
+`register_netdevice`; a `tun.ko` from that tree loaded and passed no traffic.
+With `default y` added to `config WIRELESS_EXT` in `net/wireless/Kconfig`, both
+work ([#133](https://github.com/OpenIPC/camex/issues/133)):
+
+```sh
+sed -i '/^config WIRELESS_EXT$/a\	default y' net/wireless/Kconfig
+```
 
 ## Character Device API
 
