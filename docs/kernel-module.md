@@ -238,6 +238,21 @@ the device:
    `register_netdevice`, from `camex_init`): the module wrote `netdev_ops` where
    the kernel does not read it.
 
+   Since 3.11.1 the module checks the layout itself before it registers the
+   interface (#134): `alloc_netdev()` runs in the kernel and sets
+   `num_tx_queues`, `real_num_tx_queues` and `gso_max_size`, which lie after
+   the config-dependent fields; read through the module's offsets they must
+   be 1, 1 and 65536. When they are not, `insmod` fails with
+   `Exec format error` and `dmesg` says
+
+   ```
+   camex: built for another kernel configuration: struct net_device differs from the running kernel's (...)
+   ```
+
+   instead of an oops or a dead interface. It catches a shift before these
+   fields, which is what a config difference usually makes, not every
+   difference: steps 1 to 4 still apply.
+
 Tested example: OpenWrt 15.05.1 ramips/mt7620 (MT7620N, MIPS 24KEc) with a
 custom kernel 3.18.92 — linux 3.18.92 with the patches of `openwrt/chaos_calmer`
 at `31cce51cc7` ("kernel: bump to 3.18.92"), the toolchain and `.config` of the

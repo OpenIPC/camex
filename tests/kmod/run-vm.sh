@@ -35,13 +35,24 @@ CLIENT=
 gcc -static -O1 -pthread -o kmodtest /k/kmod/kmodtest.c
 cp -r /k/src /tmp/m
 make -s -C "$K" M=/tmp/m modules 2>&1 | grep -v "compiler differs\|built by\|You are using\|BTF" || true
+# A module for another layout of struct net_device (#134): two pointers
+# before netdev_ops, as CONFIG_WIRELESS_EXT adds them (#133). The headers of
+# this throwaway container are changed for it, after the real build
+for h in $(find /usr/src -path '*/include/linux/netdevice.h'); do
+    sed -i '0,/^[[:space:]]*const struct net_device_ops[[:space:]]*\*netdev_ops;/s//\tvoid *camex_layout_test[2];\n&/' "$h"
+done
+grep -rq camex_layout_test /usr/src/*/include/linux/netdevice.h ||
+    { echo "FAIL: kmod: no netdev_ops in netdevice.h to shift"; exit 1; }
+cp -r /k/src /tmp/mbad
+make -s -C "$K" M=/tmp/mbad modules 2>&1 | grep -v "compiler differs\|built by\|You are using\|BTF" || true
 
 mkdir -p rootfs/bin rootfs/dev rootfs/proc rootfs/sys rootfs/mod rootfs/tmp
 cp /bin/busybox rootfs/bin/busybox
-for a in sh mount insmod ip chmod sleep poweroff cat grep sed ping kill; do
+for a in sh mount insmod rmmod dmesg ip chmod sleep poweroff cat grep sed ping kill; do
     ln -s busybox rootfs/bin/$a
 done
 cp /tmp/m/camex.ko kmodtest rootfs/
+cp /tmp/mbad/camex.ko rootfs/camex-bad.ko
 printf '' > rootfs/client.env
 if [ -n "$CLIENT" ]; then
     # The guest's network driver: virtio_net built in or a module (with deps)
@@ -76,6 +87,21 @@ cat > rootfs/init <<'INIT'
 mount -t devtmpfs dev /dev
 mount -t proc proc /proc
 mount -t sysfs sys /sys
+# Kernel messages in dmesg only: on the console they would split the lines;
+# the first line out starts after the BIOS's screen codes
+dmesg -n 1
+echo
+# The module built for another layout must refuse to load, not oops (#134)
+if insmod /camex-bad.ko 2>/dev/null; then
+    echo "FAIL: kmod: a camex.ko for another struct net_device loaded"
+    rmmod camex
+elif dmesg | grep -q "camex: built for another kernel configuration"; then
+    echo "ok: kmod: a camex.ko for another struct net_device refuses to load"
+else
+    echo "FAIL: kmod: the other layout's camex.ko failed without its message"
+fi
+dmesg | grep -qiE "Oops|BUG:|Unable to handle" &&
+    echo "FAIL: kmod: the kernel oopsed" || echo "ok: kmod: no oops"
 insmod /camex.ko
 sleep 1
 /kmodtest
