@@ -365,7 +365,8 @@ blocks in the file, Auto otherwise, and the browser remembers the tab chosen
   `/etc/camex/nginx-password` (root only), writes
   `/etc/nginx/camex.htpasswd` (group `www-data`, other users added there
   stay) and prints it at the end of every run. A run keeps the password; for
-  a new one remove both files and run it again. The example's block also has
+  a new one remove `/etc/camex/nginx-password` and run it again (only the
+  `camex` line of the htpasswd file changes). The example's block also has
   commented `allow` / `deny` lines, to let in only some networks besides.
 - The sync script needs a server of camex 3.7.0 or later for the page: an older
   one answers the page's control command (`CLIENTS INDEX`) with an error, and
@@ -485,5 +486,4 @@ map $host $camex_upstream {
   `examples/nginx-camex.conf` serves it on the bare domain
   (`http://openipc.click/`) behind a password (user `camex`):
   `install.sh` generates it, keeps it in `/etc/camex/nginx-password` and
-  prints it (a new one: remove that file and `/etc/nginx/camex.htpasswd`, run
-  it again), and `--check` warns when the page has none (#119).
+  prints it (a new one: remove that file and run it again), and `--check` warns when the page has none (#119).

@@ -68,8 +68,9 @@ once are kept as they are, edits included: `camex.conf`, `server.key`,
 - The domain is never changed: another `--domain` is refused. Change it by
   hand in `camex.conf` and nginx's file.
 
-A new password for the start page: remove `/etc/camex/nginx-password` and
-`/etc/nginx/camex.htpasswd`, run `install.sh` again.
+A new password for the start page: remove `/etc/camex/nginx-password` and run
+`install.sh` again; it replaces the `camex` line of `/etc/nginx/camex.htpasswd`,
+other users there stay.
 
 A setup made by `camex-nginx-setup.sh` (camex 3.9 and before) moves to the new
 names on the first run: `/etc/nginx/conf.d/camex.conf` becomes

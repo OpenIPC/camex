@@ -493,7 +493,8 @@ step 8 "Done"
 # What camex really uses: its command line wins over camex.conf (an older
 # unit's arguments moved to /etc/default/camex may have --psk or --port)
 ARGS=$(sed -n 's/^CAMEX_ARGS="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$DEFAULTS" | tail -n 1)
-USED_CONF=; USED_KEY=; ARG_PSK=; ARG_PORT=
+# camex reads /etc/camex/camex.conf without --config
+USED_CONF=$CONF; USED_KEY=; ARG_PSK=; ARG_PORT=
 set -f
 # shellcheck disable=SC2086
 set -- $ARGS
@@ -512,19 +513,21 @@ while [ $# -gt 0 ]; do
     shift
 done
 if [ "$USED_CONF" != "$CONF" ]; then
-    say "WARNING: camex.service reads ${USED_CONF:-no config file}, not $CONF" \
+    say "WARNING: camex.service reads $USED_CONF, not $CONF" \
         "(CAMEX_ARGS in $DEFAULTS): the settings made here are not used"
 fi
 [ -n "$USED_KEY" ] && [ "$USED_KEY" != "$KEY" ] && [ -r "$USED_KEY" ] &&
     PUBKEY=$(sed -n 's/^public_key=//p' "$USED_KEY")
-PSK=${ARG_PSK:-$(conf_server psk "${USED_CONF:-$CONF}")}
-PORT_NOW=${ARG_PORT:-$(conf_server port "${USED_CONF:-$CONF}")}
+PSK=${ARG_PSK:-$(conf_server psk "$USED_CONF")}
+PORT_NOW=${ARG_PORT:-$(conf_server port "$USED_CONF")}
+# Quoted for the shell the command is pasted into: ' as '\''
+PSK_Q=$(printf '%s' "${PSK:-<psk= of $USED_CONF>}" | sed "s/'/'\\\\''/g")
 echo
 echo "camex server is running: systemctl status camex, camex --status"
 echo "Open UDP port ${PORT_NOW:-5800} in the firewall. A client connects with:"
 echo
 echo "  camex --mode client --auto --server-host <this host> --port ${PORT_NOW:-5800} \\"
-echo "      --server-pubkey $PUBKEY --psk '${PSK:-<psk= of $CONF>}'"
+echo "      --server-pubkey $PUBKEY --psk '$PSK_Q'"
 if [ -n "$DOMAIN" ]; then
     echo
     echo "Clients' web UIs: http://<client ID>.$DOMAIN/"

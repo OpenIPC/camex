@@ -494,8 +494,7 @@ check_all() {
 401")
                                     warn "the password in $PASSWORD_FILE does" \
                                          "not open the start page on $dom" \
-                                         "(a new one: remove it and" \
-                                         "/etc/nginx/camex.htpasswd, run" \
+                                         "(a new one: remove it, run" \
                                          "install.sh again)" ;;
                                 *)
                                     warn "nginx does not serve the start page" \
