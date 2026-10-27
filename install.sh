@@ -45,6 +45,8 @@ Usage: install.sh [--domain <domain>] [options]
   --psk <key>             the clients' pre-shared key (a random one)
   --pool <network/prefix> the clients' pool, the server at its first
                           address (10.200.0.0/24)
+  --client-timeout <s>    seconds of silence before a client is dropped,
+                          60 to 120 (60)
   With --domain:
   --password <password>   the start page's password, user camex (a random one)
   --http-port <port>      the port nginx listens on (80)
@@ -95,6 +97,7 @@ PORT_OPT=
 TRANSPORT=
 PSK_OPT=
 POOL=
+CLIENT_TIMEOUT=
 PASSWORD=
 HTTP_PORT=
 UPSTREAM_PORT=
@@ -244,7 +247,7 @@ uninstall_list() {
 while [ $# -gt 0 ]; do
     # An option given with an empty value is a mistake, not "the default"
     case "$1" in
-        --domain|--port|--transport|--psk|--pool|--password|--http-port|--upstream-port)
+        --domain|--port|--transport|--psk|--pool|--password|--http-port|--upstream-port|--client-timeout)
             [ $# -ge 2 ] || usage
             [ -n "$2" ] || die "$1: empty" ;;
     esac
@@ -254,6 +257,7 @@ while [ $# -gt 0 ]; do
         --transport) [ $# -ge 2 ] || usage; TRANSPORT=$2; shift 2 ;;
         --psk)       [ $# -ge 2 ] || usage; PSK_OPT=$2; shift 2 ;;
         --pool)      [ $# -ge 2 ] || usage; POOL=$2; shift 2 ;;
+        --client-timeout) [ $# -ge 2 ] || usage; CLIENT_TIMEOUT=$2; shift 2 ;;
         --password)  [ $# -ge 2 ] || usage; PASSWORD=$2; shift 2 ;;
         --http-port) [ $# -ge 2 ] || usage; HTTP_PORT=$2; shift 2 ;;
         --upstream-port) [ $# -ge 2 ] || usage; UPSTREAM_PORT=$2; shift 2 ;;
@@ -278,6 +282,13 @@ check_port() {   # check_port <option> <value>
 check_port --port "$PORT"
 [ -n "$HTTP_PORT" ] && check_port --http-port "$HTTP_PORT"
 [ -n "$UPSTREAM_PORT" ] && check_port --upstream-port "$UPSTREAM_PORT"
+# As camex takes it (#143)
+case "$CLIENT_TIMEOUT" in
+    '') ;;
+    *[!0-9]*) die "--client-timeout: 60 to 120 seconds, not $CLIENT_TIMEOUT" ;;
+    *) [ "$CLIENT_TIMEOUT" -ge 60 ] && [ "$CLIENT_TIMEOUT" -le 120 ] ||
+           die "--client-timeout: 60 to 120 seconds, not $CLIENT_TIMEOUT" ;;
+esac
 case "${TRANSPORT:-udp}" in
     udp|tcp) ;;
     *) die "--transport: udp or tcp, not $TRANSPORT" ;;
@@ -482,6 +493,10 @@ else
         echo "auto_pool=${POOL_NET:-10.200.0.0/24}"
         echo "# Clients do not reach each other"
         echo "client_isolation=yes"
+        echo "# Seconds of silence before a client is dropped (the start page's"
+        echo "# lamp turns red); clients before camex 3.13 with --keepalive 0 or"
+        echo "# above 20 need 120"
+        echo "client_timeout=${CLIENT_TIMEOUT:-60}"
         echo "# The clients' pre-shared key"
         printf 'psk=%s\n' "$PSK"
         [ -n "$DOMAIN" ] && echo "domain=$DOMAIN"
@@ -498,6 +513,10 @@ if [ -n "$PORT_OPT" ] && [ "$(conf_server port)" != "$PORT_OPT" ]; then
 fi
 if [ -n "$PSK_OPT" ] && [ "$(conf_server psk)" != "$PSK_OPT" ]; then
     say "kept psk= of $CONF, not --psk: edit it there (the clients need the same)"
+fi
+if [ -n "$CLIENT_TIMEOUT" ] && [ "$(conf_server client_timeout)" != "$CLIENT_TIMEOUT" ]; then
+    say "kept client_timeout= of $CONF, not --client-timeout $CLIENT_TIMEOUT:" \
+        "edit it there, then systemctl reload camex"
 fi
 if [ -n "$POOL" ] && [ "$(conf_server auto_pool)" != "$POOL_NET" ]; then
     say "kept auto_pool= of $CONF, not --pool $POOL_NET: edit auto_pool= and" \

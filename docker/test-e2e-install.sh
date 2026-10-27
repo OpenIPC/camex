@@ -146,8 +146,8 @@ check $? "camex.service is enabled and running"
 [ "$(x 'stat -c %a /etc/camex/server.key /etc/camex/camex.conf /etc/camex' | tr '\n' ' ')" = "600 600 700 " ]
 check $? "server.key and camex.conf for root only"
 x 'grep -qE "^psk=hex:[0-9a-f]{64}$" /etc/camex/camex.conf && grep -qx "port=5800" /etc/camex/camex.conf &&
-   ! grep -q "^domain=" /etc/camex/camex.conf'
-check $? "camex.conf has a new psk, port 5800, no domain"
+   ! grep -q "^domain=" /etc/camex/camex.conf && grep -qx "client_timeout=60" /etc/camex/camex.conf'
+check $? "camex.conf has a new psk, port 5800, client_timeout=60, no domain"
 x 'grep -qx "CAMEX_ARGS=\"--mode server --config /etc/camex/camex.conf --server-key-file /etc/camex/server.key\"" /etc/default/camex'
 check $? "/etc/default/camex holds the server's arguments"
 x 'dpkg -s curl ca-certificates >/dev/null 2>&1 && ! dpkg -s nginx >/dev/null 2>&1'
@@ -330,13 +330,15 @@ orun() {    # orun <args>: install.sh there
 # the start page with it
 OPSK='my long\cpass\nphrase'
 out=$(orun --domain opts.test --port 5900 --transport tcp --pool 10.60.1.7/22 \
-    --psk "$OPSK" --password 'pa:ss\c "word' --http-port 85 --upstream-port 8080)
+    --psk "$OPSK" --password 'pa:ss\c "word' --http-port 85 --upstream-port 8080 \
+    --client-timeout 90)
 rc=$?
 echo "$out" | sed 's/^/      /'
 [ $rc -eq 0 ] && o 'grep -qx "local_cidr=10.60.0.1/22" /etc/camex/camex.conf &&
     grep -qx "auto_pool=10.60.0.0/22" /etc/camex/camex.conf &&
-    grep -qxF "psk=$1" /etc/camex/camex.conf && grep -qx "port=5900" /etc/camex/camex.conf' "$OPSK"
-check $? "camex.conf: port, the pool's network with the server first, the given psk"
+    grep -qxF "psk=$1" /etc/camex/camex.conf && grep -qx "port=5900" /etc/camex/camex.conf &&
+    grep -qx "client_timeout=90" /etc/camex/camex.conf' "$OPSK"
+check $? "camex.conf: port, the pool's network with the server first, the given psk, client_timeout"
 o 'grep -q -- "--transport tcp" /etc/default/camex && camex --status | grep -q "tcp port 5900"'
 check $? "the server runs over TCP on the given port"
 echo "$out" | grep -qF -- "--port 5900 --transport tcp" && echo "$out" | grep -qF -- "--psk '$OPSK'" &&
@@ -374,12 +376,13 @@ check $? "a TCP client: the map leads to its port 8080, the start page links it 
 # The short form of an older unit's arguments: still TCP (camex reads -Rtcp)
 o 'sed -i "s/--transport tcp/-Rtcp/" /etc/default/camex && grep -q -- "-Rtcp" /etc/default/camex'
 out=$(orun --domain opts.test --port 5901 --transport udp --pool 10.70.0.0/24 --psk other \
-    --password other --http-port 86 --upstream-port 9090)
+    --password other --http-port 86 --upstream-port 9090 --client-timeout 120)
 rc=$?
 [ $rc -eq 0 ] && echo "$out" | grep -q "kept port= of /etc/camex/camex.conf, not --port 5901" &&
     echo "$out" | grep -q "kept psk= of /etc/camex/camex.conf, not --psk" &&
     echo "$out" | grep -q "kept auto_pool= of /etc/camex/camex.conf, not --pool 10.70.0.0/24" &&
     echo "$out" | grep -q "kept the server's transport tcp, not --transport udp" &&
+    echo "$out" | grep -q "kept client_timeout= of /etc/camex/camex.conf, not --client-timeout 120" &&
     echo "$out" | grep -q "kept the start page's password, not --password" &&
     echo "$out" | grep -q "kept the listen lines of /etc/nginx/conf.d/camex-nginx.conf, not --http-port 86" &&
     echo "$out" | grep -q "kept UPSTREAM_PORT=8080 of camex-nginx-sync.service, not 9090" &&
