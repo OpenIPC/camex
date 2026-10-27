@@ -209,18 +209,20 @@ the device:
    with no prompt (`WIRELESS_EXT`, say) cannot be turned on in `.config` alone:
    `olddefconfig` drops it again unless something selects it; enable an option
    that selects it, or give it `default y` in its `Kconfig`.
-3. **Prepare the tree and build:**
+3. **Prepare the tree and build** (`<arch>`: the kernel's architecture,
+   `mips` for the OpenWrt routers, `arm` for the HiSilicon cameras; `<prefix>`:
+   the firmware's toolchain, e.g. `mipsel-openwrt-linux-`):
 
    ```sh
-   make -C <kernel-tree> ARCH=mips CROSS_COMPILE=<prefix> olddefconfig modules_prepare
-   make kmod KDIR=<kernel-tree> ARCH=mips CROSS_COMPILE=<prefix>
+   make -C <kernel-tree> ARCH=<arch> CROSS_COMPILE=<prefix> olddefconfig modules_prepare
+   make kmod KDIR=<kernel-tree> ARCH=<arch> CROSS_COMPILE=<prefix>
    ```
 
    If the host tools of an older kernel fail to link with GCC 10 or newer
    (`dtc`: multiple definition of `yylloc`), add `HOSTCFLAGS=-fcommon`.
 4. **Check the layout before loading.** Build a module the device already has
    from the same tree, for example
-   `make -C <kernel-tree> ARCH=mips CROSS_COMPILE=<prefix> drivers/net/tun.ko`,
+   `make -C <kernel-tree> ARCH=<arch> CROSS_COMPILE=<prefix> drivers/net/tun.ko`,
    and compare it with the device's `/lib/modules/$(uname -r)/tun.ko`: the
    `.text` size (`objdump -h`) and the offsets in every load and store
    (`objdump -d`, e.g. `lw v0,452(a0)`) must be the same. Instruction order may
