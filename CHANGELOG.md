@@ -6,6 +6,28 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.12.0 — 2026-10-27
+
+- `install.sh` takes more options (#141), settings made once like the files they go to: on
+  a rerun a different value is not applied, and the installer says which line to edit
+  where.
+  - `--psk <key>`: the clients' pre-shared key (`hex:`, `base64:` or a passphrase) instead of
+    a random one.
+  - `--transport udp|tcp`: the server's transport; the printed client command has it.
+  - `--pool <network>/<prefix>` (`/8` to `/30`): the clients' pool, the server at its first
+    address.
+  - With `--domain`: `--password <password>` for the start page instead of a random one;
+    `--http-port <port>` for nginx (its `listen` lines, the start page's links, what
+    `--check` asks, the addresses printed); `--upstream-port <port>` for the cameras' web
+    port.
+- `camex --status --format nginx-index --http-port <port>`: nginx's port in the start page's
+  links (none for 80). `camex-nginx-sync` takes `HTTP_PORT` from its service for the links
+  and `--check`.
+- e2e: every option on a new host (a TCP server on its port and pool, the given psk and
+  password, nginx on 85, the cameras on 8080), a rerun with other values that changes none
+  of them; a unit test of the links with a port. `docs/install.md`, `docs/nginx.md`,
+  `docs/usage.md`.
+
 ## 3.11.2 — 2026-10-27
 
 - `camex --status --wait` notices a server that starts while it waits (#138): it looks at the
