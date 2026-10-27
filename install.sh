@@ -196,7 +196,7 @@ done
 DOMAIN=$(printf '%s' "$DOMAIN" | tr 'A-Z' 'a-z')
 # As camex checks it: labels of letters, digits and '-', 253 characters
 if [ -n "$DOMAIN" ] && { [ ${#DOMAIN} -gt 253 ] || ! printf '%s\n' "$DOMAIN" |
-   grep -qxE '[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+'; }; then
+   grep -qxE '[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*'; }; then
     die "not a domain: $DOMAIN"
 fi
 case "$PORT" in
@@ -367,7 +367,9 @@ elif [ -n "$NEW_BIN$NEW_UNIT" ]; then
     say "restarted camex.service"
 else
     # camex.conf may have a new domain
-    systemctl reload camex.service && say "reloaded camex.service"
+    systemctl reload camex.service ||
+        die "systemctl reload camex failed: journalctl -u camex"
+    say "reloaded camex.service (its log says whether camex.conf was taken)"
 fi
 sleep 1
 systemctl is-active --quiet camex.service ||
@@ -396,6 +398,11 @@ else
             die "$NGINX_CONF is not for $DOMAIN: fix its server_name lines" \
                 "(or remove it), then run this again"
         say "kept: $NGINX_CONF"
+        # A file of its own (or an older one) may serve the start page
+        # without the password
+        grep -qE '^[[:space:]]*auth_basic[[:space:]]+"' "$NGINX_CONF" ||
+            say "WARNING: $NGINX_CONF has no auth_basic: the start page" \
+                "has no password (see auth_basic in examples/nginx-camex.conf)"
     else
         fetch "$CAMEX_SRC/examples/nginx-camex.conf" "$TMP/nginx.conf"
         sed -i "s/openipc\.click/$DOMAIN/g" "$TMP/nginx.conf"
@@ -455,7 +462,7 @@ else
     systemctl enable --now camex-nginx-sync.timer >/dev/null 2>&1 ||
         die "cannot enable camex-nginx-sync.timer"
     systemctl start camex-nginx-sync.service ||
-        say "the first sync failed: journalctl -u camex-nginx-sync"
+        die "the first sync failed: journalctl -u camex-nginx-sync"
     say "checking: $SYNC --check"
     "$SYNC" --check || say "see the FAIL lines above (DNS is yours to set up)"
 fi
@@ -474,7 +481,8 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --config|-f)       USED_CONF=${2-}; shift ;;
         --config=*)        USED_CONF=${1#*=} ;;
-        --server-key-file) USED_KEY=${2-}; shift ;;
+        --server-key-file|-S) USED_KEY=${2-}; shift ;;
+        --server-key-file=*)  USED_KEY=${1#*=} ;;
         --psk|-k)          ARG_PSK=${2-}; shift ;;
         --psk=*)           ARG_PSK=${1#*=} ;;
         --port|-p)         ARG_PORT=${2-}; shift ;;
