@@ -171,4 +171,11 @@ char *server_clients_list(int names, size_t *len);
  * memory */
 char *server_clients_index(size_t *len);
 
+/* A fingerprint of what the nginx map and the start page are made of
+ * (#130): the live clients' IDs, addresses, peers and names, the
+ * [client ID] blocks and the domain. Not the counters (last packet,
+ * traffic): those change all the time. camex --status --wait waits for it
+ * to change. */
+uint64_t server_state_hash(void);
+
 #endif /* CAMEX_SERVER_H */

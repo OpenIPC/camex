@@ -10,8 +10,13 @@ Description=Update the nginx map of camex clients
 After=camex.service nginx.service
 
 [Service]
-Type=oneshot
+Type=simple
 Environment=MAP=/etc/nginx/camex-map.conf
 Environment=INDEX=/var/lib/camex-nginx/index.html
 StateDirectory=camex-nginx
-ExecStart=/usr/local/bin/camex-nginx-sync
+ExecStart=/usr/local/bin/camex-nginx-sync --follow
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

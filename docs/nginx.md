@@ -214,16 +214,17 @@ curl -fsSL https://raw.githubusercontent.com/OpenIPC/camex/master/install.sh | s
 ```
 
 It installs the nginx server blocks as `/etc/nginx/conf.d/camex-nginx.conf`,
-the sync script as `/usr/local/bin/camex-nginx-sync` with its service and
-timer, and the start page's password (see [Start page](#start-page),
+the sync script as `/usr/local/bin/camex-nginx-sync` with its service, and
+the start page's password (see [Start page](#start-page),
 **Password**). It adds `domain=` to `[server]` of `/etc/camex/camex.conf` and
-reloads camex, then checks and reloads nginx and enables the timer. Run it
+reloads camex, then checks and reloads nginx and starts the sync service. Run it
 again at any time: it updates camex, the sync script and the units; nginx's
 file, `camex.conf` and the password, once made, stay as they are, edits
 included. The domain is never changed by it: another `--domain` is refused. A
 setup of `camex-nginx-setup.sh` (camex 3.9 and before) moves to the new names:
 `/etc/nginx/conf.d/camex.conf` becomes `camex-nginx.conf` with its edits, the
-old sync script goes to `/var/backups/camex/`. DNS and TLS (steps 1 and 2) stay
+old sync script goes to `/var/backups/camex/`, and camex 3.10's
+`camex-nginx-sync.timer` is stopped and removed. DNS and TLS (steps 1 and 2) stay
 yours.
 
 **The checks**: `camex-nginx-sync --check` goes through the whole setup and
@@ -234,7 +235,7 @@ the domain with no camera must get camex's offline page, and the bare domain
 the start page, behind its password (a `WARN` when it has none; with the
 password from `/etc/camex/nginx-password`, `PASSWORD_FILE=` for another file,
 it also opens the page). Then the start page file, the DNS records and the
-timer. It
+sync service. It
 exits with 1 on a `FAIL`. A DNS name that does not resolve is a `FAIL`; one
 that resolves to an address that is not this host's is a `WARN`, because
 behind NAT that is normal. `CHECK_DNS=no` skips the DNS items, e.g. in a
@@ -263,11 +264,10 @@ The steps by hand:
    ```sh
    printf 'map $host $camex_upstream {\n}\n' | sudo tee /etc/nginx/camex-map.conf
    sudo install -m 755 examples/camex-nginx-sync.sh /usr/local/bin/camex-nginx-sync
-   sudo cp examples/camex-nginx-sync.service examples/camex-nginx-sync.timer \
-       /etc/systemd/system/
+   sudo cp examples/camex-nginx-sync.service /etc/systemd/system/
    # The domain comes from domain= in [server] of camex.conf
    sudo systemctl daemon-reload
-   sudo systemctl enable --now camex-nginx-sync.timer
+   sudo systemctl enable --now camex-nginx-sync.service
    ```
 
    The script writes `camex --status --format nginx-map` to the map only when
@@ -341,8 +341,8 @@ blocks in the file, Auto otherwise, and the browser remembers the tab chosen
   the names in a NAME column, `--json` as `"name"`.
 - **Order**: by name (A–Z in any case alike), then by ID, connected or not, so
   a camera keeps its place in the list.
-- **Freshness**: the ages and the traffic are those of the last sync (every 10
-  seconds with the example timer), and the page reloads itself every 30
+- **Freshness**: the ages and the traffic are those of the last sync (at
+  least every 10 seconds with `--follow` and `INDEX`), and the page reloads itself every 30
   seconds. The script replaces the page at every sync and logs only when the
   number of cameras online changed.
 - **The same rules as the map**: IDs that are not a host name label are left
@@ -407,10 +407,22 @@ nginx-index`) when it changed: a static file, so nginx needs no reload for it.
 A server that does not answer leaves the map and the page as they are.
 
 ```sh
-camex-nginx-sync            # once (cron, a systemd timer)
-camex-nginx-sync --loop 10  # every 10 seconds
-camex-nginx-sync --check    # check the whole setup; exit code 1 on a FAIL
+camex-nginx-sync               # once (cron, a systemd timer)
+camex-nginx-sync --follow [s]  # at every change of the clients (the service)
+camex-nginx-sync --loop 10     # every 10 seconds
+camex-nginx-sync --check       # check the whole setup; exit code 1 on a FAIL
 ```
+
+**`--follow`** (#130), what `camex-nginx-sync.service` runs: a sync as soon
+as a client of any server on the host comes, goes, gets another address or
+peer, or the server's file is reloaded with other names or domain, within
+about a second, and none while nothing changes. The start page's live columns
+(connected for, last packet, traffic) change without such an event, so with
+`INDEX` it also syncs every 10 seconds (without `INDEX` every 300; `--follow
+<seconds>` sets it). It waits with `camex --status --wait <token>`: the
+servers answer when the state of their clients is not the one in the token,
+or when the time is up. A server before camex 3.11.0 does not know the wait:
+then the script syncs every 10 seconds and says so once in the log.
 
 Settings (environment; `camex-nginx-sync.service` sets `MAP` and `INDEX`, and
 `--check` run by hand takes those from it):
@@ -459,14 +471,14 @@ map $host $camex_upstream {
 - `examples/nginx-camex.conf` is the server block: `proxy_pass` to the map's
   target, WebSocket, no buffering, a short connect timeout and an "offline" page
   for names with no live client. `examples/camex-nginx-sync.sh` (POSIX sh) runs
-  once or with `--loop <seconds>`; `camex-nginx-sync.service` and `.timer` run it
-  every 10 seconds. Addresses are stable (#81), so the map changes only when
-  clients come and go.
+  once, with `--loop <seconds>`, or with `--follow`, as `camex-nginx-sync.service`
+  runs it: at every change (see [Sync script](#sync-script)). Addresses are
+  stable (#81), so the map changes only when clients come and go.
 - **One domain, given once** (#106): `domain=openipc.click` in `[server]` of
   the server's file; the map, the start page and the sync script take it from
   the running server. `install.sh --domain openipc.click` (see
   [install.md](install.md)) sets it there and installs the
-  nginx server blocks, the sync script, its service and timer with the same
+  nginx server blocks, the sync script and its service with the same
   domain; `camex-nginx-sync --check` checks the whole setup (servers, domain,
   nginx, start page, DNS).
 - Settings of the script: see [Sync script](#sync-script).

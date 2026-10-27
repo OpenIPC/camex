@@ -6,6 +6,29 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.11.0 — 2026-10-27
+
+- The nginx map follows the servers' changes instead of a 10-second timer (#130):
+  - `camex --status --wait <token> [--wait-timeout <s>]` waits until the clients of any
+    server on the host (or of `--control`) change — a client comes, goes, gets another
+    address or peer, a reload brings other names or another domain — then prints the
+    token of the new state; `-` prints it at once. The servers answer a new control
+    command, `WAIT <hash> <seconds>`, with a fingerprint of that state, worked out at most
+    every 250 ms while someone waits; the counters (last packet, traffic) are not in it.
+    The control socket takes 8 connections at a time (was 4).
+  - `camex-nginx-sync --follow [<seconds>]`: a sync at every change, about a second after
+    it, and none while nothing changes; with `INDEX` (the start page's live columns) also
+    every 10 seconds, without it every 300. With a server before 3.11.0 it syncs every 10
+    seconds and says so once.
+  - `camex-nginx-sync.service` runs `--follow` (`Type=simple`, `Restart=always`, enabled
+    for `multi-user.target`); `camex-nginx-sync.timer` is gone. `install.sh` stops and
+    removes the timer of 3.10 and restarts the service on every run; `--check` checks the
+    service.
+- e2e: `docker/test-e2e-nginx-map.sh` checks `--wait` and `--follow` (a new client in the
+  map within 2 s, no sync while idle, the fallback for an older server);
+  `docker/test-e2e-install.sh` the service after a restart of camex and the removal of the
+  timer. Docs: `docs/nginx.md`, `docs/install.md`, `docs/usage.md`.
+
 ## 3.10.0 — 2026-10-27
 
 - `install.sh`: the camex server on Debian or Ubuntu in one command, run straight from

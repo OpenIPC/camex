@@ -2854,6 +2854,60 @@ char *server_clients_index(size_t *len)
     return b.p;
 }
 
+/* FNV-1a, 64 bits: a field of len bytes, then a separator */
+static uint64_t state_mix(uint64_t h, const void *p, size_t len)
+{
+    const unsigned char *b = p;
+    size_t i;
+
+    for (i = 0U; i < len; ++i) {
+        h ^= b[i];
+        h *= 1099511628211ULL;
+    }
+    h ^= 0xffU;
+    return h * 1099511628211ULL;
+}
+
+uint64_t server_state_hash(void)
+{
+    uint64_t h = 14695981039346656037ULL;
+    size_t i;
+
+    h = state_mix(h, server_db.globals.domain,
+                  strlen(server_db.globals.domain));
+    for (i = 0U; i < server_max_clients; ++i) {
+        const server_client_t *c = &server_clients[i];
+        const char *name;
+        int port;
+
+        if (!c->active || !c->registered || c->client_id[0] == '\0' ||
+            c->ip_be == 0U) {
+            continue;
+        }
+        name = status_name(c->client_id);
+        port = config_db_peer_port(c->client_id);
+        h = state_mix(h, c->client_id, strlen(c->client_id));
+        h = state_mix(h, &c->ip_be, sizeof(c->ip_be));
+        h = state_mix(h, &c->addr.sin_addr.s_addr,
+                      sizeof(c->addr.sin_addr.s_addr));
+        h = state_mix(h, &port, sizeof(port));
+        h = state_mix(h, name != NULL ? name : "", name != NULL
+                                                       ? strlen(name) : 0U);
+    }
+    for (i = 0U; i < server_db.client_count; ++i) {
+        const camex_server_profile_t *p = &server_db.clients[i];
+
+        if (!p->active || p->client_id[0] == '\0') {
+            continue;
+        }
+        h = state_mix(h, p->client_id, strlen(p->client_id));
+        h = state_mix(h, &p->has_ip, sizeof(p->has_ip));
+        h = state_mix(h, &p->ip_be, sizeof(p->ip_be));
+        h = state_mix(h, p->name, strlen(p->name));
+    }
+    return h;
+}
+
 /* The live clients as "<client ID> <tunnel address>" lines, for the nginx
  * map (#84): clients with an ID and an address only; with names, " <name>"
  * follows for a client with name= (#105) */

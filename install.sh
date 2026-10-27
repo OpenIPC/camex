@@ -75,6 +75,8 @@ BACKUP=/var/backups/camex
 # Where camex-nginx-setup.sh (camex 3.9 and before) put them
 OLD_SYNC=/usr/local/bin/camex-nginx-sync.sh
 OLD_NGINX_CONF=/etc/nginx/conf.d/camex.conf
+# camex 3.10
+OLD_TIMER=/etc/systemd/system/camex-nginx-sync.timer
 
 DOMAIN=
 PORT=5800
@@ -146,7 +148,7 @@ uninstall_list() {
     for f in \
         "$BIN" "$SYNC" "$OLD_SYNC" \
         "$UNITS/camex.service" "$UNITS/camex-nginx-sync.service" \
-        "$UNITS/camex-nginx-sync.timer" \
+        "$OLD_TIMER" \
         "$DEFAULTS" "$CONF" "$CONF.bak" "$KEY" "$PASSWORD_FILE" \
         "$NGINX_CONF" "$OLD_NGINX_CONF" "$HTPASSWD" \
         "$MAP" "$MAP.applied" "$MAP.lock" "$MAP.warnings" \
@@ -453,7 +455,7 @@ else
             die "cannot write $HTPASSWD for nginx (group www-data)"
         say "wrote the camex line of $HTPASSWD"
     fi
-    # The sync script and its timer
+    # The sync script and its service
     fetch "$CAMEX_SRC/examples/camex-nginx-sync.sh" "$TMP/sync"
     put "$TMP/sync" "$SYNC" 755 || true
     if [ -f "$OLD_SYNC" ]; then
@@ -471,9 +473,14 @@ else
             *) sed -i "s|^Environment=INDEX=.*|Environment=INDEX=$index|" "$TMP/sync.service" ;;
         esac
     fi
-    fetch "$CAMEX_SRC/examples/camex-nginx-sync.timer" "$TMP/sync.timer"
     put "$TMP/sync.service" "$UNITS/camex-nginx-sync.service" 644 || true
-    put "$TMP/sync.timer" "$UNITS/camex-nginx-sync.timer" 644 || true
+    # camex 3.10's timer: the service follows the servers itself now
+    if [ -f "$OLD_TIMER" ]; then
+        systemctl disable --now camex-nginx-sync.timer >/dev/null 2>&1
+        backup "$OLD_TIMER"
+        rm -f "$OLD_TIMER"
+        say "removed $OLD_TIMER (camex-nginx-sync.service follows the servers)"
+    fi
     systemctl daemon-reload
     nginx -t 2>"$TMP/nginx-t" || { cat "$TMP/nginx-t" >&2; die "nginx -t rejects the configuration"; }
     if systemctl is-active --quiet nginx; then
@@ -481,10 +488,11 @@ else
     else
         systemctl enable --now nginx >/dev/null 2>&1 || die "nginx did not start"
     fi
-    systemctl enable --now camex-nginx-sync.timer >/dev/null 2>&1 ||
-        die "cannot enable camex-nginx-sync.timer"
-    systemctl start camex-nginx-sync.service ||
-        die "the first sync failed: journalctl -u camex-nginx-sync"
+    # Restarted: a new script or unit takes over
+    systemctl enable camex-nginx-sync.service >/dev/null 2>&1 &&
+        systemctl restart camex-nginx-sync.service ||
+        die "cannot start camex-nginx-sync.service: journalctl -u camex-nginx-sync"
+    sleep 2   # its first sync
     say "checking: $SYNC --check"
     "$SYNC" --check || say "see the FAIL lines above (DNS is yours to set up)"
 fi

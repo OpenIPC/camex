@@ -9,6 +9,8 @@
  *
  *   STATUS        a table of the live clients, for people
  *   STATUS JSON   the same as one JSON object, for scripts
+ *   WAIT <h> <s>  the clients' state fingerprint once it is not <h>, or
+ *                 after <s> seconds (#130)
  *
  * By default the socket is CAMEX_CONTROL_DIR/camex-<udp|tcp>-<port>.sock,
  * so a UDP and a TCP server on one host each have their own;
@@ -70,5 +72,14 @@ int control_nginx_map(const char *path, const char *domain, int port,
  * their name= from the server's file, as a start page (nginxmap.h).
  * Exit code 1, and no page, when a server does not answer. */
 int control_nginx_index(const char *path, const char *domain);
+
+/* camex --status --wait <token> (#130): wait until the state of the
+ * clients changes on any server (or the one at path), at most timeout
+ * seconds, then print the token of the state now. The token is opaque
+ * ("<hash>:<socket>,...", "none" with no server); "-" asks for the
+ * state at once. Exit code 0
+ * (changed or timed out), 3 when a server is too old for it, 1 on an
+ * error. */
+int control_wait(const char *path, const char *token, int timeout);
 
 #endif /* CAMEX_CONTROL_H */
