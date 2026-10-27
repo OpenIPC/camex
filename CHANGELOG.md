@@ -6,6 +6,18 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.11.2 — 2026-10-27
+
+- `camex --status --wait` notices a server that starts while it waits (#138): it looks at the
+  control sockets' directory every second, also when there was no server or only sockets
+  left behind, and a new socket ends the wait as a change. `camex-nginx-sync --follow` so
+  maps a new server's clients within about a second instead of at the end of its interval
+  (10 s with `INDEX`, 300 s without). Not with `--control` (one server only).
+- The `WAIT` command is written until it is whole, by the wait's deadline; a server that
+  does not take it in time counts as unchanged, not as gone.
+- e2e: a server started during a 30-second wait ends it in about 2 s, and the next token has
+  its state. `docs/nginx.md`: a server that starts or stops is a change.
+
 ## 3.11.1 — 2026-10-27
 
 - `camex.ko` refuses to load when it was built for another kernel configuration (#134):
