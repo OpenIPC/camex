@@ -162,7 +162,12 @@ uninstall_list() {
     echo
     echo "To remove camex, run as root:"
     echo
-    echo "  systemctl disable --now camex-nginx-sync.timer camex.service"
+    # Only units that are there: systemctl stops at one it does not know
+    units=
+    for u in camex-nginx-sync.timer camex-nginx-sync.service camex.service; do
+        [ -f "$UNITS/$u" ] && units="$units $u"
+    done
+    [ -n "$units" ] && echo "  systemctl disable --now$units"
     for f in $found; do
         case "$f" in
             "$ETC"/*|"$BACKUP"|/run/camex) ;;
@@ -411,6 +416,9 @@ else
     # (its server_name and the other files were checked in step 1)
     if [ -f "$NGINX_CONF" ]; then
         say "kept: $NGINX_CONF"
+        grep -qiE "server_name[[:space:]]+$(echo "$DOMAIN" | sed 's/\./\\./g');" "$NGINX_CONF" ||
+            say "WARNING: $NGINX_CONF has no server block for $DOMAIN itself:" \
+                "no start page there (see examples/nginx-camex.conf)"
         # A file of its own (or an older one) may serve the start page
         # without the password
         grep -qE '^[[:space:]]*auth_basic[[:space:]]+"' "$NGINX_CONF" ||

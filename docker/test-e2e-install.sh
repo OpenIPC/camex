@@ -283,7 +283,7 @@ check $? "it removes and stops nothing"
 echo "$out" | grep -qx "  + /usr/local/bin/camex" && echo "$out" | grep -qx "  + /etc/nginx/conf.d/camex-nginx.conf" &&
     echo "$out" | grep -qx "  - /usr/local/bin/camex-nginx-sync.sh" &&
     echo "$out" | grep -qx "  rm /usr/local/bin/camex-nginx-sync" &&
-    echo "$out" | grep -q "systemctl disable --now camex-nginx-sync.timer camex.service"
+    echo "$out" | grep -qx "  systemctl disable --now camex-nginx-sync.timer camex-nginx-sync.service camex.service"
 check $? "it lists the files, which are there, and the commands to remove them"
 
 if [ "$FAILS" -ne 0 ]; then

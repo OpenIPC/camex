@@ -186,7 +186,10 @@ Everything above but the kernel module and the packages, then `install.sh`
 again:
 
 ```sh
-sudo systemctl disable --now camex-nginx-sync.timer camex-nginx-sync.service camex.service
+# One unit at a time: systemctl stops at one that is not there
+for u in camex-nginx-sync.timer camex-nginx-sync.service camex.service; do
+    sudo systemctl disable --now "$u" 2>/dev/null
+done
 sudo rm -f /usr/local/bin/camex /usr/local/bin/camex-nginx-sync /usr/local/bin/camex-nginx-sync.sh \
     /etc/systemd/system/camex.service /etc/systemd/system/camex-nginx-sync.service \
     /etc/systemd/system/camex-nginx-sync.timer /etc/default/camex \
