@@ -246,6 +246,28 @@ if [ -n "$DOMAIN" ] && [ -f "$CONF" ]; then
             "domain= there and the names in $NGINX_CONF yourself"
     fi
 fi
+# nginx's files: what would stop step 7 stops here, before camex.conf gets
+# the domain
+if [ -n "$DOMAIN" ]; then
+    if [ -f "$OLD_NGINX_CONF" ] && [ -f "$NGINX_CONF" ]; then
+        die "both $OLD_NGINX_CONF and $NGINX_CONF are there: move what you" \
+            "need into $NGINX_CONF, remove the other, then run this again"
+    fi
+    kept=$NGINX_CONF
+    [ -f "$kept" ] || kept=$OLD_NGINX_CONF
+    if [ -f "$kept" ] &&
+       ! grep -qiE "server_name[[:space:]]+\*\.$(echo "$DOMAIN" | sed 's/\./\\./g');" "$kept"; then
+        die "$kept is not for $DOMAIN: fix its server_name lines (or remove" \
+            "it), then run this again"
+    fi
+    # Another file of nginx with the map: two of them would fight
+    for f in /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/*; do
+        [ -f "$f" ] && [ "$f" != "$NGINX_CONF" ] && [ "$f" != "$OLD_NGINX_CONF" ] &&
+            grep -qE "^[[:space:]]*include[[:space:]]+$MAP;" "$f" &&
+            die "$f is a camex file of nginx too: move what you need from it" \
+                "into $NGINX_CONF (or remove it), then run this again"
+    done
+fi
 say "${PRETTY_NAME:-Debian}, camex-$ARCH${DOMAIN:+, nginx for $DOMAIN}"
 
 # 2. Packages ---------------------------------------------------------------
@@ -348,7 +370,8 @@ if [ ! -f "$DEFAULTS" ]; then
         echo "# The arguments of camex.service; systemctl restart camex after a change"
         echo "CAMEX_ARGS=\"$args\""
     } > "$TMP/defaults"
-    cp "$TMP/defaults" "$DEFAULTS" && chmod 644 "$DEFAULTS" ||
+    # 0600: an older unit's arguments may carry --psk
+    (umask 077; cp "$TMP/defaults" "$DEFAULTS") && chmod 600 "$DEFAULTS" ||
         die "cannot write $DEFAULTS"
     say "created: $DEFAULTS"
 else
@@ -385,18 +408,8 @@ else
         mv "$OLD_NGINX_CONF" "$NGINX_CONF" || die "cannot rename $OLD_NGINX_CONF"
         say "renamed $OLD_NGINX_CONF to $NGINX_CONF"
     fi
-    # Another file of nginx with the map: two of them would fight
-    for f in /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/*; do
-        [ -f "$f" ] && [ "$f" != "$NGINX_CONF" ] &&
-            grep -qE "^[[:space:]]*include[[:space:]]+$MAP;" "$f" &&
-            die "$f is a camex file of nginx too: move what you need from it" \
-                "into $NGINX_CONF (or remove it), then run this again"
-    done
+    # (its server_name and the other files were checked in step 1)
     if [ -f "$NGINX_CONF" ]; then
-        grep -qE "server_name[[:space:]]+\*\.$(echo "$DOMAIN" | sed 's/\./\\./g');" \
-            "$NGINX_CONF" ||
-            die "$NGINX_CONF is not for $DOMAIN: fix its server_name lines" \
-                "(or remove it), then run this again"
         say "kept: $NGINX_CONF"
         # A file of its own (or an older one) may serve the start page
         # without the password

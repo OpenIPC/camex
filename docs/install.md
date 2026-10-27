@@ -83,9 +83,10 @@ On other systems, or to do the same steps yourself, with the files of
 [examples/](../examples):
 
 ```sh
-# The binary
+# The binary for this host: camex-x86_64, camex-aarch64, camex-arm or camex-mipsel
+ARCH=x86_64
 sudo curl -fL -o /usr/local/bin/camex \
-    https://github.com/OpenIPC/camex/releases/latest/download/camex-x86_64
+    https://github.com/OpenIPC/camex/releases/latest/download/camex-$ARCH
 sudo chmod 755 /usr/local/bin/camex
 
 # The key pair (give public_key= to the clients) and the settings
@@ -96,7 +97,7 @@ sudo install -m 600 examples/camex.conf /etc/camex/camex.conf
 
 # The service
 echo 'CAMEX_ARGS="--mode server --config /etc/camex/camex.conf --server-key-file /etc/camex/server.key"' |
-    sudo tee /etc/default/camex
+    sudo install -m 600 /dev/stdin /etc/default/camex
 sudo cp examples/camex.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now camex
@@ -130,7 +131,7 @@ removes nothing itself.
 /usr/local/bin/camex                          the binary of the latest release
 /etc/camex/camex.conf                         the server's settings, mode 0600
 /etc/camex/server.key                         camex --genkey, mode 0600
-/etc/default/camex                            CAMEX_ARGS of the service
+/etc/default/camex                            CAMEX_ARGS of the service, mode 0600
 /etc/systemd/system/camex.service             from examples/camex.service
 
 # With --domain: nginx in front of the clients

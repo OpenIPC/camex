@@ -226,6 +226,14 @@ check $? "a new password replaces only the camex line; other users stay"
 echo "$out" | grep -qF -- "--psk '$PSK'"
 check $? "the printed psk is the server's, not a [client ID] one"
 PW=$PW2
+# Another nginx file with the map: refused in step 1, before camex.conf
+x 'echo "include /etc/nginx/camex-map.conf;" > /etc/nginx/conf.d/zz-other.conf'
+out=$(run --domain "$DOMAIN")
+rc=$?
+x 'rm /etc/nginx/conf.d/zz-other.conf'
+[ $rc -ne 0 ] && echo "$out" | grep -q "zz-other.conf is a camex file of nginx too" &&
+    ! echo "$out" | grep -q '^\[2/8\]'
+check $? "another nginx file with the map stops it in step 1, before anything changes"
 out=$(run --domain other.test)
 [ $? -ne 0 ] && echo "$out" | grep -q "has domain=$DOMAIN, not other.test" &&
     x "grep -qx 'domain=$DOMAIN' /etc/camex/camex.conf"
@@ -250,7 +258,7 @@ echo "$out" | sed 's/^/      /'
 check $? "nginx's file renamed with its edits, the old sync script removed (a copy kept)"
 x 'grep -qx "Environment=INDEX=/var/lib/camex-nginx/start.html" /etc/systemd/system/camex-nginx-sync.service'
 check $? "the start page's path of the old service is kept"
-x 'grep -q -- "--mtu 1400" /etc/default/camex && grep -q "^EnvironmentFile=/etc/default/camex" /etc/systemd/system/camex.service &&
+x 'grep -q -- "--mtu 1400" /etc/default/camex && [ "$(stat -c %a /etc/default/camex)" = 600 ] && grep -q "^EnvironmentFile=/etc/default/camex" /etc/systemd/system/camex.service &&
    systemctl is-active --quiet camex && systemctl is-active --quiet camex-nginx-sync.timer'
 check $? "the old unit's arguments moved to /etc/default/camex, the services run"
 # The client finds the restarted server again (--server-timeout), the

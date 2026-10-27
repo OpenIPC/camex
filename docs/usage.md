@@ -96,6 +96,8 @@ sudo ./camex \
 | `--encrypt`                | `-e`  | Accepted for compatibility; protocol v2 is always encrypted                                                                                          |
 | `--tun-dev <path>`         | `-T`  | TUN device path (default: auto-detect `/dev/net/tun` then `/dev/camex`)                                                                              |
 | `--pid-file <path>`        | `-P`  | Write PID to file on startup                                                                                                                         |
+| `--keepalive <s>`          | `-K`  | Client: keepalive interval, 0–3600 seconds (default: 10); 0: one every 60 s, a lost link noticed after 60 s + `--server-timeout`                     |
+| `--server-timeout <s>`     | `-W`  | Client: seconds without an answer from the server before it reconnects, 5–3600 (default: 20)                                                         |
 | `--status`                 |       | Print the connected clients of every server on this host and exit (as the server's user, normally root)                                              |
 | `--json`                   |       | With `--status`: the same as JSON, for scripts                                                                                                       |
 | `--control <path>`         |       | Server: control socket for `--status` (default `/run/camex/camex-<transport>-<port>.sock`, `none` = off); with `--status`: ask only that server      |
