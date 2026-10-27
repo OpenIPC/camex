@@ -443,6 +443,18 @@ echo "$out" | grep -q "/run/camex/camex-udp-5802.sock"
 check $? "the next wait has its state in the token"
 docker exec "$P-srv" sh -c 'pkill -f "camex --mode server --port 5802"; true'
 sleep 1
+# The same where a server left its socket behind (section 5): a server
+# started at that path is a new one too
+TOKEN=$(docker exec "$P-srv" camex --status --wait - 2>/dev/null)
+docker exec -d "$P-srv" sh -c 'sleep 2; exec camex-run --mode server --port 5899 \
+    --local-cidr 10.204.0.1/24 '"$SERVER_KEY_ARGS"' --psk "'"$PSK"'" > /tmp/srv5899b.log 2>&1'
+t0=$(date +%s)
+docker exec "$P-srv" camex --status --wait "$TOKEN" --wait-timeout 30 >/dev/null 2>&1
+t1=$(date +%s)
+[ $((t1 - t0)) -le 6 ]
+check $? "a server started where one left its socket ends the wait in $((t1 - t0)) s"
+docker exec "$P-srv" sh -c 'pkill -f "camex --mode server --port 5899"; true'
+sleep 1
 # Counts the map runs of the sync script
 docker exec "$P-srv" sh -c 'printf "#!/bin/sh\ncase \"\$*\" in *nginx-map*) echo x >> /tmp/maps;; esac\nexec camex \"\$@\"\n" \
     > /usr/local/bin/camex-counting && chmod +x /usr/local/bin/camex-counting && rm -f /tmp/maps'

@@ -1099,6 +1099,10 @@ typedef struct {
     int gone;
     char buf[64];
     size_t len;
+    dev_t dev;              /* the socket file at the start: another one */
+    ino_t ino;              /* at its path is a server started there; */
+    time_t ctime;           /* (the inode may be the old one's, reused) */
+    int have_ino;
 } control_waiter_t;
 
 /* A socket path as the token has it: ',' and '%' as %2C and %25, so that
@@ -1219,8 +1223,9 @@ static int waiter_parse(control_waiter_t *w)
     return 1;
 }
 
-/* A control socket that is not one of w's: a server started since the
- * list was read (#138) */
+/* A control socket that is not one of w's, or another file at the path
+ * of one (a server started where one left its socket behind): a server
+ * started since the list was read (#138) */
 static int wait_new_socket(const control_waiter_t *w, int n)
 {
     control_path_t *paths = NULL;
@@ -1231,7 +1236,11 @@ static int wait_new_socket(const control_waiter_t *w, int n)
 
         for (j = 0; j < n; ++j) {
             if (strcmp(paths[i], w[j].path) == 0) {
-                known = 1;
+                struct stat st;
+
+                known = !w[j].have_ino || stat(paths[i], &st) != 0 ||
+                        (st.st_dev == w[j].dev && st.st_ino == w[j].ino &&
+                         st.st_ctime == w[j].ctime);
                 break;
             }
         }
@@ -1340,6 +1349,16 @@ int control_wait(const char *path, const char *token, int timeout)
         memcpy(w[i].path, paths[i], sizeof(w[i].path));
         w[i].fd = -1;
         w[i].has_old = token_find(token, w[i].path, &w[i].old);
+        {
+            struct stat st;
+
+            if (stat(w[i].path, &st) == 0) {
+                w[i].dev = st.st_dev;
+                w[i].ino = st.st_ino;
+                w[i].ctime = st.st_ctime;
+                w[i].have_ino = 1;
+            }
+        }
     }
     free(paths);
     /* A server gone since the token, or a token not of ours: a change.
