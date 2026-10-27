@@ -1348,8 +1348,12 @@ int control_wait(const char *path, const char *token, int timeout)
     changed = scoped ? 0 : token_lost(token, w, n);
     if (n == 0) {
         if (!changed && !snapshot) {
-            /* no server: wait for one */
-            wait_for_server(w, n, timeout, scoped);
+            /* no server: wait for one; one that starts answers with its
+             * state at once */
+            if (wait_for_server(w, n, timeout, scoped)) {
+                free(w);
+                return control_wait(path, "-", timeout);
+            }
         }
         printf("none\n");
         free(w);
@@ -1408,7 +1412,8 @@ int control_wait(const char *path, const char *token, int timeout)
             snprintf(cmd, sizeof(cmd), "WAIT - 0\n");
         }
         {
-            int sent = wait_send(fd, cmd, deadline);
+            /* A second at most: 30 bytes on a new connection */
+            int sent = wait_send(fd, cmd, time(NULL) + 1);
 
             if (sent != 0) {
                 close(fd);
@@ -1429,7 +1434,9 @@ int control_wait(const char *path, const char *token, int timeout)
         for (i = 0; i < n; ++i) {
             open_fds += w[i].fd >= 0;
         }
-        if (open_fds == 0 && wait_for_server(w, n, secs, scoped)) {
+        /* What is left of the wait, not all of it again */
+        if (open_fds == 0 && deadline - 5 > time(NULL) &&
+            wait_for_server(w, n, (int)(deadline - 5 - time(NULL)), scoped)) {
             changed = 1;
         }
     }

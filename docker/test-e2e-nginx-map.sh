@@ -105,13 +105,13 @@ docker build -q -t "$IMAGE" "$BUILD_CTX" >/dev/null 2>&1
 docker network create "$NET_NAME" >/dev/null
 set +e   # checks below report failures themselves
 
-client() {  # client <name>: a camex client serving "I am <name>" on port 80
+client() {  # client <name> [<port>]: a camex client serving "I am <name>" on port 80
     docker run -d --name "$P-$1" --network "$NET_NAME" --cap-add NET_ADMIN \
         --cap-add MKNOD -e CAMEX_ID="$1" --entrypoint /bin/sh "$IMAGE" -c \
         'mkdir -p /www && echo "I am $CAMEX_ID" > /www/index.html &&
          (cd /www && python3 -m http.server 80 >/dev/null 2>&1 &) &&
          exec /usr/local/bin/camex-run --mode client --auto --name "$CAMEX_ID" \
-             --server-host '"$P-srv"' --port 5800 --server-pubkey '"$SERVER_PUBKEY"' \
+             --server-host '"$P-srv"' --port '"${2:-5800}"' --server-pubkey '"$SERVER_PUBKEY"' \
              --psk '"$PSK"' --keepalive 2' >/dev/null
 }
 
@@ -475,6 +475,27 @@ for _ in $(seq 1 40); do
 done
 ! docker exec "$P-srv" grep -q '"cam-f\.' /etc/nginx/camex-map.conf
 check $? "a client that is gone leaves the map as soon as the server drops it"
+# A server that starts while --follow waits: its client in the map at once
+# (#138); its own pool, so that the two tunnels do not overlap
+docker exec "$P-srv" sh -c 'printf "[server]\nauto_pool=10.203.0.0/24\n" > /tmp/c5803.conf'
+docker exec -d "$P-srv" sh -c 'exec camex-run --mode server --port 5803 \
+    --local-cidr 10.203.0.1/24 --config /tmp/c5803.conf '"$SERVER_KEY_ARGS"' \
+    --psk "'"$PSK"'" > /tmp/srv5803.log 2>&1'
+client CAM-H 5803
+for _ in $(seq 1 30); do
+    docker exec "$P-srv" grep -q "Registered auto client CAM-H" /tmp/srv5803.log 2>/dev/null && break
+    sleep 0.5
+done
+t0=$(date +%s)
+for _ in $(seq 1 30); do
+    docker exec "$P-srv" grep -q '"cam-h\.' /etc/nginx/camex-map.conf && break
+    sleep 0.2
+done
+t1=$(date +%s)
+docker exec "$P-srv" grep -q '"cam-h\.' /etc/nginx/camex-map.conf && [ $((t1 - t0)) -le 3 ]
+check $? "a server started during --follow: its client in the map within 3 s ($((t1 - t0)) s)"
+docker rm -f "$P-CAM-H" >/dev/null
+docker exec "$P-srv" sh -c 'pkill -f "camex --mode server --port 5803"; true'
 docker exec "$P-srv" sh -c 'pkill -f "camex-nginx-sync --follow"; true'
 # A server before 3.11.0 answers WAIT with ERROR: camex exits 3
 docker exec "$P-srv" sh -c 'printf "#!/bin/sh\ncase \"\$*\" in *--wait*) echo \"camex: too old\" >&2; exit 3;; esac\nexec camex \"\$@\"\n" \
