@@ -6,8 +6,7 @@
 # Docs: https://github.com/OpenIPC/camex/blob/master/docs/install.md
 #
 
-# One block: sh reads it to the end before running it, so a cut download runs
-# nothing and apt-get cannot read the rest of the script from the pipe
+# One block: read whole before it runs (a cut download, apt-get reading stdin)
 {
 
 steps() {
@@ -119,18 +118,23 @@ put() {
 # backup <file>: a copy in $BACKUP, named after its path and the time
 backup() {
     mkdir -p "$BACKUP" && chmod 700 "$BACKUP"
-    b=$BACKUP/$(echo "$1" | sed 's|^/||; s|/|_|g').$(date +%Y%m%d-%H%M%S)
-    cp -p "$1" "$b" || die "cannot keep a copy of $1 in $BACKUP"
+    # mktemp: a name of its own, also for two runs within a second
+    b=$(mktemp "$BACKUP/$(echo "$1" | sed 's|^/||; s|/|_|g').$(date +%Y%m%d-%H%M%S).XXXXXX") &&
+        cp -p "$1" "$b" || die "cannot keep a copy of $1 in $BACKUP"
     say "previous $1 kept as $b"
 }
 
-# The domain in [server] of camex.conf (the last one, as camex reads it)
-conf_domain() {
-    awk '/^[[:space:]]*\[/ { s = (tolower($0) ~ /^[[:space:]]*\[[[:space:]]*server[[:space:]]*\]/) }
-         s && /^[[:space:]]*domain[[:space:]]*=/ {
-             sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); d = tolower($0)
+# conf_server <key> [<file>]: its value in [server] of camex.conf (the last
+# one, as camex reads it); not those of [defaults] or [client ID]
+conf_server() {
+    awk -v k="$1" '/^[[:space:]]*\[/ { s = (tolower($0) ~ /^[[:space:]]*\[[[:space:]]*server[[:space:]]*\]/) }
+         s && $0 ~ "^[[:space:]]*" k "[[:space:]]*=" {
+             sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); d = $0
          }
-         END { if (d != "") print d }' "$CONF"
+         END { if (d != "") print d }' "${2:-$CONF}" 2>/dev/null
+}
+conf_domain() {
+    conf_server domain | tr 'A-Z' 'a-z'
 }
 
 # --uninstall: every file of camex, and the commands to remove them
@@ -190,8 +194,9 @@ while [ $# -gt 0 ]; do
 done
 
 DOMAIN=$(printf '%s' "$DOMAIN" | tr 'A-Z' 'a-z')
-if [ -n "$DOMAIN" ] && ! printf '%s\n' "$DOMAIN" |
-   grep -qxE '[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+'; then
+# As camex checks it: labels of letters, digits and '-', 253 characters
+if [ -n "$DOMAIN" ] && { [ ${#DOMAIN} -gt 253 ] || ! printf '%s\n' "$DOMAIN" |
+   grep -qxE '[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+'; }; then
     die "not a domain: $DOMAIN"
 fi
 case "$PORT" in
@@ -214,7 +219,8 @@ step 1 "Checking the host"
 case " ${ID-} ${ID_LIKE-} " in
     *" debian "*|*" ubuntu "*) ;;
     *) die "this is ${PRETTY_NAME:-an unknown system}, not Debian or Ubuntu:" \
-           "install camex by hand (README, Server Configuration)" ;;
+           "install camex by hand:" \
+           "https://github.com/OpenIPC/camex/blob/master/docs/install.md#by-hand" ;;
 esac
 command -v apt-get >/dev/null 2>&1 || die "no apt-get: not Debian or Ubuntu"
 [ -d /run/systemd/system ] || die "systemd is not running: install camex by hand"
@@ -223,7 +229,8 @@ case "$(dpkg --print-architecture)" in
     arm64)        ARCH=aarch64 ;;
     armhf|armel)  ARCH=arm ;;
     mipsel)       ARCH=mipsel ;;
-    *) die "no camex build for $(dpkg --print-architecture): build it from source (README, Build)" ;;
+    *) die "no camex build for $(dpkg --print-architecture): build it from source:" \
+       "https://github.com/OpenIPC/camex/blob/master/docs/build.md" ;;
 esac
 # nginx installed before: a rerun keeps it up to date
 if [ -z "$DOMAIN" ] && { [ -f "$NGINX_CONF" ] || [ -f "$OLD_NGINX_CONF" ]; }; then
@@ -399,19 +406,23 @@ else
         say "created: $MAP (empty)"
     fi
     # The start page's password: user camex, made once
+    pw_new=
     if [ ! -s "$PASSWORD_FILE" ]; then
         (umask 077; openssl rand -hex 10 > "$PASSWORD_FILE") ||
             die "cannot make the password"
-        rm -f "$HTPASSWD"
+        pw_new=1
         say "created: $PASSWORD_FILE"
     fi
-    if ! grep -q '^camex:' "$HTPASSWD" 2>/dev/null; then
+    # Its line in nginx's file; the other users there stay
+    if [ -n "$pw_new" ] || ! grep -q '^camex:' "$HTPASSWD" 2>/dev/null; then
         hash=$(openssl passwd -apr1 -stdin < "$PASSWORD_FILE") ||
             die "cannot hash the password"
-        echo "camex:$hash" >> "$HTPASSWD"
-        chgrp www-data "$HTPASSWD" && chmod 640 "$HTPASSWD" ||
-            die "cannot give $HTPASSWD to nginx (group www-data)"
-        say "created: $HTPASSWD"
+        { grep -v '^camex:' "$HTPASSWD" 2>/dev/null; echo "camex:$hash"; } \
+            > "$TMP/htpasswd"
+        cp "$TMP/htpasswd" "$HTPASSWD.new" && chgrp www-data "$HTPASSWD.new" &&
+            chmod 640 "$HTPASSWD.new" && mv -f "$HTPASSWD.new" "$HTPASSWD" ||
+            die "cannot write $HTPASSWD for nginx (group www-data)"
+        say "wrote the camex line of $HTPASSWD"
     fi
     # The sync script and its timer
     fetch "$CAMEX_SRC/examples/camex-nginx-sync.sh" "$TMP/sync"
@@ -422,6 +433,15 @@ else
         say "removed $OLD_SYNC (now $SYNC)"
     fi
     fetch "$CAMEX_SRC/examples/camex-nginx-sync.service" "$TMP/sync.service"
+    # The start page where the installed service has it (camex-nginx-setup.sh
+    # --index, an edit; empty: none), as nginx's kept file serves it
+    if grep -q '^Environment=INDEX=' "$UNITS/camex-nginx-sync.service" 2>/dev/null; then
+        index=$(sed -n 's/^Environment=INDEX=//p' "$UNITS/camex-nginx-sync.service" | tail -n 1)
+        case "$index" in
+            *[!A-Za-z0-9/._-]*) say "kept no INDEX=$index: not a plain path" ;;
+            *) sed -i "s|^Environment=INDEX=.*|Environment=INDEX=$index|" "$TMP/sync.service" ;;
+        esac
+    fi
     fetch "$CAMEX_SRC/examples/camex-nginx-sync.timer" "$TMP/sync.timer"
     put "$TMP/sync.service" "$UNITS/camex-nginx-sync.service" 644 || true
     put "$TMP/sync.timer" "$UNITS/camex-nginx-sync.timer" 644 || true
@@ -442,8 +462,34 @@ fi
 
 # 8. The result -------------------------------------------------------------
 step 8 "Done"
-PSK=$(sed -n 's/^[[:space:]]*psk[[:space:]]*=[[:space:]]*//p' "$CONF" | tail -n 1)
-PORT_NOW=$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*//p' "$CONF" | tail -n 1)
+# What camex really uses: its command line wins over camex.conf (an older
+# unit's arguments moved to /etc/default/camex may have --psk or --port)
+ARGS=$(sed -n 's/^CAMEX_ARGS="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$DEFAULTS" | tail -n 1)
+USED_CONF=; USED_KEY=; ARG_PSK=; ARG_PORT=
+set -f
+# shellcheck disable=SC2086
+set -- $ARGS
+set +f
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --config|-f)       USED_CONF=${2-}; shift ;;
+        --config=*)        USED_CONF=${1#*=} ;;
+        --server-key-file) USED_KEY=${2-}; shift ;;
+        --psk|-k)          ARG_PSK=${2-}; shift ;;
+        --psk=*)           ARG_PSK=${1#*=} ;;
+        --port|-p)         ARG_PORT=${2-}; shift ;;
+        --port=*)          ARG_PORT=${1#*=} ;;
+    esac
+    shift
+done
+if [ "$USED_CONF" != "$CONF" ]; then
+    say "WARNING: camex.service reads ${USED_CONF:-no config file}, not $CONF" \
+        "(CAMEX_ARGS in $DEFAULTS): the settings made here are not used"
+fi
+[ -n "$USED_KEY" ] && [ "$USED_KEY" != "$KEY" ] && [ -r "$USED_KEY" ] &&
+    PUBKEY=$(sed -n 's/^public_key=//p' "$USED_KEY")
+PSK=${ARG_PSK:-$(conf_server psk "${USED_CONF:-$CONF}")}
+PORT_NOW=${ARG_PORT:-$(conf_server port "${USED_CONF:-$CONF}")}
 echo
 echo "camex server is running: systemctl status camex, camex --status"
 echo "Open UDP port ${PORT_NOW:-5800} in the firewall. A client connects with:"

@@ -124,6 +124,10 @@ check $? "Fedora: refused with a message, nothing installed"
 out=$(run --domain 'bad_domain')
 [ $? -ne 0 ] && echo "$out" | grep -q "not a domain"
 check $? "a bad domain is refused"
+long=$(printf 'a%.0s' $(seq 1 60)); long="$long.$long.$long.$long.$long.test"
+out=$(run --domain "$long")
+[ $? -ne 0 ] && echo "$out" | grep -q "not a domain"
+check $? "a domain over 253 characters is refused (camex would not start with it)"
 
 echo "== 2. camex alone"
 out=$(run)
@@ -210,6 +214,18 @@ rc=$?
     x 'grep -qx "# my edit" /etc/nginx/conf.d/camex-nginx.conf' &&
     [ "$(x 'cat /etc/camex/nginx-password')" = "$PW" ]
 check $? "nginx's part is kept up to date, the edit and the password stay"
+# Another user in nginx's file, a new password, a per-client psk=
+x 'echo "admin:\$apr1\$x\$y" >> /etc/nginx/camex.htpasswd && rm /etc/camex/nginx-password &&
+   printf "\n[client CAM9]\npsk=only-for-cam9\n" >> /etc/camex/camex.conf'
+out=$(run)
+PW2=$(x 'cat /etc/camex/nginx-password')
+[ $? -eq 0 ] && [ -n "$PW2" ] && [ "$PW2" != "$PW" ] && x 'grep -q "^admin:" /etc/nginx/camex.htpasswd' &&
+    [ "$(x 'grep -c "^camex:" /etc/nginx/camex.htpasswd')" = 1 ] &&
+    [ "$(page "$DOMAIN" "camex:$PW2" | tail -n 1)" = 200 ] && [ "$(page "$DOMAIN" "camex:$PW" | tail -n 1)" = 401 ]
+check $? "a new password replaces only the camex line; other users stay"
+echo "$out" | grep -qF -- "--psk '$PSK'"
+check $? "the printed psk is the server's, not a [client ID] one"
+PW=$PW2
 out=$(run --domain other.test)
 [ $? -ne 0 ] && echo "$out" | grep -q "has domain=$DOMAIN, not other.test" &&
     x "grep -qx 'domain=$DOMAIN' /etc/camex/camex.conf"
@@ -219,7 +235,8 @@ echo "== 6. the layout of camex-nginx-setup.sh"
 x 'systemctl stop camex-nginx-sync.timer
    mv /etc/nginx/conf.d/camex-nginx.conf /etc/nginx/conf.d/camex.conf
    mv /usr/local/bin/camex-nginx-sync /usr/local/bin/camex-nginx-sync.sh
-   sed -i "s|^ExecStart=.*|ExecStart=/usr/local/bin/camex-nginx-sync.sh|" /etc/systemd/system/camex-nginx-sync.service
+   sed -i "s|^ExecStart=.*|ExecStart=/usr/local/bin/camex-nginx-sync.sh|; s|^Environment=INDEX=.*|Environment=INDEX=/var/lib/camex-nginx/start.html|" \
+       /etc/systemd/system/camex-nginx-sync.service
    rm /etc/default/camex
    printf "[Service]\nExecStart=/usr/local/bin/camex \$CAMEX_ARGS\nEnvironment=CAMEX_ARGS=--mode server --config /etc/camex/camex.conf --server-key-file /etc/camex/server.key --mtu 1400\n" \
        > /etc/systemd/system/camex.service
@@ -231,6 +248,8 @@ echo "$out" | sed 's/^/      /'
     grep -qx "# my edit" /etc/nginx/conf.d/camex-nginx.conf &&
     test ! -e /usr/local/bin/camex-nginx-sync.sh && ls /var/backups/camex | grep -q camex-nginx-sync.sh'
 check $? "nginx's file renamed with its edits, the old sync script removed (a copy kept)"
+x 'grep -qx "Environment=INDEX=/var/lib/camex-nginx/start.html" /etc/systemd/system/camex-nginx-sync.service'
+check $? "the start page's path of the old service is kept"
 x 'grep -q -- "--mtu 1400" /etc/default/camex && grep -q "^EnvironmentFile=/etc/default/camex" /etc/systemd/system/camex.service &&
    systemctl is-active --quiet camex && systemctl is-active --quiet camex-nginx-sync.timer'
 check $? "the old unit's arguments moved to /etc/default/camex, the services run"
