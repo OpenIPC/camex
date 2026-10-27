@@ -243,6 +243,31 @@ static void camex_net_setup(struct net_device *dev)
 #endif
 }
 
+/*
+ * camex_layout_ok - is struct net_device laid out as this module was built
+ * for (#134)?
+ *
+ * A module built against a kernel tree configured otherwise than the
+ * running kernel (CONFIG_WIRELESS_EXT, say, #133) has other offsets into
+ * struct net_device: register_netdev() then oopses, or the interface
+ * drops every packet (#73). Kernels without CONFIG_MODVERSIONS do not stop
+ * such a module at insmod. alloc_netdev() runs in the kernel and fills
+ * fields that lie after the config-dependent ones with known values; read
+ * through this module's offsets they must be the same. It catches a shift
+ * before these fields, not every difference.
+ */
+#ifdef GSO_LEGACY_MAX_SIZE
+# define CAMEX_GSO_DEFAULT GSO_LEGACY_MAX_SIZE   /* 5.19+: alloc_netdev's value */
+#else
+# define CAMEX_GSO_DEFAULT GSO_MAX_SIZE
+#endif
+
+static int camex_layout_ok(const struct net_device *dev)
+{
+    return dev->num_tx_queues == 1 && dev->real_num_tx_queues == 1 &&
+           dev->gso_max_size == CAMEX_GSO_DEFAULT;
+}
+
 /* ================================================================
  * Character device (file_operations)
  * ================================================================ */
@@ -446,6 +471,18 @@ static int __init camex_init(void)
                               DEV_NAME, camex_net_setup);
     if (!dev)
         return -ENOMEM;
+
+    if (!camex_layout_ok(dev)) {
+        pr_err("camex: built for another kernel configuration: struct "
+               "net_device differs from the running kernel's (tx queues "
+               "%u/%u, gso_max_size %u where 1/1, %u were expected); "
+               "rebuild camex.ko against this kernel's tree and .config, see "
+               "docs/kernel-module.md\n",
+               dev->num_tx_queues, dev->real_num_tx_queues,
+               (unsigned int)dev->gso_max_size, (unsigned int)CAMEX_GSO_DEFAULT);
+        free_netdev(dev);
+        return -ENOEXEC;
+    }
 
     priv = netdev_priv(dev);
     priv->dev = dev;

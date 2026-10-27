@@ -6,6 +6,20 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.11.1 — 2026-10-27
+
+- `camex.ko` refuses to load when it was built for another kernel configuration (#134):
+  `alloc_netdev()` runs in the kernel and sets `num_tx_queues`, `real_num_tx_queues` and
+  `gso_max_size`; read through the module's own offsets into `struct net_device` they must
+  be 1, 1 and the kernel's default (65536). Otherwise `insmod` fails with `ENOEXEC` and a
+  message in `dmesg` that names the cause and `docs/kernel-module.md`, instead of an oops
+  in `register_netdevice` (#133, `CONFIG_WIRELESS_EXT` on in the camera's kernel, off in the
+  SDK's) or an interface that drops every packet (#73).
+- The kernel module VM test builds a second `camex.ko` against headers with two pointers
+  added before `netdev_ops` (as `WIRELESS_EXT` adds them) and checks that it refuses to
+  load without an oops; then the real one loads as before. Checked on 4.15, 6.1 and 6.8.
+  `docs/kernel-module.md` describes the check.
+
 ## 3.11.0 — 2026-10-27
 
 - The nginx map follows the servers' changes instead of a 10-second timer (#130):
