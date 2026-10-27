@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
+ *
+ * Copyright (c) OpenIPC  https://openipc.org  GPL-2.0 License
+ *
  * camex.c — Minimal virtual TUN driver (no tun.ko dependency)
  *
  * Creates /dev/camex + net interface "camex".

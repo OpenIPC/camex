@@ -2,41 +2,8 @@
 #
 # Copyright (c) OpenIPC  https://openipc.org  MIT License
 #
-# camex-nginx-sync.sh — keep nginx's map of camex clients up to date (#84)
-#
-# Writes `camex --status --format nginx-map` to $MAP when it changed, then
-# checks and reloads nginx; on a failed check the previous map is put back.
-# With INDEX set, also writes the start page of the clients (`camex
-# --status --format nginx-index`, #105) there when it changed; a static
-# file, so nginx needs no reload for it. A server that does not answer
-# leaves the map and the page as they are.
-#
-# Usage: camex-nginx-sync.sh            once (cron, a systemd timer)
-#        camex-nginx-sync.sh --loop 10  every 10 seconds
-#        camex-nginx-sync.sh --check    check the whole setup: the servers,
-#                                       the domain, nginx, the start page,
-#                                       DNS; exit code 1 when something is
-#                                       wrong (#106)
-#
-# Settings (environment):
-#   DOMAIN         the domain after the client ID; empty (the default):
-#                  domain= in [server] of the server's file (#106)
-#   UPSTREAM_PORT  the clients' web port (80)
-#   DEFAULT        where unknown names go, <IPv4>:<port> (empty: nginx's
-#                  offline page in nginx-camex.conf)
-#   CONTROL        one server's control socket (empty: every server)
-#   MAP            the map file nginx includes (/etc/nginx/camex-map.conf)
-#   INDEX          the start page nginx serves on the bare domain, e.g.
-#                  /var/lib/camex-nginx/index.html (empty: no updates; a
-#                  page written before stays until it is removed); its
-#                  directory must exist
-#   CHECK_DNS      no: --check skips the DNS records (a container, a
-#                  private network)
-#   PASSWORD_FILE  the start page's password (camex-nginx-setup.sh keeps it
-#                  in /etc/camex/nginx-password): --check opens the page
-#                  with it, and warns when the page has no password (#119)
-#   CAMEX, NGINX_BIN  the programs (camex, nginx; not NGINX, which nginx
-#                  itself reads)
+# Installed as: /usr/local/bin/camex-nginx-sync
+# Docs: https://github.com/OpenIPC/camex/blob/master/docs/nginx.md#sync-script
 #
 
 set -u
@@ -58,7 +25,7 @@ UPSTREAM_PORT=${UPSTREAM_PORT:-80}
 DEFAULT=${DEFAULT-}
 CONTROL=${CONTROL-}
 MAP=${MAP:-/etc/nginx/camex-map.conf}
-# The start page's password, as camex-nginx-setup.sh keeps it (#119)
+# The start page's password, as install.sh keeps it (#119)
 PASSWORD_FILE=${PASSWORD_FILE:-/etc/camex/nginx-password}
 INDEX_SET=${INDEX+set}    # INDEX= given, even empty: --check keeps it
 INDEX=${INDEX-}
@@ -471,7 +438,7 @@ check_all() {
                        ! page_protected "$conf" "$dom"; then
                         warn "nginx's server block for $dom has no" \
                              "auth_basic: the start page has no password" \
-                             "(camex-nginx-setup.sh)"
+                             "(see auth_basic in nginx-camex.conf)"
                     fi
                 fi ;;
         esac
@@ -503,9 +470,8 @@ check_all() {
                 b=$(probe "$dom")
                 case "$b" in
                     *"Camex Devices"*)
-                        warn "the start page on $dom has no password: run" \
-                             "camex-nginx-setup.sh (or see auth_basic in" \
-                             "nginx-camex.conf)"
+                        warn "the start page on $dom has no password: see" \
+                             "auth_basic in nginx-camex.conf"
                         ok "nginx serves the start page on $dom" ;;
                     *"
 401")
@@ -528,7 +494,9 @@ check_all() {
 401")
                                     warn "the password in $PASSWORD_FILE does" \
                                          "not open the start page on $dom" \
-                                         "(camex-nginx-setup.sh sets it)" ;;
+                                         "(a new one: remove it and" \
+                                         "/etc/nginx/camex.htpasswd, run" \
+                                         "install.sh again)" ;;
                                 *)
                                     warn "nginx does not serve the start page" \
                                          "on $dom" ;;

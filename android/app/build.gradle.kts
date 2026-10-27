@@ -1,3 +1,7 @@
+//
+// Copyright (c) OpenIPC  https://openipc.org  MIT License
+//
+
 plugins {
     id("com.android.application")
 }
