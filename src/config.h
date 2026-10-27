@@ -69,6 +69,7 @@ typedef struct {
     uint8_t pool_prefix;           /* 8..30; default 10.200.0.0/24 */
     uint8_t pool_set;              /* auto_pool= was given */
     unsigned int max_clients;      /* max_clients=, 0 = not given */
+    unsigned int client_timeout;   /* client_timeout= (#143), 0 = not given */
 } camex_server_globals_t;
 
 /* Default auto pool (#15, #75): 10.200.0.0/24 */

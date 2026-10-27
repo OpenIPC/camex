@@ -616,8 +616,8 @@ void print_usage(const char *progname)
     printf("  -P, --pid-file <path> Write PID to file on startup\n");
     printf("  -R, --transport <t>  Transport protocol: udp (default) or tcp\n");
     printf("  -K, --keepalive <s>  Keepalive interval in seconds (default:"
-           " 10); 0: one every 60 s,\n"
-           "                       a lost link noticed after 60 s +"
+           " 10, at most 20); 0: one every 20 s,\n"
+           "                       a lost link noticed after 20 s +"
            " --server-timeout\n");
     printf("      --genkey         Print a new server key pair and exit\n");
     printf("      --server-key-file <path> Server: file with its private key\n"

@@ -135,7 +135,8 @@ static uint32_t server_tunnel_ip = 0U;
  * rekey interval); the client gets it back when it returns. One lease per
  * slot; when they are all taken the oldest one goes.
  */
-#define SERVER_LEASE_MIN (V2_REKEY_AFTER_TIME + CAMEX_CLIENT_TIMEOUT)
+static double server_client_timeout(void);
+#define SERVER_LEASE_MIN (V2_REKEY_AFTER_TIME + server_client_timeout())
 #define SERVER_LEASE_MAX (1U << 20)   /* the table grows up to this */
 
 typedef struct {
@@ -785,21 +786,26 @@ void server_drop_entry(server_client_t *entry)
     entry->tcp_fd = -1;
 }
 
-/* Seconds of silence before a client expires: CAMEX_CLIENT_TIMEOUT; the
- * environment variable CAMEX_CLIENT_TIMEOUT (5..120) shortens it, for
+/* Seconds of silence before a client expires: client_timeout= of
+ * [server] (#143, a reload applies it), else CAMEX_CLIENT_TIMEOUT. The
+ * environment variable CAMEX_CLIENT_TIMEOUT (5..120) wins over both, for
  * tests */
 static double server_client_timeout(void)
 {
-    static int value = 0;
+    static int env_value = -1;
 
-    if (value == 0) {
+    if (env_value < 0) {
         const char *env = getenv("CAMEX_CLIENT_TIMEOUT");
         int v = env != NULL ? atoi(env) : 0;
 
-        value = (v >= 5 && v <= CAMEX_CLIENT_TIMEOUT) ? v
-                                                      : CAMEX_CLIENT_TIMEOUT;
+        env_value = (v >= 5 && v <= CAMEX_CLIENT_TIMEOUT) ? v : 0;
     }
-    return (double)value;
+    if (env_value > 0) {
+        return (double)env_value;
+    }
+    return server_db.globals.client_timeout != 0U
+               ? (double)server_db.globals.client_timeout
+               : (double)CAMEX_CLIENT_TIMEOUT;
 }
 
 void server_expire_clients(void)
@@ -1276,7 +1282,7 @@ static int server_register_allowed(const uint8_t *key, char *client_id,
  * client knows the server's public key, so the per-second budgets are
  * shared out by source:
  *  - a known source (the address and port of a client that sent
- *    authenticated data within CAMEX_CLIENT_TIMEOUT, as a rekey does) has
+ *    authenticated data within the client timeout, as a rekey does) has
  *    its own key tried first; that trial and up to SERVER_KNOWN_PER_SEC of
  *    its INITs a second count only against the whole budgets. Anything
  *    more (further INITs, other keys) counts as from an unknown source, so
@@ -1391,7 +1397,7 @@ static server_client_t *server_known_source(const struct sockaddr_in *from)
     server_client_t *c = server_find_by_addr(from);
 
     if (c == NULL || !c->registered || !c->cur.valid ||
-        c->last_data == 0 || g_now - c->last_data > CAMEX_CLIENT_TIMEOUT) {
+        c->last_data == 0 || g_now - c->last_data > server_client_timeout()) {
         return NULL;
     }
     /* SERVER_KNOWN_PER_SEC INITs a second; more count as unknown */

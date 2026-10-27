@@ -25,6 +25,10 @@
 # Sending works, nothing comes back: the client must still log "Connection
 # lost" and recover once the path is back.
 #
+# Scenario 5 (#143): a server with client_timeout=60 expires a silent
+# client after 60 s (not before 50 s, by 70 s), and keeps one started with
+# --keepalive 3600, whose keepalive is capped at 20 s.
+#
 # Scenario 2 runs right after scenario 1's reconnect: whether the server
 # answers keepalives must survive the reconnect, or silence detection
 # stays off until the next answered keepalive.
@@ -44,11 +48,14 @@ NET_NAME="camex-live-$$"
 SRV="camex-live-srv-$$"
 CLI="camex-live-cli-$$"
 IDLE="camex-live-idle-$$"
+SRV2="camex-live-srv2-$$"
+QUIET="camex-live-quiet-$$"
+LONG="camex-live-long-$$"
 BUILD_CTX="$(mktemp -d)"
 PSK="liveness-test"
 
 cleanup() {
-    docker rm -f "$SRV" "$CLI" "$IDLE" >/dev/null 2>&1 || true
+    docker rm -f "$SRV" "$CLI" "$IDLE" "$SRV2" "$QUIET" "$LONG" >/dev/null 2>&1 || true
     docker network rm "$NET_NAME" >/dev/null 2>&1 || true
     rm -rf "$BUILD_CTX"
 }
@@ -169,4 +176,46 @@ lost=$(docker logs "$IDLE" 2>&1 | grep -c "Connection lost" || true)
 [ "$lost" = 0 ] || fail "idle client timed out between keepalives ($lost times)"
 echo "   no reconnects while idle"
 
-echo "PASS: client detects a lost server and recovers after a restart; idle client stays up"
+echo "== scenario 5: client_timeout=60 (#143): a silent client goes after 60 s, not 120;"
+echo "   one with --keepalive 3600 stays (its keepalive is capped at 20 s)"
+docker rm -f "$IDLE" >/dev/null
+docker run -d --name "$SRV2" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    --entrypoint /bin/sh "$IMAGE" -c 'printf "[server]\nclient_timeout=60\n" > /tmp/c.conf &&
+        exec camex-run --mode server --port 5800 --local-cidr 10.210.0.1/24 \
+        --config /tmp/c.conf '"$SERVER_KEY_ARGS"' --psk "'"$PSK"'"' >/dev/null
+sleep 1
+for c in "$QUIET:10.210.0.2:2:6" "$LONG:10.210.0.3:3600:3600"; do
+    IFS=: read -r name addr ka to <<EOF2
+$c
+EOF2
+    docker run -d --name "$name" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+        "$IMAGE" --mode client --local-cidr "$addr/24" --gateway-ip 10.210.0.1 \
+        --server-host "$SRV2" --port 5800 --server-pubkey "$SERVER_PUBKEY" --psk "$PSK" \
+        --keepalive "$ka" --server-timeout "$to" >/dev/null
+done
+CLI="$QUIET"
+for _ in $(seq 1 20); do
+    docker exec "$QUIET" ping -c1 -W1 10.210.0.1 >/dev/null 2>&1 &&
+        docker exec "$LONG" ping -c1 -W1 10.210.0.1 >/dev/null 2>&1 && break
+    sleep 1
+done
+docker logs "$LONG" 2>&1 | grep -q "Keepalive every\|keepalive" || true
+docker pause "$QUIET" >/dev/null
+sleep 50
+docker logs "$SRV2" 2>&1 | grep -q "Expired client 10.210.0.2" &&
+    { docker unpause "$QUIET" >/dev/null; fail "the silent client expired before 50 s"; }
+gone=0
+for i in $(seq 1 20); do
+    docker logs "$SRV2" 2>&1 | grep -q "Expired client 10.210.0.2" && { gone=1; break; }
+    sleep 1
+done
+docker unpause "$QUIET" >/dev/null
+[ "$gone" = 1 ] || fail "the silent client did not expire within 70 s of client_timeout=60"
+echo "   the silent client expired after $((50 + i)) s"
+docker logs "$SRV2" 2>&1 | grep -q "Expired client 10.210.0.3" &&
+    fail "the client with --keepalive 3600 expired"
+docker exec "$LONG" ping -c1 -W2 10.210.0.1 >/dev/null 2>&1 ||
+    fail "the client with --keepalive 3600 lost its tunnel"
+echo "   the client with --keepalive 3600 stays"
+
+echo "PASS: client detects a lost server and recovers after a restart; idle client stays up; client_timeout= expires"

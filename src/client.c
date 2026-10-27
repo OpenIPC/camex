@@ -545,17 +545,21 @@ static int client_keepalive_interval(void)
      * a sign of life before it expires the client; a lost link is then
      * noticed later (client_loss_after, #121) */
     if (current_config.keepalive == 0) {
-        return CAMEX_CLIENT_TIMEOUT / 2;
+        return CAMEX_KEEPALIVE_MAX;
     }
     if (cap < 1) {
         cap = 1;
+    }
+    /* Alive against a server with the lowest client_timeout= (#143) */
+    if (cap > CAMEX_KEEPALIVE_MAX) {
+        cap = CAMEX_KEEPALIVE_MAX;
     }
     return current_config.keepalive < cap ? current_config.keepalive : cap;
 }
 
 /* Seconds without an answer after which the link counts as lost: the
  * server timeout, as a keepalive goes at least every half of it; with
- * --keepalive 0 (one every CAMEX_CLIENT_TIMEOUT / 2) a whole interval
+ * --keepalive 0 (one every CAMEX_KEEPALIVE_MAX) a whole interval
  * more (#121) */
 static double client_loss_after(void)
 {
