@@ -1431,8 +1431,10 @@ int control_wait(const char *path, const char *token, int timeout)
             snprintf(cmd, sizeof(cmd), "WAIT - 0\n");
         }
         {
-            /* A second at most: 30 bytes on a new connection */
-            int sent = wait_send(fd, cmd, time(NULL) + 1);
+            /* A second at most (30 bytes on a new connection), and never
+             * past the wait's deadline, however many servers stall (#144) */
+            time_t until = time(NULL) + 1;
+            int sent = wait_send(fd, cmd, until < deadline ? until : deadline);
 
             if (sent != 0) {
                 close(fd);
