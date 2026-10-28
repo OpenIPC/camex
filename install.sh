@@ -172,10 +172,11 @@ urlenc() {
         esac
     done
 }
-# link_psk_ok <psk>: the Android app takes it from a link (ConnectLink: no
-# control character, nothing beyond U+FFFF, i.e. no 4-byte UTF-8)
+# link_psk_ok <psk>: the Android app takes it from a link (ConnectLink: UTF-8,
+# no control character, nothing beyond U+FFFF, i.e. no 4-byte UTF-8)
 link_psk_ok() {
-    ! printf '%s' "$1" | LC_ALL=C grep -q "$(printf '[\001-\037\177\360-\367]')"
+    printf '%s' "$1" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 &&
+        ! printf '%s' "$1" | LC_ALL=C grep -q "$(printf '[\001-\037\177\360-\377]')"
 }
 # public_addr: this host's own address towards the internet when it is a
 # public one (not behind NAT); none else
@@ -818,7 +819,11 @@ printf '%s\n' "      --server-pubkey $PUBKEY --psk '$PSK_Q'"
 case "$PUBKEY" in
     "<"*) ;;
     *)
-        if [ -n "$PSK" ] && ! link_psk_ok "$PSK"; then
+        if [ ${#HOST} -gt 63 ]; then
+            echo
+            echo "Android: no link, the host $HOST is longer than the app takes (63):"
+            echo "run this again with a shorter --public-host."
+        elif [ -n "$PSK" ] && ! link_psk_ok "$PSK"; then
             echo
             echo "Android: no link, the psk has a character the app does not take (a"
             echo "control character or one beyond U+FFFF): type it in the app's settings."

@@ -8,7 +8,7 @@
 #
 # Needs: Docker (node:24-slim, jsdom from npm in a throwaway container).
 #
-set -u
+set -u -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 

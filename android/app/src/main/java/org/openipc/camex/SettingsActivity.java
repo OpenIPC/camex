@@ -155,7 +155,10 @@ public class SettingsActivity extends Activity {
             changed.add(getString(R.string.full_tunnel));
         }
         StringBuilder note = new StringBuilder();
-        note.append(changed.isEmpty() ? getString(R.string.link_same)
+        // Nothing came through (a cut link, every field malformed): not
+        // "the settings saved already"
+        note.append(c.isEmpty() ? getString(R.string.link_unknown)
+            : changed.isEmpty() ? getString(R.string.link_same)
             : getString(R.string.link_changed, TextUtils.join(", ", changed)));
         if (!c.rejected.isEmpty()) {
             List<String> bad = new ArrayList<>();
