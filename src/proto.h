@@ -18,7 +18,11 @@
 /* First word of the control messages (handshake payloads) */
 #define CAMEX_CTRL_WORD "CAMEX"
 
-#define CAMEX_CLIENT_TIMEOUT    120
+#define CAMEX_CLIENT_TIMEOUT    120   /* the default; client_timeout= (#143) */
+#define CAMEX_CLIENT_TIMEOUT_MIN 60   /* client_timeout='s lowest */
+/* A client's longest keepalive interval: a third of the lowest
+ * client_timeout=, so that it stays alive against any server (#143) */
+#define CAMEX_KEEPALIVE_MAX     (CAMEX_CLIENT_TIMEOUT_MIN / 3)
 #define CAMEX_SERVER_TIMEOUT     20
 #define CAMEX_RECONNECT_INTERVAL  5
 /* TCP connections that have not registered yet (#9): they hold a client

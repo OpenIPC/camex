@@ -647,8 +647,8 @@ int camex_init(camex_config_t *config)
     if (client_mode && current_config.keepalive == 0) {
         log_message(LOG_INFO,
                     "Keepalive every %ds only: a lost server is noticed "
-                    "after %ds", CAMEX_CLIENT_TIMEOUT / 2,
-                    CAMEX_CLIENT_TIMEOUT / 2 + current_config.server_timeout);
+                    "after %ds", CAMEX_KEEPALIVE_MAX,
+                    CAMEX_KEEPALIVE_MAX + current_config.server_timeout);
     }
 
     if (server_mode) {

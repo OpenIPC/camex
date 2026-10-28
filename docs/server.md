@@ -44,23 +44,24 @@ Three kinds of blocks; lines starting with `#` are comments:
 
 `[server]`:
 
-| Key                     | Meaning                                                                                              |
-|-------------------------|------------------------------------------------------------------------------------------------------|
-| `port`                  | the listening port (`--port`)                                                                        |
-| `bind_ip`               | the address to listen on, `0.0.0.0` by default (`--bind-ip`)                                         |
-| `bind_dev`              | the interface to listen on (`--bind-dev`)                                                            |
-| `local_cidr`            | the server's tunnel address; with the auto pool its first address, e.g. `10.200.0.1/24`              |
-| `mtu`                   | the tunnel MTU, 1500 by default                                                                      |
-| `server_key`            | the private key from `camex --genkey` (or `--server-key-file`)                                       |
-| `psk`                   | the global pre-shared key: `hex:<64 hex digits>`, `base64:<44 characters>` or a passphrase           |
-| `tun_dev`               | the TUN device or interface name                                                                     |
-| `pid_file`              | write the PID there                                                                                  |
-| `control_socket`        | the control socket of `camex --status`, see below; `none` turns it off                               |
-| `domain`                | the clients' domain for nginx: `<ID>.<domain>` ([nginx.md](nginx.md))                                |
-| `client_isolation`      | `yes`: drop packets from one client to another ([security.md](security.md#what-it-does-not-protect)) |
-| `allow_unknown_clients` | `no`: serve only the IDs that have a `[client ID]` block; `yes` by default                           |
-| `auto_pool`             | the auto pool, `10.200.0.0/24` by default, see below                                                 |
-| `max_clients`           | client slots, see below                                                                              |
+| Key                     | Meaning                                                                                                                                                                 |
+|-------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `port`                  | the listening port (`--port`)                                                                                                                                           |
+| `bind_ip`               | the address to listen on, `0.0.0.0` by default (`--bind-ip`)                                                                                                            |
+| `bind_dev`              | the interface to listen on (`--bind-dev`)                                                                                                                               |
+| `local_cidr`            | the server's tunnel address; with the auto pool its first address, e.g. `10.200.0.1/24`                                                                                 |
+| `mtu`                   | the tunnel MTU, 1500 by default                                                                                                                                         |
+| `server_key`            | the private key from `camex --genkey` (or `--server-key-file`)                                                                                                          |
+| `psk`                   | the global pre-shared key: `hex:<64 hex digits>`, `base64:<44 characters>` or a passphrase                                                                              |
+| `tun_dev`               | the TUN device or interface name                                                                                                                                        |
+| `pid_file`              | write the PID there                                                                                                                                                     |
+| `control_socket`        | the control socket of `camex --status`, see below; `none` turns it off                                                                                                  |
+| `domain`                | the clients' domain for nginx: `<ID>.<domain>` ([nginx.md](nginx.md))                                                                                                   |
+| `client_isolation`      | `yes`: drop packets from one client to another ([security.md](security.md#what-it-does-not-protect))                                                                    |
+| `allow_unknown_clients` | `no`: serve only the IDs that have a `[client ID]` block; `yes` by default                                                                                              |
+| `auto_pool`             | the auto pool, `10.200.0.0/24` by default, see below                                                                                                                    |
+| `max_clients`           | client slots, see below                                                                                                                                                 |
+| `client_timeout`        | seconds of silence before a client's session ends and its lamp on the start page turns red, 60 to 120 (default 120; `install.sh` writes 60); a reload applies it (#143) |
 
 `[defaults]` and `[client ID]`:
 

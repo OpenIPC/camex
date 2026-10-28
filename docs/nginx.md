@@ -84,7 +84,8 @@ sudo camex --mode server --port 5800 --config /etc/camex/camex.conf \
 ```
 
 - Size the pool for the fleet with room to spare: an address stays kept for a
-  camera that is gone for at least 12 minutes before another one may get it.
+  camera that is gone for at least 10 minutes plus `client_timeout=` (11 to 12
+  minutes) before another one may get it.
 - Addresses are stable: a camera that reconnects, or comes back after a server
   restart, gets its previous address, and the server never gives one address to
   two cameras (#81). The nginx map therefore changes only when cameras come and

@@ -96,7 +96,7 @@ sudo ./camex \
 | `--encrypt`                | `-e`  | Accepted for compatibility; protocol v2 is always encrypted                                                                                                                                                                                                                 |
 | `--tun-dev <path>`         | `-T`  | TUN device path (default: auto-detect `/dev/net/tun` then `/dev/camex`)                                                                                                                                                                                                     |
 | `--pid-file <path>`        | `-P`  | Write PID to file on startup                                                                                                                                                                                                                                                |
-| `--keepalive <s>`          | `-K`  | Client: keepalive interval, 0–3600 seconds (default: 10); 0: one every 60 s, a lost link noticed after 60 s + `--server-timeout`                                                                                                                                            |
+| `--keepalive <s>`          | `-K`  | Client: keepalive interval, 0–3600 seconds (default: 10); at most 20 s (#143); 0: one every 20 s, a lost link noticed after 20 s + `--server-timeout`                                                                                                                       |
 | `--server-timeout <s>`     | `-W`  | Client: seconds without an answer from the server before it reconnects, 5–3600 (default: 20)                                                                                                                                                                                |
 | `--status`                 |       | Print the connected clients of every server on this host and exit (as the server's user, normally root)                                                                                                                                                                     |
 | `--json`                   |       | With `--status`: the same as JSON, for scripts                                                                                                                                                                                                                              |
@@ -148,7 +148,7 @@ sudo ./camex --mode client ... --tun-dev /dev/camex
   `--server-timeout` without an answer, so a changed address or route is picked
   up. The ID taken from the MAC is kept in `/tmp/camex-id` until a reboot, so a
   restart keeps it whatever the network looks like then. With `--keepalive 0` a
-  keepalive still goes every 60 s, and a lost server is noticed after 60 s +
+  keepalive still goes every 20 s, and a lost server is noticed after 20 s +
   `--server-timeout`.
 - `examples/camex.conf` shows the server-side parameter database format.
 - Protocol v2 works over both UDP and TCP transport; every session starts with

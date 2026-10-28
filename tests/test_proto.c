@@ -338,6 +338,43 @@ int main(void)
         config_db_free(&server_db);
     }
 
+    /* client_timeout= (#143): 60 to 120 seconds; not given: 0 (120) */
+    {
+        static const struct { const char *conf; int ok; unsigned v; } t[] = {
+            { "[server]\nclient_timeout=60\n", 1, 60U },
+            { "[server]\nclient_timeout=120\n", 1, 120U },
+            { "[server]\nport=5800\n", 1, 0U },
+            { "[server]\nclient_timeout=59\n", 0, 0U },
+            { "[server]\nclient_timeout=121\n", 0, 0U },
+            { "[server]\nclient_timeout=6x\n", 0, 0U },
+        };
+        size_t k;
+
+        for (k = 0U; k < sizeof(t) / sizeof(t[0]); ++k) {
+            char path[] = "/tmp/test_proto_XXXXXX";
+            int fd = mkstemp(path);
+            FILE *fp = fd >= 0 ? fdopen(fd, "w") : NULL;
+            int rc;
+
+            if (fp == NULL) {
+                continue;
+            }
+            fputs(t[k].conf, fp);
+            fclose(fp);
+            config_db_free(&server_db);
+            rc = config_db_load_file(path);
+            if ((rc == 0) != t[k].ok ||
+                (t[k].ok && server_db.globals.client_timeout != t[k].v)) {
+                fprintf(stderr, "FAIL: client_timeout case %u: load %d, "
+                        "value %u\n", (unsigned)k, rc,
+                        server_db.globals.client_timeout);
+                ++failures;
+            }
+            unlink(path);
+            config_db_free(&server_db);
+        }
+    }
+
     /* name= (#105): kept for its [client ID]; not valid text, too long or
      * in [defaults] stops the load */
     {

@@ -7,6 +7,7 @@
  */
 
 #include "config.h"
+#include "proto.h"
 #include "crypto.h"
 #include "keys.h"
 #include "log.h"
@@ -252,6 +253,25 @@ int config_parse_pool(const char *value, uint32_t *net, uint8_t *prefix)
     }
     *net = host;
     *prefix = (uint8_t)p;
+    return 0;
+}
+
+/* client_timeout= (#143): seconds of silence before a client expires */
+static int parse_client_timeout(const char *value, unsigned int *out)
+{
+    char *end = NULL;
+    unsigned long v;
+
+    errno = 0;
+    v = strtoul(value, &end, 10);
+    if (value[0] == '\0' || value[0] == '-' || end == NULL ||
+        *end != '\0' || errno != 0 || v < CAMEX_CLIENT_TIMEOUT_MIN ||
+        v > CAMEX_CLIENT_TIMEOUT) {
+        log_message(LOG_ERR, "Invalid client_timeout: %s (%d to %d seconds)",
+                    value, CAMEX_CLIENT_TIMEOUT_MIN, CAMEX_CLIENT_TIMEOUT);
+        return -1;
+    }
+    *out = (unsigned int)v;
     return 0;
 }
 
@@ -547,6 +567,8 @@ static int config_db_parse_file(const char *path, char *line,
                 g->pool_set = rc == 0 ? 1U : 0U;
             } else if (strcmp(content, "max_clients") == 0) {
                 rc = parse_max_clients(val, &g->max_clients);
+            } else if (strcmp(content, "client_timeout") == 0) {
+                rc = parse_client_timeout(val, &g->client_timeout);
             } else if (strcmp(content, "tun_dev") == 0) {
                 rc = copy_option(g->tun_dev, sizeof(g->tun_dev),
                                  val, "TUN device");

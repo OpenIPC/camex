@@ -31,7 +31,7 @@ The steps, printed before it starts and numbered as it goes:
    mode 0600).
 5. Create the server's settings, `/etc/camex/camex.conf` (mode 0600): the
    port, the auto pool `10.200.0.0/24` with the server at `10.200.0.1`,
-   `client_isolation=yes`, a new random `psk=hex:…` and, with `--domain`,
+   `client_isolation=yes`, `client_timeout=60`, a new random `psk=hex:…` and, with `--domain`,
    `domain=`.
 6. Write `/etc/default/camex` (the service's arguments: server mode with that
    config and key), install `camex.service`, enable and start it.
@@ -45,18 +45,19 @@ The steps, printed before it starts and numbered as it goes:
 
 Options:
 
-| Option                      | Meaning                                                                                                             |
-|-----------------------------|---------------------------------------------------------------------------------------------------------------------|
-| `--domain <domain>`         | also install nginx in front of the clients for `<domain>`                                                           |
-| `--port <port>`             | the server's port (5800)                                                                                            |
-| `--transport <udp or tcp>`  | the server's transport (`udp`); TCP for networks that block UDP                                                     |
-| `--psk <key>`               | the clients' pre-shared key: `hex:<64 hex digits>`, `base64:<44 characters>` or a passphrase (a random `hex:` key)  |
-| `--pool <network>/<prefix>` | the clients' pool, `/8` to `/30`; the server gets its first address (`10.200.0.0/24`, the server `10.200.0.1`)      |
-| `--password <password>`     | with `--domain`: the start page's password, user `camex` (a random one)                                             |
+| Option                      | Meaning                                                                                                                                            |
+|-----------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
+| `--domain <domain>`         | also install nginx in front of the clients for `<domain>`                                                                                          |
+| `--port <port>`             | the server's port (5800)                                                                                                                           |
+| `--transport <udp or tcp>`  | the server's transport (`udp`); TCP for networks that block UDP                                                                                    |
+| `--psk <key>`               | the clients' pre-shared key: `hex:<64 hex digits>`, `base64:<44 characters>` or a passphrase (a random `hex:` key)                                 |
+| `--pool <network>/<prefix>` | the clients' pool, `/8` to `/30`; the server gets its first address (`10.200.0.0/24`, the server `10.200.0.1`)                                     |
+| `--client-timeout <s>`      | `client_timeout=` in a new `camex.conf`: seconds of silence before a client is dropped and its lamp turns red, 60 to 120 (60)                      |
+| `--password <password>`     | with `--domain`: the start page's password, user `camex` (a random one)                                                                            |
 | `--http-port <port>`        | with `--domain`: the port nginx listens on for the cameras and the start page (80); the start page's links are then `http://<ID>.<domain>:<port>/` |
-| `--upstream-port <port>`    | with `--domain`: the cameras' web port in their tunnel (80)                                                         |
-| `--uninstall`               | list every file of camex and the commands to remove them; removes nothing                                           |
-| `-h`, `--help`              | the options                                                                                                         |
+| `--upstream-port <port>`    | with `--domain`: the cameras' web port in their tunnel (80)                                                                                        |
+| `--uninstall`               | list every file of camex and the commands to remove them; removes nothing                                                                          |
+| `-h`, `--help`              | the options                                                                                                                                        |
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/OpenIPC/camex/master/install.sh | sudo sh -s -- \

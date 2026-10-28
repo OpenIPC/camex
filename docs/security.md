@@ -73,10 +73,11 @@ protects before exposing it to an untrusted network.
   registrations) are rate-limited; the number suppressed is logged.
 - The auto pool hands out only client addresses of its network (by default
   `10.200.0.2`–`.254`) and never gives one address to two clients (#81):
-  - when a client's session ends (it went silent for 120 s, its TCP connection
-    closed, its slot was needed), its address stays leased to its ID: no other
-    client gets it while the pool has other free addresses, and never within 12
-    minutes; the client gets it back when it returns;
+  - when a client's session ends (it went silent for `client_timeout=`, 120 s
+    by default; its TCP connection closed; its slot was needed), its address
+    stays leased to its ID: no other client gets it while the pool has other
+    free addresses, and never within 10 minutes plus `client_timeout=`; the
+    client gets it back when it returns;
   - for 60 s after the server starts, clients get only the address they ask for
     (their previous one), so returning clients come back before new clients take
     addresses; a new client waits and retries;
