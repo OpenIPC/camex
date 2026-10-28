@@ -7,7 +7,7 @@ package org.openipc.camex;
 
 import android.app.Activity;
 import android.content.SharedPreferences;
-import android.content.res.ColorStateList;
+import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
@@ -39,8 +39,8 @@ public class SettingsActivity extends Activity {
     private static final int DEFAULT_MTU = 1500;
     private static final int DEFAULT_KEEPALIVE = 10;
     private static final int DEFAULT_TIMEOUT = 20;
-    // The underline of a field a link changed
-    private static final int LINK_MARK = 0xFF2E7D32;
+    // The overlay of a field a link changed (green, light)
+    private static final int LINK_MARK = 0x332E7D32;
     private static final String STATE_NOTE = "link_note";
     private static final String STATE_MARKED = "link_marked";
     // The ids of the fields a link changed
@@ -199,35 +199,6 @@ public class SettingsActivity extends Activity {
         view.setVisibility(View.VISIBLE);
     }
 
-    private void unmark(View field) {
-        if (field == null) return;
-        if (field instanceof android.widget.CompoundButton) {
-            ((android.widget.CompoundButton) field).setButtonTintList(null);
-            if (field instanceof Switch) {
-                ((Switch) field).setThumbTintList(null);
-                ((Switch) field).setTrackTintList(null);
-            }
-        } else {
-            field.setBackgroundTintList(null);
-        }
-    }
-
-    // A text field's underline, a radio button's or a switch's own tint
-    private void mark(View field) {
-        if (field == null) return;
-        ColorStateList c = ColorStateList.valueOf(LINK_MARK);
-        if (field instanceof android.widget.CompoundButton) {
-            ((android.widget.CompoundButton) field).setButtonTintList(c);
-            if (field instanceof Switch) {
-                ((Switch) field).setThumbTintList(c);
-                ((Switch) field).setTrackTintList(c);
-            }
-        } else {
-            field.setBackgroundTintList(c);
-        }
-        if (!marked.contains(field.getId())) marked.add(field.getId());
-    }
-
     /** The name of a link's field, as the screen shows it. */
     private String label(String key) {
         switch (key) {
@@ -242,6 +213,18 @@ public class SettingsActivity extends Activity {
             case "r": return getString(R.string.full_tunnel);
             default: return key;
         }
+    }
+
+    // A field a link changed: a light overlay of its own (the theme's tints
+    // stay as they are, so removing it leaves the field as it was)
+    private void mark(View field) {
+        if (field == null) return;
+        field.setForeground(new ColorDrawable(LINK_MARK));
+        if (!marked.contains(field.getId())) marked.add(field.getId());
+    }
+
+    private void unmark(View field) {
+        if (field != null) field.setForeground(null);
     }
 
     private void set(EditText input, String value, int label, List<String> changed) {
