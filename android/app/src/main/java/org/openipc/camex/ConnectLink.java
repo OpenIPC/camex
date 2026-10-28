@@ -27,7 +27,7 @@ import java.util.Map;
  */
 final class ConnectLink {
 
-    static final String WEB_PREFIX = "https://openipc.github.io/camex/connect/";
+    static final String WEB_PREFIX = "https://openipc.github.io/camex/connect";
     static final String SCHEME_PREFIX = "camex://connect";
 
     String host, transport, pubkey, psk, name;
@@ -43,9 +43,11 @@ final class ConnectLink {
         if (link == null) return null;
         String fields;
         if (link.startsWith(WEB_PREFIX)) {
-            int hash = link.indexOf('#');
-            if (hash < 0) return null;
-            fields = link.substring(hash + 1);
+            // .../connect/#... or .../connect#... (the manifest takes both)
+            String rest = link.substring(WEB_PREFIX.length());
+            if (rest.startsWith("/")) rest = rest.substring(1);
+            if (!rest.startsWith("#")) return null;
+            fields = rest.substring(1);
         } else if (link.startsWith(SCHEME_PREFIX)) {
             String rest = link.substring(SCHEME_PREFIX.length());
             if (rest.startsWith("/")) rest = rest.substring(1);
@@ -85,11 +87,12 @@ final class ConnectLink {
 
     /**
      * %XX as UTF-8; '+' stays '+' (it is a character of base64 keys), so a
-     * blank is %20. Null when the escapes or the UTF-8 are malformed.
+     * blank is %20; a character as it is (a pair of surrogates as one).
+     * Null when the escapes, the surrogates or the UTF-8 are malformed.
      */
     static String decode(String s) {
         ByteArrayOutputStream b = new ByteArrayOutputStream();
-        for (int i = 0; i < s.length(); i++) {
+        for (int i = 0; i < s.length(); ) {
             char ch = s.charAt(i);
             if (ch == '%') {
                 if (i + 2 >= s.length()) return null;
@@ -97,12 +100,16 @@ final class ConnectLink {
                 int lo = Character.digit(s.charAt(i + 2), 16);
                 if (hi < 0 || lo < 0) return null;
                 b.write(hi * 16 + lo);
-                i += 2;
+                i += 3;
             } else if (ch < 0x80) {
                 b.write(ch);
+                i++;
             } else {
-                byte[] u = String.valueOf(ch).getBytes(StandardCharsets.UTF_8);
+                int cp = s.codePointAt(i);
+                if (cp >= 0xD800 && cp <= 0xDFFF) return null;   // a lone surrogate
+                byte[] u = new String(Character.toChars(cp)).getBytes(StandardCharsets.UTF_8);
                 b.write(u, 0, u.length);
+                i += Character.charCount(cp);
             }
         }
         byte[] raw = b.toByteArray();
@@ -116,8 +123,9 @@ final class ConnectLink {
         if (v == null) return !isKnown(key);
         switch (key) {
             case "h":
-                // A host name or an address: no blank, no '/', at most 253
-                if (!v.matches("[A-Za-z0-9._:\\[\\]-]{1,253}")) return false;
+                // A host name or an IPv4 address (camex resolves IPv4 only),
+                // in its server_host[64]
+                if (!v.matches("[A-Za-z0-9.-]{1,63}")) return false;
                 host = v;
                 return true;
             case "p":
@@ -134,10 +142,15 @@ final class ConnectLink {
             case "s":
                 // As camex takes --psk: one line, no blank at its ends (it
                 // trims them), below 128 bytes
-                if (v.isEmpty() || !v.equals(v.trim()) || v.indexOf('\n') >= 0
-                        || v.indexOf('\r') >= 0
+                if (v.isEmpty() || !v.equals(v.trim())
                         || v.getBytes(StandardCharsets.UTF_8).length >= 128) {
                     return false;
+                }
+                // No control character; nothing beyond U+FFFF, which JNI
+                // would hand to camex in other bytes (modified UTF-8)
+                for (int i = 0; i < v.length(); i++) {
+                    char ch = v.charAt(i);
+                    if (ch < 0x20 || ch == 0x7f || Character.isSurrogate(ch)) return false;
                 }
                 psk = v;
                 return true;

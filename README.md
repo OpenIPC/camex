@@ -74,7 +74,10 @@ Every option: [docs/usage.md](docs/usage.md).
 ### Android
 
 The app connects in auto mode: the server sends the address, routes and MTU
-([docs/android.md](docs/android.md)).
+([docs/android.md](docs/android.md)). `install.sh` prints a link with the
+server's settings: tapped on the phone, it fills them in on the app's settings
+screen, and they are used once you tap Save
+([docs/android.md](docs/android.md#a-link-with-the-settings)).
 
 | Main screen                                  | Settings                                      |
 |----------------------------------------------|-----------------------------------------------|

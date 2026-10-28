@@ -454,6 +454,13 @@ out=$(orun --public-host 203.0.113.5)
 [ $? -eq 0 ] && echo "$out" | grep -qF -- "--server-host 203.0.113.5 --port 5900" &&
     echo "$out" | grep -qF "https://openipc.github.io/camex/connect/#h=203.0.113.5&p=5900&t=tcp&"
 check $? "--public-host: the client command and the Android link have it"
+# A rerun without --domain: still the domain of camex.conf
+out=$(orun)
+[ $? -eq 0 ] && echo "$out" | grep -qF "https://openipc.github.io/camex/connect/#h=opts.test&"
+check $? "a rerun without --domain: the link has the domain of camex.conf"
+out=$(orun --public-host "2001:db8::1")
+[ $? -ne 0 ] && echo "$out" | grep -q -- "--public-host"
+check $? "--public-host: an IPv6 address is refused (camex resolves IPv4)"
 out=$(orun --public-host "a b")
 [ $? -ne 0 ] && echo "$out" | grep -q -- "--public-host"
 check $? "--public-host with a blank is refused"

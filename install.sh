@@ -373,10 +373,11 @@ if [ -n "$PSK_OPT" ]; then
             [ "$raw" != "$(printf '%064d' 0)" ] || die "--psk: an all-zero key" ;;
     esac
 fi
-# A host name or an address, as the clients and the Android app take it
+# A host name or an IPv4 address (camex resolves IPv4 only), in camex's
+# server_host[64]
 if [ -n "$PUBLIC_HOST" ]; then
-    printf '%s\n' "$PUBLIC_HOST" | grep -qxE '[A-Za-z0-9._:-]{1,253}|\[[0-9A-Fa-f:.]{2,45}\]' ||
-        die "--public-host: a host name or an address"
+    printf '%s\n' "$PUBLIC_HOST" | grep -qxE '[A-Za-z0-9.-]{1,63}' ||
+        die "--public-host: a host name or an IPv4 address, up to 63 characters"
 fi
 case "$PASSWORD" in
     *"
@@ -798,9 +799,11 @@ echo "camex server is running: systemctl status camex, camex --status"
 TOPT=
 [ "$PROTO" = tcp ] && TOPT=" --transport tcp" || PROTO=udp
 echo "Open $(echo $PROTO | tr a-z A-Z) port ${PORT_NOW:-5800} in the firewall${DOMAIN:+, and TCP ${WEB_PORT:-80} for nginx}."
-# Where the clients reach this server: --public-host, the domain (its DNS
-# points here), this host's public address
-HOST=${PUBLIC_HOST:-${DOMAIN:-$(public_addr)}}
+# Where the clients reach this server: --public-host, the domain of the
+# camex.conf the service reads (its DNS points here; a rerun keeps it), this
+# host's public address
+HOST=${PUBLIC_HOST:-$(conf_server domain "$USED_CONF" | tr 'A-Z' 'a-z')}
+HOST=${HOST:-$(public_addr)}
 echo "A client connects with:"
 echo
 echo "  camex --mode client --auto --server-host ${HOST:-<this host>} --port ${PORT_NOW:-5800}$TOPT \\"

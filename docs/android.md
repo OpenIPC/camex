@@ -49,17 +49,17 @@ Pages nor a log. The link has the psk, so it is a password: send it only to
 the device's owner. A per-device `psk=` in the device's `[client ID]` block
 (see [server.md](server.md)) makes a leaked link revocable.
 
-| Field | Meaning                      | Values                                   |
-|-------|------------------------------|------------------------------------------|
-| `h`   | server host                  | a host name or an address                |
-| `p`   | server port                  | 1–65535                                  |
-| `t`   | transport                    | `udp` or `tcp`                           |
-| `k`   | server public key            | 44 characters (`camex --genkey`)         |
-| `s`   | pre-shared key               | below 128 bytes, `%XX`-encoded as UTF-8  |
-| `n`   | client name (optional)       | letters, digits, `.`, `_`, `-`; up to 31 |
-| `m`   | MTU (optional)               | 576–9000                                 |
-| `a`   | keepalive, s (optional)      | 0–3600                                   |
-| `r`   | route all traffic (optional) | `1` or `0`                               |
+| Field | Meaning                      | Values                                                                                |
+|-------|------------------------------|---------------------------------------------------------------------------------------|
+| `h`   | server host                  | a host name or an IPv4 address, up to 63 characters                                   |
+| `p`   | server port                  | 1–65535                                                                               |
+| `t`   | transport                    | `udp` or `tcp`                                                                        |
+| `k`   | server public key            | 44 characters (`camex --genkey`)                                                      |
+| `s`   | pre-shared key               | below 128 bytes, `%XX`-encoded as UTF-8; no control characters, nothing beyond U+FFFF |
+| `n`   | client name (optional)       | letters, digits, `.`, `_`, `-`; up to 31                                              |
+| `m`   | MTU (optional)               | 576–9000                                                                              |
+| `a`   | keepalive, s (optional)      | 0–3600                                                                                |
+| `r`   | route all traffic (optional) | `1` or `0`                                                                            |
 
 When the link opens in a browser instead of the app, the page has a button
 **Open in Camex** with the same settings, the APK for a phone without the app,

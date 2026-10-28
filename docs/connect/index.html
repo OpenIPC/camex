@@ -82,6 +82,8 @@ var CAMEX = {
         return 'camex --mode client --auto' + (m.n ? ' --name ' + q(m.n) : '') +
             ' --server-host ' + q(m.h) + ' --port ' + q(m.p || '5800') +
             (m.t === 'tcp' ? ' --transport tcp' : '') +
+            (/^[0-9]{1,4}$/.test(m.m || '') ? ' --mtu ' + m.m : '') +
+            (/^[0-9]{1,4}$/.test(m.a || '') ? ' --keepalive ' + m.a : '') +
             ' --server-pubkey ' + q(m.k) + ' --psk ' + q(m.s);
     }
 };

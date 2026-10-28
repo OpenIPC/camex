@@ -41,6 +41,10 @@ public class SettingsActivity extends Activity {
     private static final int DEFAULT_TIMEOUT = 20;
     // The underline of a field a link changed
     private static final int LINK_MARK = 0xFF2E7D32;
+    private static final String STATE_NOTE = "link_note";
+    private static final String STATE_MARKED = "link_marked";
+    // The ids of the fields a link changed
+    private final List<Integer> marked = new ArrayList<>();
 
     private EditText hostInput, portInput, nameInput, pskInput;
     private EditText pubkeyInput;
@@ -80,6 +84,14 @@ public class SettingsActivity extends Activity {
             load(prefs);
             Uri data = getIntent().getData();
             if (data != null) fromLink(data.toString());
+        } else {
+            // What a link changed stays shown after a rotation
+            CharSequence note = savedInstanceState.getCharSequence(STATE_NOTE);
+            if (note != null) showNote(note);
+            int[] marked = savedInstanceState.getIntArray(STATE_MARKED);
+            if (marked != null) {
+                for (int id : marked) mark(findViewById(id));
+            }
         }
 
         Button save = findViewById(R.id.btn_save);
@@ -103,10 +115,23 @@ public class SettingsActivity extends Activity {
         timeoutInput.setText(String.valueOf(prefs.getInt("server_timeout", DEFAULT_TIMEOUT)));
     }
 
+    @Override
+    protected void onSaveInstanceState(Bundle out) {
+        super.onSaveInstanceState(out);
+        TextView note = findViewById(R.id.text_link_note);
+        if (note.getVisibility() == View.VISIBLE) out.putCharSequence(STATE_NOTE, note.getText());
+        int[] ids = new int[marked.size()];
+        for (int i = 0; i < ids.length; i++) ids[i] = marked.get(i);
+        out.putIntArray(STATE_MARKED, ids);
+    }
+
     /** A link's values over the saved ones: the changed fields marked. */
     private void fromLink(String link) {
         ConnectLink c = ConnectLink.parse(link);
-        if (c == null) return;
+        if (c == null) {
+            showNote(getString(R.string.link_unknown));
+            return;
+        }
         List<String> changed = new ArrayList<>();
         set(hostInput, c.host, R.string.server_host, changed);
         set(portInput, c.port == null ? null : String.valueOf(c.port), R.string.server_port, changed);
@@ -136,9 +161,19 @@ public class SettingsActivity extends Activity {
             note.append('\n').append(getString(R.string.link_rejected,
                 TextUtils.join(", ", bad)));
         }
+        showNote(note);
+    }
+
+    private void showNote(CharSequence text) {
         TextView view = findViewById(R.id.text_link_note);
-        view.setText(note);
+        view.setText(text);
         view.setVisibility(View.VISIBLE);
+    }
+
+    private void mark(View field) {
+        if (field == null) return;
+        field.setBackgroundTintList(ColorStateList.valueOf(LINK_MARK));
+        if (!marked.contains(field.getId())) marked.add(field.getId());
     }
 
     /** The name of a link's field, as the screen shows it. */
@@ -160,7 +195,7 @@ public class SettingsActivity extends Activity {
     private void set(EditText input, String value, int label, List<String> changed) {
         if (value == null || value.equals(text(input))) return;
         input.setText(value);
-        input.setBackgroundTintList(ColorStateList.valueOf(LINK_MARK));
+        mark(input);
         changed.add(getString(label));
     }
 

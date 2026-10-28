@@ -43,8 +43,44 @@ public class ConnectLinkTest {
         assertEquals("x", c.psk);
         assertNull(c.name);
         assertNull(c.fullTunnel);
-        c = ConnectLink.parse("camex://connect/?h=[2001:db8::1]");
-        assertEquals("[2001:db8::1]", c.host);
+        c = ConnectLink.parse("camex://connect/?h=cam.example.org");
+        assertEquals("cam.example.org", c.host);
+    }
+
+    @Test
+    public void webLinkWithoutSlash() {
+        ConnectLink c = ConnectLink.parse("https://openipc.github.io/camex/connect#p=5900");
+        assertEquals(Integer.valueOf(5900), c.port);
+        assertNull(ConnectLink.parse("https://openipc.github.io/camex/connectx#p=5900"));
+    }
+
+    @Test
+    public void hostIsANameOrIpv4InCamexLimit() {
+        StringBuilder h = new StringBuilder();
+        for (int i = 0; i < 63; i++) h.append('a');
+        assertEquals(h.toString(), ConnectLink.parse(WEB + "h=" + h).host);
+        assertEquals(Arrays.asList("h"), ConnectLink.parse(WEB + "h=" + h + "a").rejected);
+        // camex resolves IPv4 only
+        assertEquals(Arrays.asList("h"), ConnectLink.parse(WEB + "h=%5B2001:db8::1%5D").rejected);
+        assertEquals(Arrays.asList("h"), ConnectLink.parse(WEB + "h=2001:db8::1").rejected);
+    }
+
+    @Test
+    public void pskCharactersJniKeeps() {
+        // Beyond U+FFFF (literal or %XX) and control characters: refused
+        assertEquals(Arrays.asList("s"), ConnectLink.parse(WEB + "s=a\uD83D\uDE00").rejected);
+        assertEquals(Arrays.asList("s"), ConnectLink.parse(WEB + "s=a%F0%9F%98%80").rejected);
+        assertEquals(Arrays.asList("s"), ConnectLink.parse(WEB + "s=a%00b").rejected);
+        assertEquals(Arrays.asList("s"), ConnectLink.parse(WEB + "s=a%09b").rejected);
+        // A literal letter and its %XX form are the same
+        assertEquals("пароль", ConnectLink.parse(WEB + "s=пароль").psk);
+    }
+
+    @Test
+    public void literalSupplementaryCharacterKeptWhole() {
+        assertEquals("\uD83D\uDE00", ConnectLink.decode("\uD83D\uDE00"));
+        assertEquals("\uD83D\uDE00", ConnectLink.decode("%F0%9F%98%80"));
+        assertNull(ConnectLink.decode("a\uD83Db"));   // a lone surrogate
     }
 
     @Test
