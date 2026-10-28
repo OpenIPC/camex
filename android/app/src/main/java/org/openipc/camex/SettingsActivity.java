@@ -115,6 +115,18 @@ public class SettingsActivity extends Activity {
         timeoutInput.setText(String.valueOf(prefs.getInt("server_timeout", DEFAULT_TIMEOUT)));
     }
 
+    /*
+     * One settings screen (singleTask): a link opened while it is up comes
+     * here, so no older screen is left behind to save stale values over it
+     */
+    @Override
+    protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        Uri data = intent.getData();
+        if (data != null) fromLink(data.toString());
+    }
+
     @Override
     protected void onSaveInstanceState(Bundle out) {
         super.onSaveInstanceState(out);

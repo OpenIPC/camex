@@ -62,7 +62,8 @@ var CAMEX = {
             if (!parts[i]) continue;
             var eq = parts[i].indexOf('='), k = eq < 0 ? parts[i] : parts[i].slice(0, eq),
                 v = eq < 0 ? '' : parts[i].slice(eq + 1);
-            try { v = decodeURIComponent(v); } catch (e) { return null; }
+            // A bad escape spoils that field only (named as malformed)
+            try { v = decodeURIComponent(v); } catch (e) { v = null; }
             out.push([k, v]);
         }
         // A repeated field: the last one, as the app takes it
@@ -77,6 +78,7 @@ var CAMEX = {
         try { return /[^\0]/.test(atob(k)); } catch (e) { return false; }
     },
     valid: function (k, v) {
+        if (v === null) return false;
         var n = /^[0-9]{1,5}$/.test(v) ? +v : -1;
         switch (k) {
             case 'h': return /^[A-Za-z0-9.-]{1,63}$/.test(v);
@@ -133,7 +135,11 @@ var CAMEX = {
     // shown as ready
     var bad = [];
     for (var i2 = 0; i2 < f.length; i2++) {
-        if (!CAMEX.valid(f[i2][0], f[i2][1])) bad.push(CAMEX.names[f[i2][0]] || 'Pre-shared key');
+        var k2 = f[i2][0];
+        // (a field of a later version is ignored, as the app ignores it)
+        if ((CAMEX.names[k2] || k2 === 's') && !CAMEX.valid(k2, f[i2][1])) {
+            bad.push(CAMEX.names[k2] || 'Pre-shared key');
+        }
     }
     if (bad.length) {
         var e = document.getElementById('malformed');

@@ -40,6 +40,7 @@
         <activity
             android:name=".SettingsActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:label="@string/settings_title"
             android:theme="@style/Theme.Camex">
             <!-- https://openipc.github.io/camex/connect/#...: an App Link,

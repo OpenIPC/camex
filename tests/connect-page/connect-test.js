@@ -63,7 +63,8 @@ check(d.getElementById('ok').hidden, 'a psk with a blank at its start: malformed
 d = open('#h=x&p=5800');
 check(d.getElementById('ok').hidden && !d.getElementById('bad').hidden, 'no key or psk: "no camex settings"');
 d = open('#h=x&k=' + KEY + '&s=%E0%A4');
-check(d.getElementById('ok').hidden && !d.getElementById('bad').hidden, 'a malformed escape: "no camex settings"');
+check(d.getElementById('ok').hidden && /malformed: Pre-shared key/.test(d.getElementById('malformed').textContent),
+      'a malformed escape: that field named as malformed');
 check(!/<script[^>]+src=|<link[^>]+href=|<img|fetch\(|XMLHttpRequest/.test(page),
       'the page loads nothing from anywhere');
 process.exit(fails ? 1 : 0);
