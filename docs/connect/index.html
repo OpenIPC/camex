@@ -81,7 +81,7 @@ var CAMEX = {
         if (v === null) return false;
         var n = /^[0-9]{1,5}$/.test(v) ? +v : -1;
         switch (k) {
-            case 'h': return /^[A-Za-z0-9.-]{1,63}$/.test(v);
+            case 'h': return v.length <= 63 && /^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/.test(v);
             case 'p': return n >= 1 && n <= 65535;
             case 't': return v === 'udp' || v === 'tcp';
             case 'k': return CAMEX.key(v);

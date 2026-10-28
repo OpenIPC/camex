@@ -387,7 +387,8 @@ fi
 # A host name or an IPv4 address (camex resolves IPv4 only), in camex's
 # server_host[64]
 if [ -n "$PUBLIC_HOST" ]; then
-    printf '%s\n' "$PUBLIC_HOST" | grep -qxE '[A-Za-z0-9.-]{1,63}' ||
+    [ ${#PUBLIC_HOST} -le 63 ] && printf '%s\n' "$PUBLIC_HOST" |
+        grep -qxE '[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*' ||
         die "--public-host: a host name or an IPv4 address, up to 63 characters"
 fi
 case "$PASSWORD" in

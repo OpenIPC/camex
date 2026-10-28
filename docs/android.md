@@ -41,8 +41,9 @@ Android: open this link on the phone (Telegram, mail, anything):
 
 Tapped on the phone, it opens the app's settings with the link's values filled
 in and their fields marked; nothing is saved or connected until **Save**. A
-malformed field is not taken, and the screen says which. The same settings
-open with `camex://connect?h=…&p=…` (a QR code, for example).
+malformed field is not taken, and the screen says which. The app also takes
+`camex://connect?h=…&p=…`, which the page's button sends to it by name; do not
+spread such links otherwise (another app may claim `camex://` and get the psk).
 
 The settings are after `#`: the browser keeps them, they reach neither GitHub
 Pages nor a log. The link has the psk, so it is a password: send it only to

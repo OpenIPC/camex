@@ -30,6 +30,9 @@ final class ConnectLink {
     static final String WEB_PREFIX = "https://openipc.github.io/camex/connect";
     static final String SCHEME_PREFIX = "camex://connect";
 
+    private static final String HOST =
+        "[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*";
+
     String host, transport, pubkey, psk, name;
     Integer port, mtu, keepalive;
     Boolean fullTunnel;
@@ -125,7 +128,8 @@ final class ConnectLink {
             case "h":
                 // A host name or an IPv4 address (camex resolves IPv4 only),
                 // in its server_host[64]
-                if (!v.matches("[A-Za-z0-9.-]{1,63}")) return false;
+                // (labels: letters, digits, '-' inside; an IPv4 address too)
+                if (v.length() > 63 || !v.matches(HOST)) return false;
                 host = v;
                 return true;
             case "p":

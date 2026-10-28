@@ -125,6 +125,12 @@ public class SettingsActivity extends Activity {
         setIntent(intent);
         Uri data = intent.getData();
         if (data == null) return;
+        // A link with nothing usable leaves what is on the screen as it is
+        ConnectLink c = ConnectLink.parse(data.toString());
+        if (c == null || c.isEmpty()) {
+            fromLink(data.toString());   // only its note
+            return;
+        }
         // The saved settings again, the marks of an earlier link gone: only
         // this link's values over them
         for (int id : marked) unmark(findViewById(id));

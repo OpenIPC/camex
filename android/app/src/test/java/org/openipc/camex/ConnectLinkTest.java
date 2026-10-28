@@ -60,6 +60,10 @@ public class ConnectLinkTest {
         for (int i = 0; i < 63; i++) h.append('a');
         assertEquals(h.toString(), ConnectLink.parse(WEB + "h=" + h).host);
         assertEquals(Arrays.asList("h"), ConnectLink.parse(WEB + "h=" + h + "a").rejected);
+        assertEquals(Arrays.asList("h"), ConnectLink.parse(WEB + "h=.").rejected);
+        assertEquals(Arrays.asList("h"), ConnectLink.parse(WEB + "h=-bad").rejected);
+        assertEquals(Arrays.asList("h"), ConnectLink.parse(WEB + "h=a..b").rejected);
+        assertEquals("10.0.0.1", ConnectLink.parse(WEB + "h=10.0.0.1").host);
         // camex resolves IPv4 only
         assertEquals(Arrays.asList("h"), ConnectLink.parse(WEB + "h=%5B2001:db8::1%5D").rejected);
         assertEquals(Arrays.asList("h"), ConnectLink.parse(WEB + "h=2001:db8::1").rejected);
