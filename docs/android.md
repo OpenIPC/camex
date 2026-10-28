@@ -66,8 +66,8 @@ When the link opens in a browser instead of the app, the page has a button
 **Open in Camex** with the same settings, the APK for a phone without the app,
 and the command line of the desktop client.
 
-The app opens such links by itself once Android has verified
+The app opens such links by itself (an App Link): Android checks
 `https://openipc.github.io/.well-known/assetlinks.json` against the APK's
-signing key: [`android/assetlinks.json`](../android/assetlinks.json) is that
-file for the release key CI signs with (an APK signed with another key gets
-the page and its button).
+signing key when the app is installed. That file is
+[`android/assetlinks.json`](../android/assetlinks.json), for the release key CI
+signs with; an APK signed with another key gets the page and its button.
