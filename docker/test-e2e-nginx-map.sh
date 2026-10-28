@@ -539,6 +539,8 @@ grep -q '<noscript><meta http-equiv="refresh" content="30"></noscript>' "$JS_DIR
     grep -q '<meta name="camex-version" content="' "$JS_DIR/a.html"
 check $? "the page has its version, and the 30-second reload only without JS"
 sed -e 's|<div class="tabs">|<div class="tabs" data-t="new">|' \
+    -e 's|<div class="list list-conf">|<div class="list list-conf" data-l="new">|' \
+    -e 's|<div class="list list-auto">|<div class="list list-auto" data-l="new">|' \
     -e 's|<div class="sub">[0-9]* online|<div class="sub">99 online|' "$JS_DIR/a.html" > "$JS_DIR/b.html"
 sed 's|<meta name="camex-version" content="[^"]*"|<meta name="camex-version" content="0.0.0"|' \
     "$JS_DIR/b.html" > "$JS_DIR/c.html"

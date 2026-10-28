@@ -37,6 +37,9 @@ const flush = () => new Promise((r) => setTimeout(r, 50));
     check(d.querySelector('.tabs').getAttribute('data-t') === 'new' &&
           /99 online/.test(d.querySelector('.sub').textContent),
           'the lists and counts of the new page are in place, no reload');
+    check(d.querySelectorAll('.list-conf[data-l="new"]').length === 1 &&
+          d.querySelectorAll('.list-auto[data-l="new"]').length === 1,
+          'both device lists are those of the new page');
     check(d.getElementById('tab-auto').checked, 'the chosen tab stays');
     check(!d.body.classList.contains('stale'), 'not marked stale');
     reply = { ok: false, status: 401, text: () => Promise.resolve('') };
