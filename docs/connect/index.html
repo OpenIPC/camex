@@ -42,6 +42,7 @@ pre{padding:10px;white-space:pre-wrap;word-break:break-all}
 <pre id="cli"></pre>
 </div>
 <p id="bad" class="err" hidden>This link has no camex settings: copy it whole from install.sh's output.</p>
+<p id="malformed" class="err" hidden></p>
 <p class="dim"><a href="https://github.com/OpenIPC/camex/blob/master/docs/android.md">About the app</a></p>
 </main>
 <script>
@@ -65,6 +66,31 @@ var CAMEX = {
         }
         return out;
     },
+    // As ConnectLink.java takes them: false for a malformed value
+    key: function (k) {
+        if (!/^[A-Za-z0-9+\/]{43}=$/.test(k)) return false;
+        try { return /[^\0]/.test(atob(k)); } catch (e) { return false; }
+    },
+    valid: function (k, v) {
+        var n = /^[0-9]{1,5}$/.test(v) ? +v : -1;
+        switch (k) {
+            case 'h': return /^[A-Za-z0-9.-]{1,63}$/.test(v);
+            case 'p': return n >= 1 && n <= 65535;
+            case 't': return v === 'udp' || v === 'tcp';
+            case 'k': return CAMEX.key(v);
+            case 's':
+                if (!v || v !== v.trim() || unescape(encodeURIComponent(v)).length >= 128 ||
+                    /[\u0000-\u001f\u007f\ud800-\udfff]/.test(v)) return false;
+                if (v.indexOf('hex:') === 0) return /^[0-9a-fA-F]{64}$/.test(v.slice(4)) && !/^0{64}$/.test(v.slice(4));
+                if (v.indexOf('base64:') === 0) return CAMEX.key(v.slice(7));
+                return true;
+            case 'n': return /^[A-Za-z0-9._-]{1,31}$/.test(v);
+            case 'm': return n >= 576 && n <= 9000;
+            case 'a': return n >= 0 && n <= 3600;
+            case 'r': return v === '0' || v === '1';
+            default: return true;
+        }
+    },
     // The app's own link for the button: the fields as they came, so the
     // app decodes exactly what install.sh encoded
     intent: function (hash) {
@@ -79,11 +105,11 @@ var CAMEX = {
         var m = {}, q = function (v) { return "'" + v.replace(/'/g, "'\\''") + "'"; };
         for (var i = 0; i < f.length; i++) m[f[i][0]] = f[i][1];
         if (!m.h || !m.k || !m.s) return '';
-        return 'camex --mode client --auto' + (m.n ? ' --name ' + q(m.n) : '') +
+        return 'camex --mode client --auto' + (m.n && CAMEX.valid('n', m.n) ? ' --name ' + q(m.n) : '') +
             ' --server-host ' + q(m.h) + ' --port ' + q(m.p || '5800') +
             (m.t === 'tcp' ? ' --transport tcp' : '') +
-            (/^[0-9]{1,4}$/.test(m.m || '') ? ' --mtu ' + m.m : '') +
-            (/^[0-9]{1,4}$/.test(m.a || '') ? ' --keepalive ' + m.a : '') +
+            (m.m && CAMEX.valid('m', m.m) ? ' --mtu ' + m.m : '') +
+            (m.a && CAMEX.valid('a', m.a) ? ' --keepalive ' + m.a : '') +
             ' --server-pubkey ' + q(m.k) + ' --psk ' + q(m.s);
     }
 };
@@ -92,6 +118,19 @@ var CAMEX = {
     if (f) for (var i = 0; i < f.length; i++) has[f[i][0]] = 1;
     if (!f || !has.h || !has.k || !has.s) {
         document.getElementById('bad').hidden = false;
+        return;
+    }
+    // A malformed field: the app would leave it out, so the link is not
+    // shown as ready
+    var bad = [];
+    for (var b = 0; b < f.length; b++) {
+        if (!CAMEX.valid(f[b][0], f[b][1])) bad.push(CAMEX.names[f[b][0]] || 'Pre-shared key');
+    }
+    if (bad.length) {
+        var e = document.getElementById('malformed');
+        e.textContent = 'These fields of the link are malformed: ' + bad.join(', ') +
+            '. Copy the link whole from install.sh\'s output.';
+        e.hidden = false;
         return;
     }
     var table = document.getElementById('fields');

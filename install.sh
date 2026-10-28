@@ -172,6 +172,11 @@ urlenc() {
         esac
     done
 }
+# link_psk_ok <psk>: the Android app takes it from a link (ConnectLink: no
+# control character, nothing beyond U+FFFF, i.e. no 4-byte UTF-8)
+link_psk_ok() {
+    ! printf '%s' "$1" | LC_ALL=C grep -q "$(printf '[\001-\037\177\360-\367]')"
+}
 # public_addr: this host's own address towards the internet when it is a
 # public one (not behind NAT); none else
 public_addr() {
@@ -813,7 +818,11 @@ printf '%s\n' "      --server-pubkey $PUBKEY --psk '$PSK_Q'"
 case "$PUBKEY" in
     "<"*) ;;
     *)
-        if [ -n "$PSK" ]; then
+        if [ -n "$PSK" ] && ! link_psk_ok "$PSK"; then
+            echo
+            echo "Android: no link, the psk has a character the app does not take (a"
+            echo "control character or one beyond U+FFFF): type it in the app's settings."
+        elif [ -n "$PSK" ]; then
             echo
             echo "Android: open this link on the phone (Telegram, mail, anything);"
             echo "it has the psk, send it only to the device's owner:"

@@ -152,6 +152,14 @@ final class ConnectLink {
                     char ch = v.charAt(i);
                     if (ch < 0x20 || ch == 0x7f || Character.isSurrogate(ch)) return false;
                 }
+                // A key in camex's forms: hex: 64 digits, base64: 32 bytes,
+                // neither all zero
+                if (v.startsWith("hex:")) {
+                    String h = v.substring(4);
+                    if (!h.matches("[0-9a-fA-F]{64}") || h.matches("0{64}")) return false;
+                } else if (v.startsWith("base64:")) {
+                    if (!isKey(v.substring(7))) return false;
+                }
                 psk = v;
                 return true;
             case "n":
@@ -186,12 +194,21 @@ final class ConnectLink {
 
     /** A server public key: base64 of exactly 32 bytes (camex --genkey). */
     static boolean isServerPubkey(String key) {
-        // Exactly what camex accepts: 43 base64 characters and '='
+        return isKey(key);
+    }
+
+    // Exactly what camex accepts: 43 base64 characters and '=', 32 bytes,
+    // not all zero
+    private static boolean isKey(String key) {
         if (key == null || !key.matches("[A-Za-z0-9+/]{43}=")) return false;
+        byte[] raw;
         try {
-            return Base64.getDecoder().decode(key).length == 32;
+            raw = Base64.getDecoder().decode(key);
         } catch (IllegalArgumentException e) {
             return false;
         }
+        if (raw.length != 32) return false;
+        for (byte x : raw) if (x != 0) return true;
+        return false;
     }
 }

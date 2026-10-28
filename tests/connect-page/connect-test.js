@@ -35,6 +35,13 @@ d = open('#h=x&k=' + KEY + '&s=y&m=1400&a=0&n=cam-1');
 check(d.getElementById('cli').textContent === "camex --mode client --auto --name 'cam-1' --server-host 'x' " +
       "--port '5800' --mtu 1400 --keepalive 0 --server-pubkey '" + KEY + "' --psk 'y'",
       'the desktop command has the name, MTU and keepalive of the link');
+d = open('#h=x&k=' + KEY + '&s=y&m=1');
+check(d.getElementById('ok').hidden && /malformed: MTU/.test(d.getElementById('malformed').textContent),
+      'an MTU out of range: named as malformed, not shown as ready');
+d = open('#h=x&k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA%3D&s=hex%3Abad');
+check(d.getElementById('ok').hidden &&
+      /Server public key, Pre-shared key/.test(d.getElementById('malformed').textContent),
+      'an all-zero key and a bad hex: psk: named as malformed');
 d = open('#h=x&p=5800');
 check(d.getElementById('ok').hidden && !d.getElementById('bad').hidden, 'no key or psk: "no camex settings"');
 d = open('#h=x&k=' + KEY + '&s=%E0%A4');

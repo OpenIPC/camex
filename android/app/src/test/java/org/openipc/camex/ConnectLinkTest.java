@@ -132,6 +132,21 @@ public class ConnectLinkTest {
     }
 
     @Test
+    public void keysInCamexForms() {
+        String zero = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        assertEquals(Arrays.asList("k"), ConnectLink.parse(WEB + "k=" + zero).rejected);
+        assertFalse(ConnectLink.isServerPubkey(zero));
+        assertEquals(Arrays.asList("s"), ConnectLink.parse(WEB + "s=hex:bad").rejected);
+        StringBuilder z = new StringBuilder("hex:");
+        for (int i = 0; i < 64; i++) z.append('0');
+        assertEquals(Arrays.asList("s"), ConnectLink.parse(WEB + "s=" + z).rejected);
+        assertEquals(Arrays.asList("s"), ConnectLink.parse(WEB + "s=base64:" + zero).rejected);
+        assertEquals(Arrays.asList("s"), ConnectLink.parse(WEB + "s=base64:short").rejected);
+        String hex = "hex:5756dc482cd211054279c9054dcf1783430954058c0f5a5c09c6842fb76e3fbd";
+        assertEquals(hex, ConnectLink.parse(WEB + "s=" + hex.replace(":", "%3A")).psk);
+    }
+
+    @Test
     public void notCamexLinks() {
         assertNull(ConnectLink.parse(null));
         assertNull(ConnectLink.parse("https://example.org/camex/connect/#h=x"));

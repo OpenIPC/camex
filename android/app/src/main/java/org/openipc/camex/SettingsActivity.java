@@ -145,11 +145,13 @@ public class SettingsActivity extends Activity {
             int id = "tcp".equals(c.transport) ? R.id.btn_tcp : R.id.btn_udp;
             if (transportGroup.getCheckedRadioButtonId() != id) {
                 transportGroup.check(id);
+                mark(findViewById(id));
                 changed.add(getString(R.string.transport));
             }
         }
         if (c.fullTunnel != null && fullTunnelSwitch.isChecked() != c.fullTunnel) {
             fullTunnelSwitch.setChecked(c.fullTunnel);
+            mark(fullTunnelSwitch);
             changed.add(getString(R.string.full_tunnel));
         }
         StringBuilder note = new StringBuilder();
@@ -170,9 +172,19 @@ public class SettingsActivity extends Activity {
         view.setVisibility(View.VISIBLE);
     }
 
+    // A text field's underline, a radio button's or a switch's own tint
     private void mark(View field) {
         if (field == null) return;
-        field.setBackgroundTintList(ColorStateList.valueOf(LINK_MARK));
+        ColorStateList c = ColorStateList.valueOf(LINK_MARK);
+        if (field instanceof android.widget.CompoundButton) {
+            ((android.widget.CompoundButton) field).setButtonTintList(c);
+            if (field instanceof Switch) {
+                ((Switch) field).setThumbTintList(c);
+                ((Switch) field).setTrackTintList(c);
+            }
+        } else {
+            field.setBackgroundTintList(c);
+        }
         if (!marked.contains(field.getId())) marked.add(field.getId());
     }
 
