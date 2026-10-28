@@ -1273,6 +1273,10 @@ static int wait_send(int fd, const char *cmd, time_t deadline)
 {
     size_t len = strlen(cmd), off = 0U;
 
+    if (deadline - time(NULL) <= 0) {
+        return 1;   /* the wait is spent: nothing more to ask */
+    }
+
     while (off < len) {
         ssize_t k;
 #ifdef MSG_NOSIGNAL
@@ -1384,8 +1388,14 @@ int control_wait(const char *path, const char *token, int timeout)
     for (i = 0; i < n; ++i) {
         struct sockaddr_un sa;
         char cmd[48];
-        int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        int fd;
 
+        /* The wait is spent: the servers not asked yet are as they were
+         * (#144) */
+        if (time(NULL) >= deadline) {
+            continue;
+        }
+        fd = socket(AF_UNIX, SOCK_STREAM, 0);
         if (fd < 0) {
             fprintf(stderr, "camex: socket: %s\n", strerror(errno));
             rc = 1;

@@ -287,7 +287,9 @@ case "$CLIENT_TIMEOUT" in
     '') ;;
     *[!0-9]*) die "--client-timeout: 60 to 120 seconds, not $CLIENT_TIMEOUT" ;;
     *) [ "$CLIENT_TIMEOUT" -ge 60 ] && [ "$CLIENT_TIMEOUT" -le 120 ] ||
-           die "--client-timeout: 60 to 120 seconds, not $CLIENT_TIMEOUT" ;;
+           die "--client-timeout: 60 to 120 seconds, not $CLIENT_TIMEOUT"
+       # 060 is 60, as camex reads it
+       CLIENT_TIMEOUT=$(printf '%s' "$CLIENT_TIMEOUT" | sed 's/^0*//') ;;
 esac
 case "${TRANSPORT:-udp}" in
     udp|tcp) ;;
@@ -515,7 +517,7 @@ if [ -n "$PSK_OPT" ] && [ "$(conf_server psk)" != "$PSK_OPT" ]; then
     say "kept psk= of $CONF, not --psk: edit it there (the clients need the same)"
 fi
 # Without the key camex uses 120 s, the same as --client-timeout 120
-have=$(conf_server client_timeout)
+have=$(conf_server client_timeout | sed 's/^0*\([0-9]\)/\1/')
 if [ -n "$CLIENT_TIMEOUT" ] && [ "${have:-120}" != "$CLIENT_TIMEOUT" ]; then
     say "kept client_timeout= of $CONF, not --client-timeout $CLIENT_TIMEOUT:" \
         "edit it there, then systemctl reload camex"

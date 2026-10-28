@@ -423,6 +423,10 @@ out=$(orun --client-timeout 120)
     out=$(orun --client-timeout 90) &&
     echo "$out" | grep -q "kept client_timeout= of /etc/camex/camex.conf, not --client-timeout 90"
 check $? "no client_timeout= in camex.conf: --client-timeout 120 is the same, 90 is said"
+o 'echo client_timeout=060 >> /etc/camex/camex.conf'
+out=$(orun --client-timeout 60)
+[ $? -eq 0 ] && ! echo "$out" | grep -q "kept client_timeout="
+check $? "client_timeout=060 and --client-timeout 60 are the same"
 out=$(orun --password x)
 [ $? -ne 0 ] && echo "$out" | grep -q "give --domain"
 check $? "--password without --domain is refused"
