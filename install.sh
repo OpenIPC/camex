@@ -514,7 +514,9 @@ fi
 if [ -n "$PSK_OPT" ] && [ "$(conf_server psk)" != "$PSK_OPT" ]; then
     say "kept psk= of $CONF, not --psk: edit it there (the clients need the same)"
 fi
-if [ -n "$CLIENT_TIMEOUT" ] && [ "$(conf_server client_timeout)" != "$CLIENT_TIMEOUT" ]; then
+# Without the key camex uses 120 s, the same as --client-timeout 120
+have=$(conf_server client_timeout)
+if [ -n "$CLIENT_TIMEOUT" ] && [ "${have:-120}" != "$CLIENT_TIMEOUT" ]; then
     say "kept client_timeout= of $CONF, not --client-timeout $CLIENT_TIMEOUT:" \
         "edit it there, then systemctl reload camex"
 fi

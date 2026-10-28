@@ -415,6 +415,14 @@ out=$(orun --domain opts.test --transport tcp)
     ! echo "$out" | grep -q "kept the server's transport" &&
     echo "$out" | grep -qF -- "--transport tcp"
 check $? "listen 0.0.0.0:87 is port 87; --transport   tcp in CAMEX_ARGS is TCP"
+# camex.conf without client_timeout= (made before 3.13.0): camex uses 120 s,
+# --client-timeout 120 is no change; 90 is
+o 'sed -i "/^client_timeout=/d" /etc/camex/camex.conf'
+out=$(orun --client-timeout 120)
+[ $? -eq 0 ] && ! echo "$out" | grep -q "kept client_timeout=" &&
+    out=$(orun --client-timeout 90) &&
+    echo "$out" | grep -q "kept client_timeout= of /etc/camex/camex.conf, not --client-timeout 90"
+check $? "no client_timeout= in camex.conf: --client-timeout 120 is the same, 90 is said"
 out=$(orun --password x)
 [ $? -ne 0 ] && echo "$out" | grep -q "give --domain"
 check $? "--password without --domain is refused"

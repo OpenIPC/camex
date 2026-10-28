@@ -176,11 +176,12 @@ lost=$(docker logs "$IDLE" 2>&1 | grep -c "Connection lost" || true)
 [ "$lost" = 0 ] || fail "idle client timed out between keepalives ($lost times)"
 echo "   no reconnects while idle"
 
-echo "== scenario 5: client_timeout=60 (#143): a silent client goes after 60 s, not 120;"
-echo "   one with --keepalive 3600 stays (its keepalive is capped at 20 s)"
+echo "== scenario 5: client_timeout=60 (#143), made by a reload of client_timeout=120:"
+echo "   a silent client goes after 60 s, not 120; one with --keepalive 3600 stays"
+echo "   (its keepalive is capped at 20 s)"
 docker rm -f "$IDLE" >/dev/null
 docker run -d --name "$SRV2" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
-    --entrypoint /bin/sh "$IMAGE" -c 'printf "[server]\nclient_timeout=60\n" > /tmp/c.conf &&
+    --entrypoint /bin/sh "$IMAGE" -c 'printf "[server]\nclient_timeout=120\n" > /tmp/c.conf &&
         exec camex-run --mode server --port 5800 --local-cidr 10.210.0.1/24 \
         --config /tmp/c.conf '"$SERVER_KEY_ARGS"' --psk "'"$PSK"'"' >/dev/null
 sleep 1
@@ -199,7 +200,17 @@ for _ in $(seq 1 20); do
         docker exec "$LONG" ping -c1 -W1 10.210.0.1 >/dev/null 2>&1 && break
     sleep 1
 done
-docker logs "$LONG" 2>&1 | grep -q "Keepalive every\|keepalive" || true
+# The reload applies the new value: with 120 left nobody would expire below
+docker exec "$SRV2" sh -c 'printf "[server]\nclient_timeout=60\n" > /tmp/c.conf'
+docker kill -s HUP "$SRV2" >/dev/null
+for _ in $(seq 1 10); do
+    docker logs "$SRV2" 2>&1 | grep -q "Reloading config" && break
+    sleep 0.5
+done
+sleep 1
+docker logs "$SRV2" 2>&1 | grep -q "Reloading config" || fail "the server did not reload"
+docker logs "$SRV2" 2>&1 | grep -q "Keeping previous server configuration" &&
+    fail "the reload of client_timeout=60 was refused"
 docker pause "$QUIET" >/dev/null
 sleep 50
 docker logs "$SRV2" 2>&1 | grep -q "Expired client 10.210.0.2" &&
@@ -210,7 +221,7 @@ for i in $(seq 1 20); do
     sleep 1
 done
 docker unpause "$QUIET" >/dev/null
-[ "$gone" = 1 ] || fail "the silent client did not expire within 70 s of client_timeout=60"
+[ "$gone" = 1 ] || fail "the silent client did not expire within 70 s of the reloaded client_timeout=60"
 echo "   the silent client expired after $((50 + i)) s"
 docker logs "$SRV2" 2>&1 | grep -q "Expired client 10.210.0.3" &&
     fail "the client with --keepalive 3600 expired"
