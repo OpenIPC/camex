@@ -124,7 +124,13 @@ public class SettingsActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         Uri data = intent.getData();
-        if (data != null) fromLink(data.toString());
+        if (data == null) return;
+        // The saved settings again, the marks of an earlier link gone: only
+        // this link's values over them
+        for (int id : marked) unmark(findViewById(id));
+        marked.clear();
+        load(getSharedPreferences(PREFS, MODE_PRIVATE));
+        fromLink(data.toString());
     }
 
     @Override
@@ -185,6 +191,19 @@ public class SettingsActivity extends Activity {
         TextView view = findViewById(R.id.text_link_note);
         view.setText(text);
         view.setVisibility(View.VISIBLE);
+    }
+
+    private void unmark(View field) {
+        if (field == null) return;
+        if (field instanceof android.widget.CompoundButton) {
+            ((android.widget.CompoundButton) field).setButtonTintList(null);
+            if (field instanceof Switch) {
+                ((Switch) field).setThumbTintList(null);
+                ((Switch) field).setTrackTintList(null);
+            }
+        } else {
+            field.setBackgroundTintList(null);
+        }
     }
 
     // A text field's underline, a radio button's or a switch's own tint

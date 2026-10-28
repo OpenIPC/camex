@@ -175,7 +175,9 @@ urlenc() {
 # link_psk_ok <psk>: the Android app takes it from a link (ConnectLink: UTF-8,
 # no control character, nothing beyond U+FFFF, i.e. no 4-byte UTF-8)
 link_psk_ok() {
-    printf '%s' "$1" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 &&
+    # (iconv is libc-bin's; without it the UTF-8 check is left out)
+    { ! command -v iconv >/dev/null 2>&1 ||
+        printf '%s' "$1" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; } &&
         ! printf '%s' "$1" | LC_ALL=C grep -q "$(printf '[\001-\037\177\360-\377]')"
 }
 # public_addr: this host's own address towards the internet when it is a
