@@ -56,6 +56,11 @@ d = open('#h=x&k=' + KEY + '&s=y&m=1400&a=0&n=cam-1');
 check(d.getElementById('cli-psk').textContent === "camex --mode client --auto --name 'cam-1' --server-host 'x' " +
       "--port '5800' --mtu 1400 --keepalive 0 --server-pubkey '" + KEY + "' --psk 'y'",
       'the desktop command has the name, MTU and keepalive of the link');
+check(open(hash).getElementById('cli-defaults').hidden, 'a link with port and transport: no note on defaults');
+d = open('#h=x&k=' + KEY + '&s=y');
+check(!d.getElementById('cli-defaults').hidden &&
+      /no port \(5800\) and no transport \(UDP\)/.test(d.getElementById('cli-defaults').textContent),
+      'a link without port and transport: the command says it uses camex\'s defaults');
 d = open('#h=x&k=' + KEY + '&s=y&m=1');
 check(d.getElementById('ok').hidden && /malformed: MTU/.test(d.getElementById('malformed').textContent),
       'an MTU out of range: named as malformed, not shown as ready');

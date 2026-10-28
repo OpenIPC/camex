@@ -579,12 +579,26 @@ else
     say "created: $CONF (port $PORT, pool ${POOL_NET:-10.200.0.0/24}," \
         "${PSK_OPT:+the given psk}${PSK_OPT:-a new psk})"
 fi
-# Settings made once: a different value is said, not applied
-if [ -n "$PORT_OPT" ] && [ "$(conf_server port)" != "$PORT_OPT" ]; then
+# Settings made once: a different value is said, not applied. An older
+# unit's --port or --psk, moved to CAMEX_ARGS, wins over camex.conf: then
+# that is the one to compare and to edit (#149)
+ARG_PORT=; ARG_PSK=
+[ -f "$DEFAULTS" ] && read_args
+if [ -n "$PORT_OPT" ] && [ -n "$ARG_PORT" ]; then
+    [ "$ARG_PORT" = "$PORT_OPT" ] ||
+        say "kept --port $ARG_PORT of CAMEX_ARGS in $DEFAULTS (it wins over" \
+            "port= of $CONF), not --port $PORT_OPT: edit it there, then" \
+            "systemctl restart camex (the clients need the same)"
+elif [ -n "$PORT_OPT" ] && [ "$(conf_server port)" != "$PORT_OPT" ]; then
     say "kept port= of $CONF, not --port $PORT_OPT: edit it there, then" \
         "systemctl restart camex (the clients need the same)"
 fi
-if [ -n "$PSK_OPT" ] && [ "$(conf_server psk)" != "$PSK_OPT" ]; then
+if [ -n "$PSK_OPT" ] && [ -n "$ARG_PSK" ]; then
+    [ "$ARG_PSK" = "$PSK_OPT" ] ||
+        say "kept --psk of CAMEX_ARGS in $DEFAULTS (it wins over psk= of" \
+            "$CONF), not --psk: edit it there, then systemctl restart camex" \
+            "(the clients need the same)"
+elif [ -n "$PSK_OPT" ] && [ "$(conf_server psk)" != "$PSK_OPT" ]; then
     say "kept psk= of $CONF, not --psk: edit it there (the clients need the same)"
 fi
 # Without the key camex uses 120 s, the same as --client-timeout 120
@@ -802,6 +816,8 @@ elif [ -n "$(conf_server server_key "$USED_CONF")" ]; then
     say "WARNING: camex uses server_key= of $USED_CONF, not $KEY: give the" \
         "clients the public key made with it"
 fi
+# A key file of its own without public_key= (#154): not known here
+PUBKEY=${PUBKEY:-<the public key of ${USED_KEY:-$KEY}>}
 PSK=${ARG_PSK:-$(conf_server psk "$USED_CONF")}
 PORT_NOW=${ARG_PORT:-$(conf_server port "$USED_CONF")}
 # Quoted for the shell the command is pasted into: ' as '\''
@@ -823,7 +839,10 @@ printf '%s\n' "      --server-pubkey $PUBKEY --psk '$PSK_Q'"
 # The same settings for the Android app (#146): the fields after '#' never
 # leave the phone's browser; the psk is in it, so it is a password
 case "$PUBKEY" in
-    "<"*) ;;
+    "<"*)
+        echo
+        echo "Android: no link, the server's public key is not known here: put it"
+        echo "in the app's settings by hand." ;;
     *)
         if [ -z "$HOST" ]; then
             echo

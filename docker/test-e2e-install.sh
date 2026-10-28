@@ -464,6 +464,20 @@ check $? "--public-host: an IPv6 address is refused (camex resolves IPv4)"
 out=$(orun --public-host "a b")
 [ $? -ne 0 ] && echo "$out" | grep -q -- "--public-host"
 check $? "--public-host with a blank is refused"
+# An older unit's --port and --psk in CAMEX_ARGS win over camex.conf (#149);
+# a key file of its own without public_key= gives no Android link (#154)
+o 'grep -v "^public_key=" /etc/camex/server.key > /etc/camex/own.key && chmod 600 /etc/camex/own.key &&
+   sed -i "s|^CAMEX_ARGS=\"|CAMEX_ARGS=\"--port 5902 --psk argpsk |; s|/etc/camex/server.key|/etc/camex/own.key|" /etc/default/camex &&
+   grep -q -- "--port 5902 --psk argpsk" /etc/default/camex'
+out=$(orun --port 5903 --psk other2)
+[ $? -eq 0 ] && echo "$out" | grep -q "kept --port 5902 of CAMEX_ARGS in /etc/default/camex" &&
+    echo "$out" | grep -q "kept --psk of CAMEX_ARGS in /etc/default/camex" &&
+    ! echo "$out" | grep -q "kept port= of" && ! echo "$out" | grep -q "kept psk= of"
+check $? "a rerun compares --port and --psk with those of CAMEX_ARGS and says to edit them there"
+echo "$out" | grep -q "Android: no link, the server's public key is not known here" &&
+    ! echo "$out" | grep -q "openipc.github.io/camex/connect" &&
+    echo "$out" | grep -qF -- "--server-pubkey <the public key of /etc/camex/own.key>"
+check $? "a key file without public_key=: no Android link, the command says what is missing"
 out=$(orun --password x)
 [ $? -ne 0 ] && echo "$out" | grep -q "give --domain"
 check $? "--password without --domain is refused"
