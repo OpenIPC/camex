@@ -91,6 +91,7 @@ OLD_TIMER=/etc/systemd/system/camex-nginx-sync.timer
 
 DOMAIN=
 PORT=5800
+PORT_OPT=
 TRANSPORT=
 PSK_OPT=
 POOL=
@@ -217,7 +218,7 @@ while [ $# -gt 0 ]; do
     esac
     case "$1" in
         --domain)    [ $# -ge 2 ] || usage; DOMAIN=$2; shift 2 ;;
-        --port)      [ $# -ge 2 ] || usage; PORT=$2; shift 2 ;;
+        --port)      [ $# -ge 2 ] || usage; PORT=$2; PORT_OPT=$2; shift 2 ;;
         --transport) [ $# -ge 2 ] || usage; TRANSPORT=$2; shift 2 ;;
         --psk)       [ $# -ge 2 ] || usage; PSK_OPT=$2; shift 2 ;;
         --pool)      [ $# -ge 2 ] || usage; POOL=$2; shift 2 ;;
@@ -449,7 +450,7 @@ else
         echo "# Clients do not reach each other"
         echo "client_isolation=yes"
         echo "# The clients' pre-shared key"
-        echo "psk=$PSK"
+        printf 'psk=%s\n' "$PSK"
         [ -n "$DOMAIN" ] && echo "domain=$DOMAIN"
     } > "$TMP/camex.conf"
     (umask 077; cp "$TMP/camex.conf" "$CONF") || die "cannot write $CONF"
@@ -458,6 +459,10 @@ else
         "${PSK_OPT:+the given psk}${PSK_OPT:-a new psk})"
 fi
 # Settings made once: a different value is said, not applied
+if [ -n "$PORT_OPT" ] && [ "$(conf_server port)" != "$PORT_OPT" ]; then
+    say "kept port= of $CONF, not --port $PORT_OPT: edit it there, then" \
+        "systemctl restart camex (the clients need the same)"
+fi
 if [ -n "$PSK_OPT" ] && [ "$(conf_server psk)" != "$PSK_OPT" ]; then
     say "kept psk= of $CONF, not --psk: edit it there (the clients need the same)"
 fi
@@ -491,7 +496,7 @@ fi
 # Also when an older unit's arguments were moved there
 if [ -n "$TRANSPORT" ]; then
     have=udp
-    grep -qE -- '(--transport|-R)[ =]tcp' "$DEFAULTS" && have=tcp
+    grep -qE -- '(--transport[ =]|-R ?)tcp' "$DEFAULTS" && have=tcp
     [ "$have" = "$TRANSPORT" ] ||
         say "kept the server's transport $have, not --transport $TRANSPORT:" \
             "edit CAMEX_ARGS in $DEFAULTS, then systemctl restart camex"
@@ -646,7 +651,7 @@ step 8 "Done"
 # unit's arguments moved to /etc/default/camex may have --psk or --port)
 ARGS=$(sed -n 's/^CAMEX_ARGS="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$DEFAULTS" | tail -n 1)
 # camex reads /etc/camex/camex.conf without --config
-USED_CONF=$CONF; USED_KEY=; ARG_PSK=; ARG_PORT=
+USED_CONF=$CONF; USED_KEY=; ARG_PSK=; ARG_PORT=; PROTO=udp
 set -f
 # shellcheck disable=SC2086
 set -- $ARGS
@@ -661,6 +666,13 @@ while [ $# -gt 0 ]; do
         --psk=*)           ARG_PSK=${1#*=} ;;
         --port|-p)         ARG_PORT=${2-}; shift ;;
         --port=*)          ARG_PORT=${1#*=} ;;
+        --transport|-R)    PROTO=${2-}; shift ;;
+        --transport=*)     PROTO=${1#*=} ;;
+        -R*)               PROTO=${1#-R} ;;
+        -f*)               USED_CONF=${1#-f} ;;
+        -S*)               USED_KEY=${1#-S} ;;
+        -k*)               ARG_PSK=${1#-k} ;;
+        -p*)               ARG_PORT=${1#-p} ;;
     esac
     shift
 done
@@ -683,21 +695,19 @@ PORT_NOW=${ARG_PORT:-$(conf_server port "$USED_CONF")}
 PSK_Q=$(printf '%s' "${PSK:-<psk= of $USED_CONF>}" | sed "s/'/'\\\\''/g")
 echo
 echo "camex server is running: systemctl status camex, camex --status"
-PROTO=udp
-case " $ARGS " in *" --transport tcp "*|*" -R tcp "*|*" --transport=tcp "*) PROTO=tcp ;; esac
 TOPT=
-[ "$PROTO" = tcp ] && TOPT=" --transport tcp"
+[ "$PROTO" = tcp ] && TOPT=" --transport tcp" || PROTO=udp
 echo "Open $(echo $PROTO | tr a-z A-Z) port ${PORT_NOW:-5800} in the firewall${DOMAIN:+, and TCP ${WEB_PORT:-80} for nginx}."
 echo "A client connects with:"
 echo
 echo "  camex --mode client --auto --server-host <this host> --port ${PORT_NOW:-5800}$TOPT \\"
-echo "      --server-pubkey $PUBKEY --psk '$PSK_Q'"
+printf '%s\n' "      --server-pubkey $PUBKEY --psk '$PSK_Q'"
 if [ -n "$DOMAIN" ]; then
     WP=
     [ "${WEB_PORT:-80}" != 80 ] && WP=":$WEB_PORT"
     echo
     echo "Clients' web UIs: http://<client ID>.$DOMAIN$WP/"
-    echo "Start page:       http://$DOMAIN$WP/  (user camex, password $(head -n 1 "$PASSWORD_FILE"))"
+    printf '%s\n' "Start page:       http://$DOMAIN$WP/  (user camex, password $(head -n 1 "$PASSWORD_FILE"))"
     echo "DNS records *.$DOMAIN and $DOMAIN must point to this host (docs/nginx.md)."
 fi
 echo
