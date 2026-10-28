@@ -7,20 +7,28 @@ package org.openipc.camex;
 
 import android.app.Activity;
 import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
+import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
 import android.text.TextUtils;
-import android.util.Base64;
+import android.view.View;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.RadioGroup;
 import android.widget.Switch;
+import android.widget.TextView;
 import android.widget.Toast;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Editable connection settings persisted to the "camex" SharedPreferences, read
- * back by {@link TunnelService} when building the camex argv.
+ * back by {@link TunnelService} when building the camex argv. Also opened by a
+ * camex link ({@link ConnectLink}, #146): its values are filled in and marked,
+ * nothing is saved or connected until the user taps Save.
  */
 public class SettingsActivity extends Activity {
 
@@ -31,6 +39,8 @@ public class SettingsActivity extends Activity {
     private static final int DEFAULT_MTU = 1500;
     private static final int DEFAULT_KEEPALIVE = 10;
     private static final int DEFAULT_TIMEOUT = 20;
+    // The underline of a field a link changed
+    private static final int LINK_MARK = 0xFF2E7D32;
 
     private EditText hostInput, portInput, nameInput, pskInput;
     private EditText pubkeyInput;
@@ -66,7 +76,11 @@ public class SettingsActivity extends Activity {
 
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         // After a rotation the views restore what was typed: keep it
-        if (savedInstanceState == null) load(prefs);
+        if (savedInstanceState == null) {
+            load(prefs);
+            Uri data = getIntent().getData();
+            if (data != null) fromLink(data.toString());
+        }
 
         Button save = findViewById(R.id.btn_save);
         save.setOnClickListener(view -> save(prefs));
@@ -87,6 +101,67 @@ public class SettingsActivity extends Activity {
         mtuInput.setText(String.valueOf(prefs.getInt("mtu", DEFAULT_MTU)));
         keepaliveInput.setText(String.valueOf(prefs.getInt("keepalive", DEFAULT_KEEPALIVE)));
         timeoutInput.setText(String.valueOf(prefs.getInt("server_timeout", DEFAULT_TIMEOUT)));
+    }
+
+    /** A link's values over the saved ones: the changed fields marked. */
+    private void fromLink(String link) {
+        ConnectLink c = ConnectLink.parse(link);
+        if (c == null) return;
+        List<String> changed = new ArrayList<>();
+        set(hostInput, c.host, R.string.server_host, changed);
+        set(portInput, c.port == null ? null : String.valueOf(c.port), R.string.server_port, changed);
+        set(nameInput, c.name, R.string.client_name, changed);
+        set(pubkeyInput, c.pubkey, R.string.server_pubkey, changed);
+        set(pskInput, c.psk, R.string.psk, changed);
+        set(mtuInput, c.mtu == null ? null : String.valueOf(c.mtu), R.string.mtu, changed);
+        set(keepaliveInput, c.keepalive == null ? null : String.valueOf(c.keepalive),
+            R.string.keepalive, changed);
+        if (c.transport != null) {
+            int id = "tcp".equals(c.transport) ? R.id.btn_tcp : R.id.btn_udp;
+            if (transportGroup.getCheckedRadioButtonId() != id) {
+                transportGroup.check(id);
+                changed.add(getString(R.string.transport));
+            }
+        }
+        if (c.fullTunnel != null && fullTunnelSwitch.isChecked() != c.fullTunnel) {
+            fullTunnelSwitch.setChecked(c.fullTunnel);
+            changed.add(getString(R.string.full_tunnel));
+        }
+        StringBuilder note = new StringBuilder();
+        note.append(changed.isEmpty() ? getString(R.string.link_same)
+            : getString(R.string.link_changed, TextUtils.join(", ", changed)));
+        if (!c.rejected.isEmpty()) {
+            List<String> bad = new ArrayList<>();
+            for (String key : c.rejected) bad.add(label(key));
+            note.append('\n').append(getString(R.string.link_rejected,
+                TextUtils.join(", ", bad)));
+        }
+        TextView view = findViewById(R.id.text_link_note);
+        view.setText(note);
+        view.setVisibility(View.VISIBLE);
+    }
+
+    /** The name of a link's field, as the screen shows it. */
+    private String label(String key) {
+        switch (key) {
+            case "h": return getString(R.string.server_host);
+            case "p": return getString(R.string.server_port);
+            case "t": return getString(R.string.transport);
+            case "k": return getString(R.string.server_pubkey);
+            case "s": return getString(R.string.psk);
+            case "n": return getString(R.string.client_name);
+            case "m": return getString(R.string.mtu);
+            case "a": return getString(R.string.keepalive);
+            case "r": return getString(R.string.full_tunnel);
+            default: return key;
+        }
+    }
+
+    private void set(EditText input, String value, int label, List<String> changed) {
+        if (value == null || value.equals(text(input))) return;
+        input.setText(value);
+        input.setBackgroundTintList(ColorStateList.valueOf(LINK_MARK));
+        changed.add(getString(label));
     }
 
     private void save(SharedPreferences prefs) {
@@ -177,12 +252,6 @@ public class SettingsActivity extends Activity {
 
     /** A server public key: base64 of exactly 32 bytes (camex --genkey). */
     static boolean isServerPubkey(String key) {
-        // Exactly what camex accepts: 43 base64 characters and '='
-        if (key == null || !key.matches("[A-Za-z0-9+/]{43}=")) return false;
-        try {
-            return Base64.decode(key, Base64.NO_WRAP).length == 32;
-        } catch (IllegalArgumentException e) {
-            return false;
-        }
+        return ConnectLink.isServerPubkey(key);
     }
 }

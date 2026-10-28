@@ -40,6 +40,10 @@
     <string name="server_timeout">Server timeout, sec (5–3600)</string>
 
     <string name="save">Save</string>
+    <!-- A camex link (#146) -->
+    <string name="link_changed">From the link: %1$s. Check them and tap Save; nothing connects before that.</string>
+    <string name="link_same">The link has the settings saved already.</string>
+    <string name="link_rejected">Not taken from the link (malformed): %1$s</string>
 
     <!-- Validation errors -->
     <string name="err_mtu">MTU must be 576–9000</string>

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<!-- Copyright (c) OpenIPC  https://openipc.org  MIT License -->
+<!-- connect/index.html: the page of a camex link (#146). The settings are
+     after '#': the browser keeps them, nothing here sends them anywhere -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>Camex: connect</title>
+<style>
+:root{--bg:#fff;--fg:#1d2125;--dim:#5c6670;--line:#d8dde2;--acc:#2e7d32;--warn:#b3261e;--code:#f3f5f7}
+@media (prefers-color-scheme:dark){:root{--bg:#15181b;--fg:#e6e9ec;--dim:#9aa4ad;--line:#2c3237;--acc:#66bb6a;--warn:#f2b8b5;--code:#1f2427}}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:34rem;margin:0 auto;padding:24px 16px}
+h1{font-size:1.4rem;margin:0 0 4px}
+p{margin:8px 0}
+.dim{color:var(--dim)}
+table{border-collapse:collapse;width:100%;margin:12px 0}
+td{padding:6px 0;border-bottom:1px solid var(--line);vertical-align:top}
+td:first-child{color:var(--dim);width:9rem;padding-right:8px}
+td:last-child{word-break:break-all}
+.btn{display:block;text-align:center;background:var(--acc);color:#fff;text-decoration:none;font-weight:600;padding:14px;border-radius:8px;margin:16px 0 8px}
+.err{color:var(--warn)}
+code,pre{background:var(--code);border-radius:6px;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre{padding:10px;white-space:pre-wrap;word-break:break-all}
+[hidden]{display:none}
+</style>
+</head>
+<body>
+<main>
+<h1>Camex tunnel</h1>
+<p class="dim">A camex server's settings for the Android app.</p>
+<div id="ok" hidden>
+<table id="fields"></table>
+<a class="btn" id="open" href="#">Open in Camex</a>
+<p class="dim">The app shows these settings; nothing connects until you tap Save there.</p>
+<p>No app yet: install <a href="https://github.com/OpenIPC/camex/releases/latest/download/camex-android.apk">camex-android.apk</a>
+(Android 8.0 and later), then open this link again.</p>
+<p class="dim">On a computer, the same server with camex:</p>
+<pre id="cli"></pre>
+</div>
+<p id="bad" class="err" hidden>This link has no camex settings: copy it whole from install.sh's output.</p>
+<p class="dim"><a href="https://github.com/OpenIPC/camex/blob/master/docs/android.md">About the app</a></p>
+</main>
+<script>
+// The fields of the link (see ConnectLink.java): h host, p port, t
+// transport, k server public key, s psk; n client ID, m MTU, a keepalive,
+// r route all traffic
+var CAMEX = {
+    names: {h: 'Server host', p: 'Port', t: 'Transport', k: 'Server public key',
+            n: 'Client name', m: 'MTU', a: 'Keepalive, s', r: 'Route all traffic'},
+    // The link's fields in its order; null when the escapes are malformed
+    fields: function (hash) {
+        var out = [], s = hash.replace(/^#/, '');
+        if (!s) return out;
+        var parts = s.split('&');
+        for (var i = 0; i < parts.length; i++) {
+            if (!parts[i]) continue;
+            var eq = parts[i].indexOf('='), k = eq < 0 ? parts[i] : parts[i].slice(0, eq),
+                v = eq < 0 ? '' : parts[i].slice(eq + 1);
+            try { v = decodeURIComponent(v); } catch (e) { return null; }
+            out.push([k, v]);
+        }
+        return out;
+    },
+    // The app's own link for the button: the fields as they came, so the
+    // app decodes exactly what install.sh encoded
+    intent: function (hash) {
+        return 'intent://connect?' + hash.replace(/^#/, '') +
+            '#Intent;scheme=camex;package=org.openipc.camex;' +
+            'S.browser_fallback_url=' +
+            encodeURIComponent('https://github.com/OpenIPC/camex/releases/latest/download/camex-android.apk') +
+            ';end';
+    },
+    // The command of the desktop client, quoted for a POSIX shell
+    cli: function (f) {
+        var m = {}, q = function (v) { return "'" + v.replace(/'/g, "'\\''") + "'"; };
+        for (var i = 0; i < f.length; i++) m[f[i][0]] = f[i][1];
+        if (!m.h || !m.k || !m.s) return '';
+        return 'camex --mode client --auto' + (m.n ? ' --name ' + q(m.n) : '') +
+            ' --server-host ' + q(m.h) + ' --port ' + q(m.p || '5800') +
+            (m.t === 'tcp' ? ' --transport tcp' : '') +
+            ' --server-pubkey ' + q(m.k) + ' --psk ' + q(m.s);
+    }
+};
+(function () {
+    var f = CAMEX.fields(location.hash), has = {};
+    if (f) for (var i = 0; i < f.length; i++) has[f[i][0]] = 1;
+    if (!f || !has.h || !has.k || !has.s) {
+        document.getElementById('bad').hidden = false;
+        return;
+    }
+    var table = document.getElementById('fields');
+    for (var j = 0; j < f.length; j++) {
+        var name = CAMEX.names[f[j][0]];
+        if (!name) continue;   // the psk is not shown: it is the password
+        var tr = table.insertRow(), a = tr.insertCell(), b = tr.insertCell();
+        a.textContent = name;
+        b.textContent = f[j][0] === 'r' ? (f[j][1] === '1' ? 'yes' : 'no') : f[j][1];
+    }
+    document.getElementById('open').href = CAMEX.intent(location.hash);
+    document.getElementById('cli').textContent = CAMEX.cli(f);
+    document.getElementById('ok').hidden = false;
+})();
+</script>
+</body>
+</html>

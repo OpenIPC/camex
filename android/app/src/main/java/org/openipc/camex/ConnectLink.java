@@ -1,0 +1,184 @@
+/*
+ * Copyright (c) OpenIPC  https://openipc.org  MIT License
+ *
+ * ConnectLink.java — the settings of a link printed by install.sh (#146)
+ */
+package org.openipc.camex;
+
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * The tunnel's settings in a link, field by field:
+ * {@code https://openipc.github.io/camex/connect/#h=&p=&t=&k=&s=} (the
+ * settings after {@code #}, never sent to a server) or
+ * {@code camex://connect?h=&p=&t=&k=&s=}. Fields: {@code h} host, {@code p}
+ * port, {@code t} transport, {@code k} server public key, {@code s} psk,
+ * optional {@code n} client ID, {@code m} MTU, {@code a} keepalive,
+ * {@code r} route all traffic (1 or 0). A malformed field is left out and
+ * named in {@link #rejected}; unknown fields are ignored.
+ *
+ * Plain Java (no android.*): tested on the JVM.
+ */
+final class ConnectLink {
+
+    static final String WEB_PREFIX = "https://openipc.github.io/camex/connect/";
+    static final String SCHEME_PREFIX = "camex://connect";
+
+    String host, transport, pubkey, psk, name;
+    Integer port, mtu, keepalive;
+    Boolean fullTunnel;
+    /** The fields of the link that were malformed, in the link's order. */
+    final List<String> rejected = new ArrayList<>();
+
+    private ConnectLink() { }
+
+    /** The link's settings, or null when it is not a camex link. */
+    static ConnectLink parse(String link) {
+        if (link == null) return null;
+        String fields;
+        if (link.startsWith(WEB_PREFIX)) {
+            int hash = link.indexOf('#');
+            if (hash < 0) return null;
+            fields = link.substring(hash + 1);
+        } else if (link.startsWith(SCHEME_PREFIX)) {
+            String rest = link.substring(SCHEME_PREFIX.length());
+            if (rest.startsWith("/")) rest = rest.substring(1);
+            if (!rest.startsWith("?") && !rest.startsWith("#")) return null;
+            fields = rest.substring(1);
+        } else {
+            return null;
+        }
+        ConnectLink c = new ConnectLink();
+        for (Map.Entry<String, String> f : split(fields).entrySet()) {
+            if (!c.take(f.getKey(), f.getValue())) c.rejected.add(f.getKey());
+        }
+        return c;
+    }
+
+    /** No field at all came through. */
+    boolean isEmpty() {
+        return host == null && port == null && transport == null && pubkey == null
+            && psk == null && name == null && mtu == null && keepalive == null
+            && fullTunnel == null;
+    }
+
+    // key=value pairs split on '&'; the last of a repeated key wins; a
+    // value that does not decode is kept as null (rejected)
+    private static Map<String, String> split(String fields) {
+        Map<String, String> out = new LinkedHashMap<>();
+        for (String pair : fields.split("&", -1)) {
+            if (pair.isEmpty()) continue;
+            int eq = pair.indexOf('=');
+            String key = eq < 0 ? pair : pair.substring(0, eq);
+            String value = eq < 0 ? "" : pair.substring(eq + 1);
+            out.remove(key);
+            out.put(key, decode(value));
+        }
+        return out;
+    }
+
+    /**
+     * %XX as UTF-8; '+' stays '+' (it is a character of base64 keys), so a
+     * blank is %20. Null when the escapes or the UTF-8 are malformed.
+     */
+    static String decode(String s) {
+        ByteArrayOutputStream b = new ByteArrayOutputStream();
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (ch == '%') {
+                if (i + 2 >= s.length()) return null;
+                int hi = Character.digit(s.charAt(i + 1), 16);
+                int lo = Character.digit(s.charAt(i + 2), 16);
+                if (hi < 0 || lo < 0) return null;
+                b.write(hi * 16 + lo);
+                i += 2;
+            } else if (ch < 0x80) {
+                b.write(ch);
+            } else {
+                byte[] u = String.valueOf(ch).getBytes(StandardCharsets.UTF_8);
+                b.write(u, 0, u.length);
+            }
+        }
+        byte[] raw = b.toByteArray();
+        String out = new String(raw, StandardCharsets.UTF_8);
+        // Bytes that are not UTF-8 come back as U+FFFD: refuse those
+        if (!java.util.Arrays.equals(out.getBytes(StandardCharsets.UTF_8), raw)) return null;
+        return out;
+    }
+
+    private boolean take(String key, String v) {
+        if (v == null) return !isKnown(key);
+        switch (key) {
+            case "h":
+                // A host name or an address: no blank, no '/', at most 253
+                if (!v.matches("[A-Za-z0-9._:\\[\\]-]{1,253}")) return false;
+                host = v;
+                return true;
+            case "p":
+                port = range(v, 1, 65535);
+                return port != null;
+            case "t":
+                if (!v.equals("udp") && !v.equals("tcp")) return false;
+                transport = v;
+                return true;
+            case "k":
+                if (!isServerPubkey(v)) return false;
+                pubkey = v;
+                return true;
+            case "s":
+                // As camex takes --psk: one line, no blank at its ends (it
+                // trims them), below 128 bytes
+                if (v.isEmpty() || !v.equals(v.trim()) || v.indexOf('\n') >= 0
+                        || v.indexOf('\r') >= 0
+                        || v.getBytes(StandardCharsets.UTF_8).length >= 128) {
+                    return false;
+                }
+                psk = v;
+                return true;
+            case "n":
+                // The client ID (CAMEX_CLIENT_ID_LEN 32 with its NUL)
+                if (!v.matches("[A-Za-z0-9._-]{1,31}")) return false;
+                name = v;
+                return true;
+            case "m":
+                mtu = range(v, 576, 9000);
+                return mtu != null;
+            case "a":
+                keepalive = range(v, 0, 3600);
+                return keepalive != null;
+            case "r":
+                if (!v.equals("0") && !v.equals("1")) return false;
+                fullTunnel = v.equals("1");
+                return true;
+            default:
+                return true;   // a field of a later version
+        }
+    }
+
+    private static boolean isKnown(String key) {
+        return key.length() == 1 && "hptksnmar".indexOf(key.charAt(0)) >= 0;
+    }
+
+    private static Integer range(String v, int lo, int hi) {
+        if (!v.matches("[0-9]{1,5}")) return null;
+        int n = Integer.parseInt(v);
+        return n >= lo && n <= hi ? n : null;
+    }
+
+    /** A server public key: base64 of exactly 32 bytes (camex --genkey). */
+    static boolean isServerPubkey(String key) {
+        // Exactly what camex accepts: 43 base64 characters and '='
+        if (key == null || !key.matches("[A-Za-z0-9+/]{43}=")) return false;
+        try {
+            return Base64.getDecoder().decode(key).length == 32;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+}

@@ -35,11 +35,34 @@
             </intent-filter>
         </activity>
 
+        <!-- Also opened by a camex link (#146): it fills the settings in,
+             the user saves them; nothing connects from a link -->
         <activity
             android:name=".SettingsActivity"
-            android:exported="false"
+            android:exported="true"
             android:label="@string/settings_title"
-            android:theme="@style/Theme.Camex" />
+            android:theme="@style/Theme.Camex">
+            <!-- https://openipc.github.io/camex/connect/#...: an App Link,
+                 verified by /.well-known/assetlinks.json of openipc.github.io -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="openipc.github.io"
+                    android:pathPrefix="/camex/connect" />
+            </intent-filter>
+            <!-- camex://connect?...: QR codes, the page's button -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="camex"
+                    android:host="connect" />
+            </intent-filter>
+        </activity>
 
         <service
             android:name=".TunnelService"
