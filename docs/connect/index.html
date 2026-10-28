@@ -84,7 +84,8 @@ var CAMEX = {
             case 't': return v === 'udp' || v === 'tcp';
             case 'k': return CAMEX.key(v);
             case 's':
-                if (!v || v !== v.trim() || unescape(encodeURIComponent(v)).length >= 128 ||
+                // blanks at the ends as camex trims them (ASCII only, like Java's trim)
+                if (!v || /^[\t\n\v\f\r ]|[\t\n\v\f\r ]$/.test(v) || unescape(encodeURIComponent(v)).length >= 128 ||
                     /[\u0000-\u001f\u007f\ud800-\udfff]/.test(v)) return false;
                 if (v.indexOf('hex:') === 0) return /^[0-9a-fA-F]{64}$/.test(v.slice(4)) && !/^0{64}$/.test(v.slice(4));
                 if (v.indexOf('base64:') === 0) return CAMEX.key(v.slice(7));

@@ -56,6 +56,10 @@ d = open('#h=x&k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA%3D&s=hex%3Abad');
 check(d.getElementById('ok').hidden &&
       /Server public key, Pre-shared key/.test(d.getElementById('malformed').textContent),
       'an all-zero key and a bad hex: psk: named as malformed');
+d = open('#h=x&k=' + KEY + '&s=%C2%A0nbsp%C2%A0');
+check(!d.getElementById('ok').hidden, 'a psk with U+00A0 at its ends: taken, as the app takes it');
+d = open('#h=x&k=' + KEY + '&s=%20lead');
+check(d.getElementById('ok').hidden, 'a psk with a blank at its start: malformed');
 d = open('#h=x&p=5800');
 check(d.getElementById('ok').hidden && !d.getElementById('bad').hidden, 'no key or psk: "no camex settings"');
 d = open('#h=x&k=' + KEY + '&s=%E0%A4');
