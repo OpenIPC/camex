@@ -65,6 +65,8 @@ typedef struct {
     time_t session_since; /* its current connection: the first handshake
                            * after a (re)connect; 0 until then */
     time_t last_hs;       /* its latest accepted handshake */
+    time_t stale_hs_logged;  /* last "not newer" handshake logged (#135) */
+    uint32_t stale_hs_quiet; /* such handshakes since, not logged */
     uint32_t handshakes;  /* accepted handshakes */
     uint64_t rx_packets;  /* authenticated packets from it, keepalives too */
     uint64_t rx_bytes;    /* their tunnel payload */

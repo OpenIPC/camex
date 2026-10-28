@@ -12,7 +12,10 @@
 #      the session must not move to the attacker, the pings must not
 #      reach the server again;
 #   2. after the client reconnected (new session): the old session's
-#      INIT and DATA must be rejected as well.
+#      INIT and DATA must be rejected as well;
+#   3. more old INITs within 30 s: no new line, the next one counts them.
+# The server's line says why (#135): how much older the timestamp is than
+# that of the live session, and from where that session is.
 # After each attack the client must still reach the server.
 # In protocol v2 a replayed INIT carries an old timestamp, and replayed
 # DATA fails the replay window or names a session that no longer exists.
@@ -112,10 +115,17 @@ replay() {
     sent=$(cat "$@" | docker exec -i "$ATK" python3 /send.py "$SRV")
     [ "$sent" = "$want" ]; check $? "attacker sent $want captured packets (sent: ${sent:-none})"
 }
-# dropped_regs: handshakes the server rejected as replays so far
+# dropped_regs: lines of handshakes the server dropped as not newer than
+# the live session's (#135: one line in 30 s per client)
 dropped_regs() {
-    docker logs "$SRV" 2>&1 | grep -c "Dropped handshake.*replayed" || true
+    docker logs "$SRV" 2>&1 | grep -c "Dropped handshake.*its timestamp.*live session" || true
 }
+# wait_quiet: past the 30 s in which the server says no more of them
+wait_quiet() {
+    local left=$((LAST_DROP + 31 - SECONDS))
+    [ "$left" -gt 0 ] && sleep "$left"
+}
+CLI_IP=
 
 echo "== start server, capture, client"
 docker run -d --name "$SRV" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
@@ -160,6 +170,8 @@ datas=$(grep -c '^3 ' "$BUILD_CTX/old.txt")
 echo "   captured: $regs INIT, $datas DATA"
 [ "$regs" -ge 1 ] && [ "$datas" -ge 5 ]; check $? "captured the handshake and the pings"
 
+CLI_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CLI")
+
 echo "== 1. replay the live session's INIT and DATA from another address"
 before=$(icmp_in "$SRV")
 drops=$(dropped_regs)
@@ -170,6 +182,9 @@ sleep 2
 after=$(icmp_in "$SRV")
 [ "$after" = "$before" ]; check $? "replayed pings do not reach the server (echo requests: $before -> $after)"
 [ "$(dropped_regs)" -gt "$drops" ]; check $? "the server rejected the replayed handshake"
+LAST_DROP=$SECONDS
+docker logs "$SRV" 2>&1 | grep -q "Dropped handshake from .*: its timestamp is not newer than that of the live session from $CLI_IP:[0-9]*: a replay, another client with this ID, or this client's clock is behind (it is taken once that session is silent for 120 s)"
+check $? "the server says why: the same timestamp as the live session from the client's address (#135)"
 docker logs "$SRV" 2>&1 | grep -q "reconnected: .*$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$ATK")"
 [ $? != 0 ]; check $? "the session did not move to the attacker's address"
 still_up
@@ -178,6 +193,8 @@ echo "== 2. the client reconnects; replay the old session"
 docker restart -t 1 "$CLI" >/dev/null
 wait_ping; check $? "the client registered a new session"
 sleep 6
+CLI_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CLI")
+wait_quiet
 before=$(icmp_in "$SRV")
 drops=$(dropped_regs)
 grep '^1 ' "$BUILD_CTX/old.txt" > "$BUILD_CTX/regs.txt"
@@ -185,7 +202,22 @@ replay "$BUILD_CTX/regs.txt" "$BUILD_CTX/data.txt"
 sleep 2
 after=$(icmp_in "$SRV")
 [ "$after" = "$before" ]; check $? "old session's pings do not reach the server (echo requests: $before -> $after)"
-[ "$(dropped_regs)" -ge $((drops + regs)) ]; check $? "the server rejected all $regs old handshakes"
+[ "$(dropped_regs)" -eq $((drops + 1)) ]; check $? "the $regs old handshakes rejected, said in one line"
+LAST_DROP=$SECONDS
+docker logs "$SRV" 2>&1 | grep -qE "Dropped handshake from .*: its timestamp is [0-9]+ s older than that of the live session from $CLI_IP:[0-9]+: "
+check $? "the server says how much older the old session's timestamp is (#135)"
+still_up
+
+echo "== 3. more of them within 30 s: counted, said with the next line"
+drops=$(dropped_regs)
+replay "$BUILD_CTX/regs.txt"
+sleep 1
+[ "$(dropped_regs)" -eq "$drops" ]; check $? "no new line within 30 s of the last one"
+wait_quiet
+replay "$BUILD_CTX/reg-last.txt"
+sleep 1
+docker logs "$SRV" 2>&1 | tail -n 5 | grep -q "Dropped handshake.*\[$regs more since the last such line\]"
+check $? "the next line says the $regs not said"
 still_up
 
 if [ "$FAILS" != 0 ]; then

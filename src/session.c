@@ -206,6 +206,13 @@ void v2_timestamp(uint8_t out[V2_TIMESTAMP_LEN])
     v2_write_u32(out + 8, nsec);
 }
 
+uint64_t v2_timestamp_seconds(const uint8_t ts[V2_TIMESTAMP_LEN])
+{
+    uint64_t sec = ((uint64_t)v2_read_u32(ts) << 32) | v2_read_u32(ts + 4);
+
+    return sec >= 0x400000000000000aULL ? sec - 0x400000000000000aULL : 0U;
+}
+
 int v2_timestamp_cmp(const uint8_t a[V2_TIMESTAMP_LEN],
                      const uint8_t b[V2_TIMESTAMP_LEN])
 {

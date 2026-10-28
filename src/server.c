@@ -790,6 +790,44 @@ void server_drop_entry(server_client_t *entry)
  * [server] (#143, a reload applies it), else CAMEX_CLIENT_TIMEOUT. The
  * environment variable CAMEX_CLIENT_TIMEOUT (5..120) wins over both, for
  * tests */
+/* A handshake not newer than the live session's (#135): a replay, another
+ * client with this ID and key, or this client's clock behind. Said once in
+ * 30 s for the client, with the number of those not said since. */
+static void server_log_stale_handshake(server_client_t *owner,
+                                       const char *peer, const char *id,
+                                       const uint8_t ts[V2_TIMESTAMP_LEN])
+{
+    char live[64];
+    char gap[48];
+    char more[64] = "";
+    uint64_t behind = v2_timestamp_seconds(owner->hs_ts) -
+                      v2_timestamp_seconds(ts);
+
+    if (owner->stale_hs_logged != 0 &&
+        difftime(g_now, owner->stale_hs_logged) < 30.0) {
+        owner->stale_hs_quiet++;
+        return;
+    }
+    net_sockaddr_to_string(&owner->addr, live, sizeof(live));
+    if (behind == 0U) {
+        snprintf(gap, sizeof(gap), "is not newer than");
+    } else {
+        snprintf(gap, sizeof(gap), "is %llu s older than",
+                 (unsigned long long)behind);
+    }
+    if (owner->stale_hs_quiet != 0U) {
+        snprintf(more, sizeof(more), " [%u more since the last such line]",
+                 (unsigned)owner->stale_hs_quiet);
+    }
+    log_message(LOG_WARNING, "Dropped handshake from %s (%s): its timestamp "
+                "%s that of the live session from %s: a replay, another "
+                "client with this ID, or this client's clock is behind (it "
+                "is taken once that session is silent for %.0f s)%s",
+                peer, id, gap, live, server_client_timeout(), more);
+    owner->stale_hs_logged = g_now;
+    owner->stale_hs_quiet = 0U;
+}
+
 static double server_client_timeout(void)
 {
     static int env_value = -1;
@@ -1910,9 +1948,10 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
             difftime(g_now, owner->last_data) <=
                 server_client_timeout() &&
             v2_timestamp_cmp(payload, owner->hs_ts) <= 0) {
-            log_peer(LOG_WARNING, "Dropped handshake from %s (%s): replayed "
-                     "or out-of-date timestamp", peer,
-                     client_id[0] != '\0' ? client_id : local_ip);
+            server_log_stale_handshake(owner, peer,
+                                       client_id[0] != '\0' ? client_id
+                                                            : local_ip,
+                                       payload);
             noise_wipe(&hs);
             return -1;
         }

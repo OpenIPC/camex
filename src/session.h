@@ -100,6 +100,8 @@ uint32_t v2_data_receiver(const uint8_t *pkt);
 
 /* TAI64N timestamp of now; compare: <0, 0, >0 */
 void v2_timestamp(uint8_t out[V2_TIMESTAMP_LEN]);
+/* The Unix seconds of a TAI64N timestamp of v2_timestamp() */
+uint64_t v2_timestamp_seconds(const uint8_t ts[V2_TIMESTAMP_LEN]);
 int v2_timestamp_cmp(const uint8_t a[V2_TIMESTAMP_LEN],
                      const uint8_t b[V2_TIMESTAMP_LEN]);
 
