@@ -273,10 +273,11 @@ x 'systemctl disable --now camex-nginx-sync.service
    sed -i "s|^ExecStart=.*|ExecStart=/usr/local/bin/camex-nginx-sync.sh|; s|^Environment=INDEX=.*|Environment=INDEX=/var/lib/camex-nginx/start.html|" \
        /etc/systemd/system/camex-nginx-sync.service
    rm /etc/default/camex
-   printf "[Service]\nExecStart=/usr/local/bin/camex \$CAMEX_ARGS\nEnvironment=CAMEX_ARGS=--mode server --config /etc/camex/camex.conf --server-key-file /etc/camex/server.key --mtu 1400\n" \
+   printf "[Service]\nExecStart=/usr/local/bin/camex \$CAMEX_ARGS\nEnvironment=CAMEX_ARGS=--mode server --config /etc/camex/camex.conf --server-key-file /etc/camex/server.key --mtu 1400 --port 5800\n" \
        > /etc/systemd/system/camex.service
    systemctl daemon-reload && systemctl restart camex'
-out=$(run)
+# (--port 5801: the old unit's --port 5800 is the one compared, #149)
+out=$(run --port 5801)
 rc=$?
 echo "$out" | sed 's/^/      /'
 [ $rc -eq 0 ] && x 'test -f /etc/nginx/conf.d/camex-nginx.conf && test ! -e /etc/nginx/conf.d/camex.conf &&
@@ -291,6 +292,9 @@ check $? "camex 3.10's timer stopped and removed (a copy kept)"
 x 'grep -q -- "--mtu 1400" /etc/default/camex && [ "$(stat -c %a /etc/default/camex)" = 600 ] && grep -q "^EnvironmentFile=/etc/default/camex" /etc/systemd/system/camex.service &&
    systemctl is-active --quiet camex && systemctl is-active --quiet camex-nginx-sync.service'
 check $? "the old unit's arguments moved to /etc/default/camex, the services run"
+echo "$out" | grep -q "kept --port 5800 of CAMEX_ARGS in /etc/default/camex" &&
+    ! echo "$out" | grep -q "kept port= of"
+check $? "first rerun of an old unit: --port compared with the unit's own --port 5800"
 # The client finds the restarted server again (--server-timeout), the
 # sync service puts it back in the map
 for _ in $(seq 1 90); do
@@ -468,6 +472,7 @@ check $? "--public-host with a blank is refused"
 # a key file of its own without public_key= gives no Android link (#154)
 o 'grep -v "^public_key=" /etc/camex/server.key > /etc/camex/own.key && chmod 600 /etc/camex/own.key &&
    sed -i "s|^CAMEX_ARGS=\"|CAMEX_ARGS=\"--port 5902 --psk argpsk |; s|/etc/camex/server.key|/etc/camex/own.key|" /etc/default/camex &&
+   sed -i "s|^CAMEX_ARGS=\"\(.*\)\"\$|CAMEX_ARGS='"'"'\1'"'"'|" /etc/default/camex && grep -q "^CAMEX_ARGS='"'"'--port 5902" /etc/default/camex &&
    grep -q -- "--port 5902 --psk argpsk" /etc/default/camex'
 out=$(orun --port 5903 --psk other2)
 [ $? -eq 0 ] && echo "$out" | grep -q "kept --port 5902 of CAMEX_ARGS in /etc/default/camex" &&

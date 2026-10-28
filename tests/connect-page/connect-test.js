@@ -59,7 +59,7 @@ check(d.getElementById('cli-psk').textContent === "camex --mode client --auto --
 check(open(hash).getElementById('cli-defaults').hidden, 'a link with port and transport: no note on defaults');
 d = open('#h=x&k=' + KEY + '&s=y');
 check(!d.getElementById('cli-defaults').hidden &&
-      /no port \(5800\) and no transport \(UDP\)/.test(d.getElementById('cli-defaults').textContent),
+      /no port and no transport: the command uses port 5800 \(this page's\) and UDP \(camex's default\)/.test(d.getElementById('cli-defaults').textContent),
       'a link without port and transport: the command says it uses camex\'s defaults');
 d = open('#h=x&k=' + KEY + '&s=y&m=1');
 check(d.getElementById('ok').hidden && /malformed: MTU/.test(d.getElementById('malformed').textContent),

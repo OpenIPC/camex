@@ -196,7 +196,16 @@ public_addr() {
 # /etc/default/camex as the shell splits it there; its command line wins over
 # camex.conf (an older unit's arguments moved there may have --psk or --port)
 read_args() {
-    ARGS=$(sed -n 's/^CAMEX_ARGS="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$DEFAULTS" | tail -n 1)
+    # (in double or single quotes, as systemd's EnvironmentFile= takes them;
+    # before step 6 has moved them, an older unit's own CAMEX_ARGS)
+    if [ -f "$DEFAULTS" ]; then
+        ARGS=$(sed -n "s/^CAMEX_ARGS=[\"']\{0,1\}\(.*\)/\1/p" "$DEFAULTS" | tail -n 1)
+    else
+        ARGS=$(sed -n 's/^Environment="\{0,1\}CAMEX_ARGS=\(.*\)/\1/p' \
+               "$UNITS/camex.service" 2>/dev/null | tail -n 1)
+        case "$ARGS" in *SERVER_PUBLIC_KEY*) ARGS= ;; esac
+    fi
+    ARGS=$(printf '%s' "$ARGS" | sed "s/[\"']\$//")
     # camex reads /etc/camex/camex.conf without --config
     USED_CONF=$CONF; USED_KEY=; ARG_PSK=; ARG_PORT=; PROTO=udp
     set -f
@@ -582,8 +591,7 @@ fi
 # Settings made once: a different value is said, not applied. An older
 # unit's --port or --psk, moved to CAMEX_ARGS, wins over camex.conf: then
 # that is the one to compare and to edit (#149)
-ARG_PORT=; ARG_PSK=
-[ -f "$DEFAULTS" ] && read_args
+read_args
 if [ -n "$PORT_OPT" ] && [ -n "$ARG_PORT" ]; then
     [ "$ARG_PORT" = "$PORT_OPT" ] ||
         say "kept --port $ARG_PORT of CAMEX_ARGS in $DEFAULTS (it wins over" \
