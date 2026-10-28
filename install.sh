@@ -267,12 +267,38 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-DOMAIN=$(printf '%s' "$DOMAIN" | tr 'A-Z' 'a-z')
-# As camex checks it: labels of letters, digits and '-', 253 characters
-if [ -n "$DOMAIN" ] && { [ ${#DOMAIN} -gt 253 ] || ! printf '%s\n' "$DOMAIN" |
-   grep -qxE '[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*'; }; then
-    die "not a domain: $DOMAIN"
-fi
+# check_domain: --domain in lower case, as camex checks it: labels of
+# letters, digits and '-', 253 characters
+check_domain() {
+    DOMAIN=$(printf '%s' "$DOMAIN" | tr 'A-Z' 'a-z')
+    if [ -n "$DOMAIN" ] && { [ ${#DOMAIN} -gt 253 ] || ! printf '%s\n' "$DOMAIN" |
+       grep -qxE '[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*'; }; then
+        die "not a domain: $DOMAIN_GIVEN"
+    fi
+}
+# idna_domain: --domain in another script as its IDNA form (xn--...), the
+# one DNS, nginx and camex use; idn2 makes it (installed for it)
+idna_domain() {
+    if ! command -v idn2 >/dev/null 2>&1; then
+        say "apt-get install idn2 (for --domain $DOMAIN)"
+        { DEBIAN_FRONTEND=noninteractive apt-get update -qq &&
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends idn2
+        } </dev/null >/dev/null || die "apt-get install idn2 failed"
+    fi
+    # (under sudo the locale is often C, where idn2 reads no UTF-8)
+    idn=$(LC_ALL=C.UTF-8 idn2 --quiet -- "$DOMAIN" 2>/dev/null) && [ -n "$idn" ] ||
+        die "not a domain: $DOMAIN (idn2 cannot make its IDNA form)"
+    say "--domain $DOMAIN is $idn (its IDNA form, used everywhere)"
+    DOMAIN=$idn
+    check_domain
+}
+# A domain in another script (мойдомен.рф, #151) is turned into its IDNA
+# form in step 1, after the host is checked (it may need idn2 installed)
+DOMAIN_GIVEN=$DOMAIN
+case "$DOMAIN" in
+    *[![:print:]]*|*[!\ -~]*) DOMAIN_IDN=1 ;;
+    *) DOMAIN_IDN=; check_domain ;;
+esac
 check_port() {   # check_port <option> <value>
     case "$2" in
         ''|*[!0-9]*) die "$1: not a port: $2" ;;
@@ -376,6 +402,7 @@ case "$(dpkg --print-architecture)" in
     *) die "no camex build for $(dpkg --print-architecture): build it from source:" \
        "https://github.com/OpenIPC/camex/blob/master/docs/build.md" ;;
 esac
+[ -n "$DOMAIN_IDN" ] && idna_domain
 # nginx installed before: a rerun keeps it up to date
 if [ -z "$DOMAIN" ] && { [ -f "$NGINX_CONF" ] || [ -f "$OLD_NGINX_CONF" ]; }; then
     [ -f "$CONF" ] && DOMAIN=$(conf_domain)

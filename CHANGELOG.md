@@ -6,6 +6,14 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.14.2 — 2026-10-28
+
+- `install.sh --domain` in another script (#151): `мойдомен.рф` (any case) is taken in its
+  IDNA form `xn--d1acklchcc.xn--p1ai`, made by `idn2` (installed for it), and said once;
+  nginx, `domain=` of `camex.conf` and the printed addresses use that form, as DNS does.
+- e2e: such a domain on a host with another one (its IDNA form said, refused), one with a
+  blank refused as given. `docs/install.md`.
+
 ## 3.14.0 — 2026-10-28
 
 - The start page refreshes itself in place every 5 seconds (#142): its inline script fetches
