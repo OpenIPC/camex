@@ -129,6 +129,11 @@ public class SettingsActivity extends Activity {
         ConnectLink c = ConnectLink.parse(data.toString());
         if (c == null || c.isEmpty()) {
             fromLink(data.toString());   // only its note
+            if (!marked.isEmpty()) {
+                // The marks on the screen are an earlier link's, not this one's
+                TextView note = findViewById(R.id.text_link_note);
+                showNote(note.getText() + "\n" + getString(R.string.link_earlier));
+            }
             return;
         }
         // The saved settings again, the marks of an earlier link gone: only
@@ -302,7 +307,10 @@ public class SettingsActivity extends Activity {
             .putInt("server_timeout", timeout)
             .apply();
 
-        Toast.makeText(this, R.string.save, Toast.LENGTH_SHORT).show();
+        // From a link the screen opened by itself, even with the tunnel up
+        // (TunnelService reads the settings when it starts)
+        Toast.makeText(this, getIntent().getData() != null ? R.string.saved_next_start
+            : R.string.save, Toast.LENGTH_LONG).show();
         finish();
     }
 

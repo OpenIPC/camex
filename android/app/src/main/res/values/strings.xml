@@ -44,6 +44,8 @@
     <string name="link_changed">From the link: %1$s. Check them and tap Save; nothing connects before that.</string>
     <string name="link_same">The link has the settings saved already.</string>
     <string name="link_unknown">This link has no camex settings: copy it whole from install.sh\'s output.</string>
+    <string name="link_earlier">The marked values are still those of the earlier link.</string>
+    <string name="saved_next_start">Saved. A running tunnel takes them after Stop and Start.</string>
     <string name="link_rejected">Not taken from the link (malformed): %1$s</string>
 
     <!-- Validation errors -->
