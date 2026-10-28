@@ -36,11 +36,22 @@ EOF_STEPS
 
 usage() {
     cat >&2 <<'EOF_USAGE'
-Usage: install.sh [--domain <domain>] [--port <port>]
+Usage: install.sh [--domain <domain>] [options]
        install.sh --uninstall
 
-  --domain <domain>  also install nginx in front of the clients for <domain>
-  --port <port>      the server's UDP port in a new camex.conf (5800)
+  --domain <domain>       also install nginx in front of the clients
+  --port <port>           the server's port (5800)
+  --transport udp|tcp     the server's transport (udp)
+  --psk <key>             the clients' pre-shared key (a random one)
+  --pool <network/prefix> the clients' pool, the server at its first
+                          address (10.200.0.0/24)
+  With --domain:
+  --password <password>   the start page's password, user camex (a random one)
+  --http-port <port>      the port nginx listens on (80)
+  --upstream-port <port>  the cameras' web port (80)
+
+  The settings are made once: on a rerun a different value is not applied,
+  the installer says what to edit.
   --uninstall        list every file of camex on this host and the commands
                      to remove them; removes nothing itself
   -h, --help         this text
@@ -80,6 +91,13 @@ OLD_TIMER=/etc/systemd/system/camex-nginx-sync.timer
 
 DOMAIN=
 PORT=5800
+PORT_OPT=
+TRANSPORT=
+PSK_OPT=
+POOL=
+PASSWORD=
+HTTP_PORT=
+UPSTREAM_PORT=
 STEPS=8
 
 say() {
@@ -134,6 +152,38 @@ conf_server() {
              sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); d = $0
          }
          END { if (d != "") print d }' "${2:-$CONF}" 2>/dev/null
+}
+# read_args: what camex.service really runs with, from CAMEX_ARGS of
+# /etc/default/camex as the shell splits it there; its command line wins over
+# camex.conf (an older unit's arguments moved there may have --psk or --port)
+read_args() {
+    ARGS=$(sed -n 's/^CAMEX_ARGS="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$DEFAULTS" | tail -n 1)
+    # camex reads /etc/camex/camex.conf without --config
+    USED_CONF=$CONF; USED_KEY=; ARG_PSK=; ARG_PORT=; PROTO=udp
+    set -f
+    # shellcheck disable=SC2086
+    set -- $ARGS
+    set +f
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config|-f)       USED_CONF=${2-}; shift ;;
+            --config=*)        USED_CONF=${1#*=} ;;
+            --server-key-file|-S) USED_KEY=${2-}; shift ;;
+            --server-key-file=*)  USED_KEY=${1#*=} ;;
+            --psk|-k)          ARG_PSK=${2-}; shift ;;
+            --psk=*)           ARG_PSK=${1#*=} ;;
+            --port|-p)         ARG_PORT=${2-}; shift ;;
+            --port=*)          ARG_PORT=${1#*=} ;;
+            --transport|-R)    PROTO=${2-}; shift ;;
+            --transport=*)     PROTO=${1#*=} ;;
+            -R*)               PROTO=${1#-R} ;;
+            -f*)               USED_CONF=${1#-f} ;;
+            -S*)               USED_KEY=${1#-S} ;;
+            -k*)               ARG_PSK=${1#-k} ;;
+            -p*)               ARG_PORT=${1#-p} ;;
+        esac
+        shift
+    done
 }
 conf_domain() {
     conf_server domain | tr 'A-Z' 'a-z'
@@ -192,9 +242,21 @@ uninstall_list() {
 }
 
 while [ $# -gt 0 ]; do
+    # An option given with an empty value is a mistake, not "the default"
+    case "$1" in
+        --domain|--port|--transport|--psk|--pool|--password|--http-port|--upstream-port)
+            [ $# -ge 2 ] || usage
+            [ -n "$2" ] || die "$1: empty" ;;
+    esac
     case "$1" in
         --domain)    [ $# -ge 2 ] || usage; DOMAIN=$2; shift 2 ;;
-        --port)      [ $# -ge 2 ] || usage; PORT=$2; shift 2 ;;
+        --port)      [ $# -ge 2 ] || usage; PORT=$2; PORT_OPT=$2; shift 2 ;;
+        --transport) [ $# -ge 2 ] || usage; TRANSPORT=$2; shift 2 ;;
+        --psk)       [ $# -ge 2 ] || usage; PSK_OPT=$2; shift 2 ;;
+        --pool)      [ $# -ge 2 ] || usage; POOL=$2; shift 2 ;;
+        --password)  [ $# -ge 2 ] || usage; PASSWORD=$2; shift 2 ;;
+        --http-port) [ $# -ge 2 ] || usage; HTTP_PORT=$2; shift 2 ;;
+        --upstream-port) [ $# -ge 2 ] || usage; UPSTREAM_PORT=$2; shift 2 ;;
         --uninstall) uninstall_list ;;
         -h|--help)   usage ;;
         *)           echo "camex-install: unknown option $1" >&2; usage ;;
@@ -207,10 +269,71 @@ if [ -n "$DOMAIN" ] && { [ ${#DOMAIN} -gt 253 ] || ! printf '%s\n' "$DOMAIN" |
    grep -qxE '[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*'; }; then
     die "not a domain: $DOMAIN"
 fi
-case "$PORT" in
-    ''|*[!0-9]*) die "not a port: $PORT" ;;
+check_port() {   # check_port <option> <value>
+    case "$2" in
+        ''|*[!0-9]*) die "$1: not a port: $2" ;;
+    esac
+    [ "$2" -ge 1 ] && [ "$2" -le 65535 ] || die "$1: not a port: $2"
+}
+check_port --port "$PORT"
+[ -n "$HTTP_PORT" ] && check_port --http-port "$HTTP_PORT"
+[ -n "$UPSTREAM_PORT" ] && check_port --upstream-port "$UPSTREAM_PORT"
+case "${TRANSPORT:-udp}" in
+    udp|tcp) ;;
+    *) die "--transport: udp or tcp, not $TRANSPORT" ;;
 esac
-[ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || die "not a port: $PORT"
+# As camex reads them: hex:<64 hex digits>, base64:<44 characters>, both
+# 32 bytes and not all zero, or a passphrase; one line, below 128
+# characters, no blank at its ends (camex trims those off)
+if [ -n "$PSK_OPT" ]; then
+    case "$PSK_OPT" in
+        *"
+"*) die "--psk: one line" ;;
+        [[:space:]]*|*[[:space:]]) die "--psk: no blank at its start or end" ;;
+    esac
+    # In bytes, as camex counts it (a UTF-8 letter may be two or more)
+    [ "$(printf '%s' "$PSK_OPT" | LC_ALL=C wc -c)" -lt 128 ] || die "--psk: below 128 bytes"
+    case "$PSK_OPT" in
+        hex:*)
+            printf '%s\n' "${PSK_OPT#hex:}" | grep -qxE '[0-9a-fA-F]{64}' ||
+                die "--psk: hex: needs 64 hex digits"
+            printf '%s\n' "${PSK_OPT#hex:}" | grep -qxE '0{64}' &&
+                die "--psk: an all-zero key" ;;
+        base64:*)
+            b=${PSK_OPT#base64:}
+            printf '%s\n' "$b" | grep -qxE '[A-Za-z0-9+/]{43}=' ||
+                die "--psk: base64: needs 44 characters (32 bytes)"
+            raw=$(printf '%s' "$b" | base64 -d 2>/dev/null | od -An -tx1 | tr -d ' \n')
+            [ ${#raw} -eq 64 ] || die "--psk: base64: not 32 bytes"
+            [ "$raw" != "$(printf '%064d' 0)" ] || die "--psk: an all-zero key" ;;
+    esac
+fi
+case "$PASSWORD" in
+    *"
+"*) die "--password: one line" ;;
+esac
+# The pool as camex takes it (/8 to /30), its network and the server's
+# address, the first one: "<network>/<prefix> <first>/<prefix>"
+if [ -n "$POOL" ]; then
+    POOL_NET=$(printf '%s\n' "$POOL" | awk -F'[./]' 'NF == 5 {
+        for (i = 1; i <= 4; i++) if ($i !~ /^[0-9]+$/ || $i > 255) exit 1
+        p = $5; if (p !~ /^[0-9]+$/ || p < 8 || p > 30) exit 1
+        n = (($1 * 256 + $2) * 256 + $3) * 256 + $4
+        s = 2 ^ (32 - p); net = n - n % s; f = net + 1
+        printf "%d.%d.%d.%d/%d %d.%d.%d.%d/%d\n",
+            int(net / 16777216) % 256, int(net / 65536) % 256,
+            int(net / 256) % 256, net % 256, p,
+            int(f / 16777216) % 256, int(f / 65536) % 256,
+            int(f / 256) % 256, f % 256, p
+        ok = 1; exit 0 }
+        END { if (!ok) exit 1 }') ||
+        die "--pool: <network>/<prefix>, /8 to /30: $POOL"
+    POOL_FIRST=${POOL_NET#* }
+    POOL_NET=${POOL_NET% *}
+fi
+if [ -z "$DOMAIN" ] && [ -n "$PASSWORD$HTTP_PORT$UPSTREAM_PORT" ]; then
+    die "--password, --http-port and --upstream-port are for nginx: give --domain"
+fi
 
 steps
 
@@ -343,25 +466,42 @@ if [ -f "$CONF" ]; then
         say "added domain=$DOMAIN to [server]"
     fi
 else
-    PSK=hex:$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')
-    [ ${#PSK} -eq 68 ] || die "cannot make a pre-shared key"
+    if [ -n "$PSK_OPT" ]; then
+        PSK=$PSK_OPT
+    else
+        PSK=hex:$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')
+        [ ${#PSK} -eq 68 ] || die "cannot make a pre-shared key"
+    fi
     {
         echo "# camex server settings, made by install.sh; see"
         echo "# https://github.com/OpenIPC/camex/blob/master/examples/camex.conf"
         echo "[server]"
         echo "port=$PORT"
         echo "# The server's address in the tunnel and the clients' pool"
-        echo "local_cidr=10.200.0.1/24"
-        echo "auto_pool=10.200.0.0/24"
+        echo "local_cidr=${POOL_FIRST:-10.200.0.1/24}"
+        echo "auto_pool=${POOL_NET:-10.200.0.0/24}"
         echo "# Clients do not reach each other"
         echo "client_isolation=yes"
         echo "# The clients' pre-shared key"
-        echo "psk=$PSK"
+        printf 'psk=%s\n' "$PSK"
         [ -n "$DOMAIN" ] && echo "domain=$DOMAIN"
     } > "$TMP/camex.conf"
     (umask 077; cp "$TMP/camex.conf" "$CONF") || die "cannot write $CONF"
     chmod 600 "$CONF"
-    say "created: $CONF (port $PORT, a new psk)"
+    say "created: $CONF (port $PORT, pool ${POOL_NET:-10.200.0.0/24}," \
+        "${PSK_OPT:+the given psk}${PSK_OPT:-a new psk})"
+fi
+# Settings made once: a different value is said, not applied
+if [ -n "$PORT_OPT" ] && [ "$(conf_server port)" != "$PORT_OPT" ]; then
+    say "kept port= of $CONF, not --port $PORT_OPT: edit it there, then" \
+        "systemctl restart camex (the clients need the same)"
+fi
+if [ -n "$PSK_OPT" ] && [ "$(conf_server psk)" != "$PSK_OPT" ]; then
+    say "kept psk= of $CONF, not --psk: edit it there (the clients need the same)"
+fi
+if [ -n "$POOL" ] && [ "$(conf_server auto_pool)" != "$POOL_NET" ]; then
+    say "kept auto_pool= of $CONF, not --pool $POOL_NET: edit auto_pool= and" \
+        "local_cidr= there, then systemctl reload camex"
 fi
 
 # 6. The service ------------------------------------------------------------
@@ -372,7 +512,8 @@ if [ ! -f "$DEFAULTS" ]; then
            "$UNITS/camex.service" 2>/dev/null | sed 's/"$//' | tail -n 1)
     case "$args" in
         ''|*SERVER_PUBLIC_KEY*)
-            args="--mode server --config $CONF --server-key-file $KEY" ;;
+            args="--mode server --config $CONF --server-key-file $KEY"
+            [ "$TRANSPORT" = tcp ] && args="$args --transport tcp" ;;
     esac
     {
         echo "# The arguments of camex.service; systemctl restart camex after a change"
@@ -384,6 +525,15 @@ if [ ! -f "$DEFAULTS" ]; then
     say "created: $DEFAULTS"
 else
     say "kept: $DEFAULTS"
+fi
+# Also when an older unit's arguments were moved there
+if [ -n "$TRANSPORT" ]; then
+    read_args
+    have=udp
+    [ "$PROTO" = tcp ] && have=tcp
+    [ "$have" = "$TRANSPORT" ] ||
+        say "kept the server's transport $have, not --transport $TRANSPORT:" \
+            "edit CAMEX_ARGS in $DEFAULTS, then systemctl restart camex"
 fi
 fetch "$CAMEX_SRC/examples/camex.service" "$TMP/camex.service"
 NEW_UNIT=
@@ -419,6 +569,17 @@ else
     # (its server_name and the other files were checked in step 1)
     if [ -f "$NGINX_CONF" ]; then
         say "kept: $NGINX_CONF"
+        # Its port is what the links and --check use (#141): that of the
+        # first plain HTTP listen line (<port>, <address>:<port>, [::]:<port>;
+        # not ssl or quic)
+        NGINX_PORT=$(awk '/^[[:space:]]*listen[[:space:]]/ &&
+                          !/[[:space:]](ssl|quic)([[:space:];]|$)/ {
+                              v = $2; sub(/;.*$/, "", v); sub(/^.*:/, "", v)
+                              if (v ~ /^[0-9]+$/) { print v; exit }
+                          }' "$NGINX_CONF")
+        [ -z "$HTTP_PORT" ] || [ "$HTTP_PORT" = "${NGINX_PORT:-80}" ] ||
+            say "kept the listen lines of $NGINX_CONF, not --http-port $HTTP_PORT:" \
+                "edit them there, then run this again"
         grep -qiE "server_name[[:space:]]+$(echo "$DOMAIN" | sed 's/\./\\./g');" "$NGINX_CONF" ||
             say "WARNING: $NGINX_CONF has no server block for $DOMAIN itself:" \
                 "no start page there (see examples/nginx-camex.conf)"
@@ -430,7 +591,10 @@ else
     else
         fetch "$CAMEX_SRC/examples/nginx-camex.conf" "$TMP/nginx.conf"
         sed -i "s/openipc\.click/$DOMAIN/g" "$TMP/nginx.conf"
+        [ -n "$HTTP_PORT" ] &&
+            sed -i "s/^\([[:space:]]*listen[[:space:]]\{1,\}\)80;/\1$HTTP_PORT;/" "$TMP/nginx.conf"
         put "$TMP/nginx.conf" "$NGINX_CONF" 644
+        NGINX_PORT=${HTTP_PORT:-80}
     fi
     if [ ! -f "$MAP" ]; then
         printf 'map $host $camex_upstream {\n}\n' > "$MAP"
@@ -439,10 +603,18 @@ else
     # The start page's password: user camex, made once
     pw_new=
     if [ ! -s "$PASSWORD_FILE" ]; then
-        (umask 077; openssl rand -hex 10 > "$PASSWORD_FILE") ||
-            die "cannot make the password"
+        if [ -n "$PASSWORD" ]; then
+            (umask 077; printf '%s\n' "$PASSWORD" > "$PASSWORD_FILE")
+        else
+            (umask 077; openssl rand -hex 10 > "$PASSWORD_FILE")
+        fi || die "cannot make the password"
         pw_new=1
         say "created: $PASSWORD_FILE"
+    fi
+    if [ -n "$PASSWORD" ] && [ -z "$pw_new" ] &&
+       [ "$(head -n 1 "$PASSWORD_FILE")" != "$PASSWORD" ]; then
+        say "kept the start page's password, not --password: remove" \
+            "$PASSWORD_FILE and run this again to change it"
     fi
     # Its line in nginx's file; the other users there stay
     if [ -n "$pw_new" ] || ! grep -q '^camex:' "$HTPASSWD" 2>/dev/null; then
@@ -473,6 +645,27 @@ else
             *) sed -i "s|^Environment=INDEX=.*|Environment=INDEX=$index|" "$TMP/sync.service" ;;
         esac
     fi
+    # Its ports (#141): HTTP_PORT that of nginx's file (kept or just made);
+    # UPSTREAM_PORT made once: that of the installed service (none there:
+    # 80), else the option
+    for v in HTTP_PORT UPSTREAM_PORT; do
+        eval "opt=\$$v"
+        if [ $v = HTTP_PORT ]; then
+            val=${NGINX_PORT:-80}
+        elif [ -f "$UNITS/camex-nginx-sync.service" ]; then
+            val=$(sed -n "s/^Environment=$v=\([0-9]*\)\$/\1/p" \
+                  "$UNITS/camex-nginx-sync.service" | tail -n 1)
+            val=${val:-80}
+            [ -z "$opt" ] || [ "$opt" = "$val" ] ||
+                say "kept $v=$val of camex-nginx-sync.service, not $opt: edit it" \
+                    "in $UNITS/camex-nginx-sync.service"
+        else
+            val=${opt:-80}
+        fi
+        [ "$val" != 80 ] &&
+            sed -i "/^Environment=INDEX=/a Environment=$v=$val" "$TMP/sync.service"
+        [ "$v" = HTTP_PORT ] && WEB_PORT=$val
+    done
     put "$TMP/sync.service" "$UNITS/camex-nginx-sync.service" 644 || true
     # camex 3.10's timer: the service follows the servers itself now
     if [ -f "$OLD_TIMER" ]; then
@@ -501,26 +694,7 @@ fi
 step 8 "Done"
 # What camex really uses: its command line wins over camex.conf (an older
 # unit's arguments moved to /etc/default/camex may have --psk or --port)
-ARGS=$(sed -n 's/^CAMEX_ARGS="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$DEFAULTS" | tail -n 1)
-# camex reads /etc/camex/camex.conf without --config
-USED_CONF=$CONF; USED_KEY=; ARG_PSK=; ARG_PORT=
-set -f
-# shellcheck disable=SC2086
-set -- $ARGS
-set +f
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --config|-f)       USED_CONF=${2-}; shift ;;
-        --config=*)        USED_CONF=${1#*=} ;;
-        --server-key-file|-S) USED_KEY=${2-}; shift ;;
-        --server-key-file=*)  USED_KEY=${1#*=} ;;
-        --psk|-k)          ARG_PSK=${2-}; shift ;;
-        --psk=*)           ARG_PSK=${1#*=} ;;
-        --port|-p)         ARG_PORT=${2-}; shift ;;
-        --port=*)          ARG_PORT=${1#*=} ;;
-    esac
-    shift
-done
+read_args
 if [ "$USED_CONF" != "$CONF" ]; then
     say "WARNING: camex.service reads $USED_CONF, not $CONF" \
         "(CAMEX_ARGS in $DEFAULTS): the settings made here are not used"
@@ -540,14 +714,19 @@ PORT_NOW=${ARG_PORT:-$(conf_server port "$USED_CONF")}
 PSK_Q=$(printf '%s' "${PSK:-<psk= of $USED_CONF>}" | sed "s/'/'\\\\''/g")
 echo
 echo "camex server is running: systemctl status camex, camex --status"
-echo "Open UDP port ${PORT_NOW:-5800} in the firewall. A client connects with:"
+TOPT=
+[ "$PROTO" = tcp ] && TOPT=" --transport tcp" || PROTO=udp
+echo "Open $(echo $PROTO | tr a-z A-Z) port ${PORT_NOW:-5800} in the firewall${DOMAIN:+, and TCP ${WEB_PORT:-80} for nginx}."
+echo "A client connects with:"
 echo
-echo "  camex --mode client --auto --server-host <this host> --port ${PORT_NOW:-5800} \\"
-echo "      --server-pubkey $PUBKEY --psk '$PSK_Q'"
+echo "  camex --mode client --auto --server-host <this host> --port ${PORT_NOW:-5800}$TOPT \\"
+printf '%s\n' "      --server-pubkey $PUBKEY --psk '$PSK_Q'"
 if [ -n "$DOMAIN" ]; then
+    WP=
+    [ "${WEB_PORT:-80}" != 80 ] && WP=":$WEB_PORT"
     echo
-    echo "Clients' web UIs: http://<client ID>.$DOMAIN/"
-    echo "Start page:       http://$DOMAIN/  (user camex, password $(cat "$PASSWORD_FILE"))"
+    echo "Clients' web UIs: http://<client ID>.$DOMAIN$WP/"
+    printf '%s\n' "Start page:       http://$DOMAIN$WP/  (user camex, password $(head -n 1 "$PASSWORD_FILE"))"
     echo "DNS records *.$DOMAIN and $DOMAIN must point to this host (docs/nginx.md)."
 fi
 echo

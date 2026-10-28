@@ -631,7 +631,7 @@ static void buf_kib(map_buf_t *b, unsigned long long v)
 
 /* One list of the page: a table of e[0..n), or a line saying it is empty */
 static void buf_list(map_buf_t *b, const char *cls, const map_entry_t *e,
-                     long n, const char *empty)
+                     long n, const char *empty, const char *port)
 {
     long i;
 
@@ -653,8 +653,8 @@ static void buf_list(map_buf_t *b, const char *cls, const map_entry_t *e,
          * in them */
         if (d->live) {
             buf_printf(b, "<tr class=\"dev\"><td class=\"lamp\"><span "
-                       "class=\"bulb\"></span></td><td><a href=\"//%s/\">",
-                       d->host);
+                       "class=\"bulb\"></span></td><td><a href=\"%s//%s%s/\">",
+                       port[0] != '\0' ? "http:" : "", d->host, port);
             buf_html(b, shown_name(d));
             buf_printf(b, "</a></td><td class=\"id\">%s</td><td "
                        "class=\"addr\">%s</td><td class=\"addr\">",
@@ -705,9 +705,12 @@ static void buf_list(map_buf_t *b, const char *cls, const map_entry_t *e,
     buf_printf(b, "</tbody>\n</table>\n</div>\n</div>\n");
 }
 
-char *nginx_index_format(const char *lines, const char *domain, FILE *warn,
-                         size_t *count)
+char *nginx_index_format(const char *lines, const char *domain,
+                         int http_port, FILE *warn, size_t *count)
 {
+    /* The links' port: nginx's, when it is not HTTP's own (#141). Then
+     * the links say http: the port is that of HTTP, not of HTTPS */
+    char port[8] = "";
     map_entry_t *e = NULL, *conf = NULL, *autos = NULL;
     size_t dlen = domain != NULL ? strlen(domain) : 0U;
     map_buf_t out = { NULL, 0U, 0U, 0 };
@@ -896,9 +899,13 @@ char *nginx_index_format(const char *lines, const char *domain, FILE *warn,
     }
     buf_printf(&out, "</label><label for=\"tab-auto\">Auto <b>%ld</b>"
                "</label></div>\n", nauto);
+    if (http_port > 0 && http_port != 80 && http_port <= 65535) {
+        snprintf(port, sizeof(port), ":%d", http_port);
+    }
     buf_list(&out, "list-conf", conf, nconf,
-             "No [client ID] blocks in the server's file");
-    buf_list(&out, "list-auto", autos, nauto, "No auto devices online");
+             "No [client ID] blocks in the server's file", port);
+    buf_list(&out, "list-auto", autos, nauto, "No auto devices online",
+             port);
     buf_printf(&out, "</div>\n<div class=\"foot\">Camex &middot; OpenIPC "
                "&middot; MIT License</div>\n"
                /* Only remembers the chosen tab; the page works without */

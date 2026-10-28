@@ -21,7 +21,10 @@ UPSTREAM_PORT_SET=${UPSTREAM_PORT+set}
 DEFAULT_SET=${DEFAULT+set}
 CONTROL_SET=${CONTROL+set}
 MAP_SET=${MAP+set}
+HTTP_PORT_SET=${HTTP_PORT+set}
 UPSTREAM_PORT=${UPSTREAM_PORT:-80}
+# nginx's port: in the start page's links and what --check asks (#141)
+HTTP_PORT=${HTTP_PORT:-80}
 DEFAULT=${DEFAULT-}
 CONTROL=${CONTROL-}
 MAP=${MAP:-/etc/nginx/camex-map.conf}
@@ -200,6 +203,8 @@ index_build() {
     fi
     set -- --status --format nginx-index
     [ -n "$DOMAIN" ] && set -- "$@" --domain "$DOMAIN"
+    # (camex before 3.12.0 has no --http-port: only when it is needed)
+    [ "$HTTP_PORT" != 80 ] && set -- "$@" --http-port "$HTTP_PORT"
     [ -n "$CONTROL" ] && set -- "$@" --control "$CONTROL"
     if ! quiet_repeats "$MAP.warnings-index" "$CAMEX" "$@" > "$itmp" 9>&-; then
         rm -f "$itmp"
@@ -325,15 +330,15 @@ page_protected() {
         END { exit (seen && !bad) ? 0 : 1 }'
 }
 
-# What nginx on this host answers for host $1 on port 80, its HTTP status
-# on the last line; when port 80 only redirects to HTTPS (certbot's
+# What nginx on this host answers for host $1 on HTTP_PORT, its HTTP status
+# on the last line; when that port only redirects to HTTPS (certbot's
 # redirect, say), what port 443 answers. More arguments go to curl
 # (-u user:password)
 probe() {
     ph=$1
     shift
     pb=$(curl -s -m 5 -H "Host: $ph" -w '\n%{http_code}' "$@" \
-             http://127.0.0.1/ 2>/dev/null)
+             "http://127.0.0.1:$HTTP_PORT/" 2>/dev/null)
     case "${pb##*
 }" in
         301|302|307|308)
@@ -356,7 +361,7 @@ check_all() {
     u=/etc/systemd/system/camex-nginx-sync.service
     # Run by hand: the service's settings, for those not given here
     if [ -f "$u" ]; then
-        for v in INDEX DOMAIN DEFAULT UPSTREAM_PORT CONTROL MAP; do
+        for v in INDEX DOMAIN DEFAULT UPSTREAM_PORT HTTP_PORT CONTROL MAP; do
             eval "given=\${${v}_SET-}"
             [ -n "$given" ] && continue
             val=$(sed -n "s/^Environment=$v=//p" "$u" | tail -n 1)
@@ -444,7 +449,7 @@ check_all() {
         esac
     fi
 
-    # What nginx really does on port 80 of this host (the configuration
+    # What nginx really does on HTTP_PORT of this host (the configuration
     # read above may name the domain in another block or port)
     case "$dom" in
         ''|'(none)') ;;
@@ -464,7 +469,7 @@ check_all() {
                              "block for *.$dom" ;;
                 esac
             else
-                warn "no curl: nginx not asked on port 80"
+                warn "no curl: nginx not asked on port $HTTP_PORT"
             fi
             if [ -n "$INDEX" ] && command -v curl >/dev/null 2>&1; then
                 b=$(probe "$dom")
@@ -482,9 +487,12 @@ check_all() {
                             ok "nginx answers on $dom (the page itself not" \
                                "checked: no $PASSWORD_FILE)"
                         else
-                            # To curl in a file of its own, not in ps
+                            # To curl in a file of its own, not in ps; a
+                            # backslash and a quote escaped, as curl's
+                            # quoted values want
                             kf=$(mktemp) &&
-                                printf 'user = "camex:%s"\n' "$pw" > "$kf" &&
+                                printf 'user = "camex:%s"\n' \
+                                    "$(printf '%s' "$pw" | sed 's/[\\"]/\\&/g')" > "$kf" &&
                                 b=$(probe "$dom" -K "$kf") || b=
                             [ -n "${kf-}" ] && rm -f "$kf"
                             case "$b" in

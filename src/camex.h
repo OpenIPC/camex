@@ -71,6 +71,7 @@ typedef struct {
     uint8_t status_nginx_index;   /* --format nginx-index (#105) */
     char map_domain[254];      /* --domain */
     int map_port;              /* --upstream-port (default 80) */
+    int map_http_port;         /* --http-port: nginx's, in the page's links (#141) */
     char map_default[130];     /* --default */
     const char *status_wait;   /* --wait <token> (#130), NULL = none */
     int status_wait_timeout;   /* --wait-timeout, seconds (default 60) */

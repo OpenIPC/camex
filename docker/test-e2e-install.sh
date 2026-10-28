@@ -22,6 +22,9 @@
 #    names; a unit with its own CAMEX_ARGS keeps them in /etc/default/camex;
 #    camex 3.10's timer is removed.
 # 7. --uninstall lists the files and removes nothing.
+# 8. Every option on a new host (#141): TCP, port, pool, psk, password,
+#    nginx's port and the cameras' port; a backslash in the psk and the
+#    password; a rerun with others (and -Rtcp in the unit) changes none.
 #
 # Usage: ./test-e2e-install.sh
 #   CAMEX_BINARY=path/to/camex  binary to install (default: ../camex; it must
@@ -301,6 +304,125 @@ echo "$out" | grep -qx "  + /usr/local/bin/camex" && echo "$out" | grep -qx "  +
     echo "$out" | grep -qx "  rm /usr/local/bin/camex-nginx-sync" &&
     echo "$out" | grep -qx "  systemctl disable --now camex-nginx-sync.service camex.service"
 check $? "it lists the files, which are there, and the commands to remove them"
+
+echo "== 8. every option, on a new host; a rerun with others changes nothing (#141)"
+docker run -d --name "$P-opt" --hostname opt --network "$NET_NAME" --privileged \
+    --cgroupns=private --tmpfs /run --tmpfs /run/lock "$IMAGE" >/dev/null
+for _ in $(seq 1 30); do
+    case "$(docker exec "$P-opt" systemctl is-system-running 2>/dev/null)" in
+        running|degraded) break ;;
+    esac
+    sleep 1
+done
+o() {       # o <command> [<arg>...]: in the second server, the args as $1...
+    c=$1; shift
+    docker exec "$P-opt" sh -c "$c" sh "$@"
+}
+# New clients right after the server starts: no start hold (#81)
+o 'mkdir -p /etc/systemd/system/camex.service.d &&
+   printf "[Service]\nEnvironment=CAMEX_POOL_HOLD=0\n" > /etc/systemd/system/camex.service.d/test.conf'
+orun() {    # orun <args>: install.sh there
+    docker exec -e CAMEX_SRC=file:///opt/src -e CAMEX_RELEASE=file:///opt/release \
+        "$P-opt" sh -c 'cat /opt/src/install.sh | sh -s -- "$@"' sh "$@" 2>&1
+}
+# A backslash in the psk and the password: written and printed as given,
+# not as an echo of dash reads it; a quote in the password: --check opens
+# the start page with it
+OPSK='my long\cpass\nphrase'
+out=$(orun --domain opts.test --port 5900 --transport tcp --pool 10.60.1.7/22 \
+    --psk "$OPSK" --password 'pa:ss\c "word' --http-port 85 --upstream-port 8080)
+rc=$?
+echo "$out" | sed 's/^/      /'
+[ $rc -eq 0 ] && o 'grep -qx "local_cidr=10.60.0.1/22" /etc/camex/camex.conf &&
+    grep -qx "auto_pool=10.60.0.0/22" /etc/camex/camex.conf &&
+    grep -qxF "psk=$1" /etc/camex/camex.conf && grep -qx "port=5900" /etc/camex/camex.conf' "$OPSK"
+check $? "camex.conf: port, the pool's network with the server first, the given psk"
+o 'grep -q -- "--transport tcp" /etc/default/camex && camex --status | grep -q "tcp port 5900"'
+check $? "the server runs over TCP on the given port"
+echo "$out" | grep -qF -- "--port 5900 --transport tcp" && echo "$out" | grep -qF -- "--psk '$OPSK'" &&
+    echo "$out" | grep -qF -- '(user camex, password pa:ss\c "word)'
+check $? "the printed client command has the transport, the port and the psk"
+o 'grep -qE "^[[:space:]]*listen[[:space:]]+85;" /etc/nginx/conf.d/camex-nginx.conf &&
+   ! grep -qE "^[[:space:]]*listen[[:space:]]+80;" /etc/nginx/conf.d/camex-nginx.conf &&
+   grep -qx "Environment=HTTP_PORT=85" /etc/systemd/system/camex-nginx-sync.service &&
+   grep -qx "Environment=UPSTREAM_PORT=8080" /etc/systemd/system/camex-nginx-sync.service'
+check $? "nginx listens on 85; the sync service has HTTP_PORT and UPSTREAM_PORT"
+code() {    # code [<user:password>]: the start page's status on port 85
+    o "curl -s -o /dev/null -w '%{http_code}' -m 10 ${1:+-u '$1'} -H 'Host: opts.test' http://127.0.0.1:85/"
+}
+[ "$(code)" = 401 ] && [ "$(code 'camex:pa:ss\c "word')" = 200 ]
+check $? "the start page on port 85 opens with the given password"
+echo "$out" | grep -q "ok    nginx sends camex-check-[0-9]*\.opts\.test to camex" &&
+    echo "$out" | grep -q "ok    nginx serves the start page on opts.test" &&
+    echo "$out" | grep -q "Start page:       http://opts.test:85/"
+check $? "--check asks nginx on port 85; the addresses printed with :85"
+# A client over TCP: the map leads to its web port 8080, the page's link to
+# nginx's port 85
+OPUB=$(o "sed -n 's/^public_key=//p' /etc/camex/server.key")
+docker run -d --name "$P-ocli" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD -e OPSK="$OPSK" \
+    "$IMAGE" sh -c 'mkdir -p /dev/net && { [ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200; } &&
+     exec /opt/release/camex-x86_64 --mode client --auto --name CAM2 --server-host '"$P-opt"' \
+         --port 5900 --transport tcp --server-pubkey '"$OPUB"' --psk "$OPSK" \
+         --keepalive 2' >/dev/null
+for _ in $(seq 1 30); do
+    o 'grep -q "\"cam2\.opts\.test\" 10\.60\.0\.[0-9]*:8080;" /etc/nginx/camex-map.conf' && break
+    sleep 1
+done
+o 'grep -q "\"cam2\.opts\.test\" 10\.60\.0\.[0-9]*:8080;" /etc/nginx/camex-map.conf &&
+   grep -q "href=\"http://cam2.opts.test:85/\"" /var/lib/camex-nginx/index.html'
+check $? "a TCP client: the map leads to its port 8080, the start page links it on :85"
+# The short form of an older unit's arguments: still TCP (camex reads -Rtcp)
+o 'sed -i "s/--transport tcp/-Rtcp/" /etc/default/camex && grep -q -- "-Rtcp" /etc/default/camex'
+out=$(orun --domain opts.test --port 5901 --transport udp --pool 10.70.0.0/24 --psk other \
+    --password other --http-port 86 --upstream-port 9090)
+rc=$?
+[ $rc -eq 0 ] && echo "$out" | grep -q "kept port= of /etc/camex/camex.conf, not --port 5901" &&
+    echo "$out" | grep -q "kept psk= of /etc/camex/camex.conf, not --psk" &&
+    echo "$out" | grep -q "kept auto_pool= of /etc/camex/camex.conf, not --pool 10.70.0.0/24" &&
+    echo "$out" | grep -q "kept the server's transport tcp, not --transport udp" &&
+    echo "$out" | grep -q "kept the start page's password, not --password" &&
+    echo "$out" | grep -q "kept the listen lines of /etc/nginx/conf.d/camex-nginx.conf, not --http-port 86" &&
+    echo "$out" | grep -q "kept UPSTREAM_PORT=8080 of camex-nginx-sync.service, not 9090" &&
+    o 'grep -qx "Environment=UPSTREAM_PORT=8080" /etc/systemd/system/camex-nginx-sync.service &&
+       grep -qx "Environment=HTTP_PORT=85" /etc/systemd/system/camex-nginx-sync.service' &&
+    echo "$out" | grep -qF -- "--port 5900 --transport tcp" &&
+    o 'grep -qxF "psk=$1" /etc/camex/camex.conf && grep -qx "port=5900" /etc/camex/camex.conf' "$OPSK" &&
+    [ "$(code 'camex:pa:ss\c "word')" = 200 ]
+check $? "a rerun with other values changes none of them and says what to edit"
+# nginx's file made again: the sync service takes its port, not the old one;
+# the service gone: made again with the port of the kept file
+o 'rm /etc/nginx/conf.d/camex-nginx.conf'
+out=$(orun --domain opts.test --http-port 87)
+[ $? -eq 0 ] && o 'grep -qE "^[[:space:]]*listen[[:space:]]+87;" /etc/nginx/conf.d/camex-nginx.conf &&
+    grep -qx "Environment=HTTP_PORT=87" /etc/systemd/system/camex-nginx-sync.service' &&
+    echo "$out" | grep -q "Start page:       http://opts.test:87/"
+check $? "a new nginx file on --http-port 87: the sync service and the addresses follow it"
+o 'systemctl disable --now camex-nginx-sync.service >/dev/null 2>&1;
+   rm /etc/systemd/system/camex-nginx-sync.service'
+out=$(orun --domain opts.test)
+[ $? -eq 0 ] && o 'grep -qx "Environment=HTTP_PORT=87" /etc/systemd/system/camex-nginx-sync.service' &&
+    echo "$out" | grep -q "ok    nginx serves the start page on opts.test"
+check $? "the sync service made again takes port 87 of the kept nginx file"
+# listen with an address; CAMEX_ARGS with more blanks before tcp
+o 'sed -i "s/^\([[:space:]]*listen[[:space:]]*\)87;/\10.0.0.0:87;/" /etc/nginx/conf.d/camex-nginx.conf &&
+   grep -q "listen 0.0.0.0:87;" /etc/nginx/conf.d/camex-nginx.conf &&
+   sed -i "s/-Rtcp/--transport   tcp/" /etc/default/camex'
+out=$(orun --domain opts.test --transport tcp)
+[ $? -eq 0 ] && o 'grep -qx "Environment=HTTP_PORT=87" /etc/systemd/system/camex-nginx-sync.service' &&
+    ! echo "$out" | grep -q "kept the server's transport" &&
+    echo "$out" | grep -qF -- "--transport tcp"
+check $? "listen 0.0.0.0:87 is port 87; --transport   tcp in CAMEX_ARGS is TCP"
+out=$(orun --password x)
+[ $? -ne 0 ] && echo "$out" | grep -q "give --domain"
+check $? "--password without --domain is refused"
+bad=0
+for psk in "" " lead" "trail " "hex:$(printf '%064d' 0)" "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" \
+           "base64:short=" "$(printf 'x%.0s' $(seq 1 128))" "$(printf 'é%.0s' $(seq 1 64))"; do
+    out=$(orun --psk "$psk")
+    [ $? -ne 0 ] && echo "$out" | grep -q -- "--psk" || { bad=1; echo "      accepted: '$psk'"; }
+done
+[ $bad = 0 ]
+check $? "--psk: empty, blanks at its ends, all-zero keys, bad base64, 128 bytes (also in 64 letters) refused"
 
 if [ "$FAILS" -ne 0 ]; then
     echo "FAIL: $FAILS check(s) failed"
