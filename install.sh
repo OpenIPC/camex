@@ -267,11 +267,28 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# A domain in another script (мойдомен.рф, #151): its IDNA form (xn--...),
+# the one DNS, nginx and camex use; idn2 makes it (installed for it)
+DOMAIN_GIVEN=$DOMAIN
+case "$DOMAIN" in
+    *[![:print:]]*|*[!\ -~]*)
+        if ! command -v idn2 >/dev/null 2>&1; then
+            [ "$(id -u)" = 0 ] || die "run it as root (sudo sh)"
+            echo "camex-install: apt-get install idn2 (for --domain $DOMAIN)"
+            { DEBIAN_FRONTEND=noninteractive apt-get update -qq &&
+              DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends idn2
+            } </dev/null >/dev/null || die "apt-get install idn2 failed"
+        fi
+        idn=$(LC_ALL=C.UTF-8 idn2 --quiet -- "$DOMAIN" 2>/dev/null) && [ -n "$idn" ] ||
+            die "not a domain: $DOMAIN (idn2 cannot make its IDNA form)"
+        echo "camex-install: --domain $DOMAIN is $idn (its IDNA form, used everywhere)"
+        DOMAIN=$idn ;;
+esac
 DOMAIN=$(printf '%s' "$DOMAIN" | tr 'A-Z' 'a-z')
 # As camex checks it: labels of letters, digits and '-', 253 characters
 if [ -n "$DOMAIN" ] && { [ ${#DOMAIN} -gt 253 ] || ! printf '%s\n' "$DOMAIN" |
    grep -qxE '[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*'; }; then
-    die "not a domain: $DOMAIN"
+    die "not a domain: $DOMAIN_GIVEN"
 fi
 check_port() {   # check_port <option> <value>
     case "$2" in

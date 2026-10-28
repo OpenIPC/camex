@@ -16,7 +16,8 @@
 # 4. --domain: nginx in front of the client, domain= added to camex.conf,
 #    the start page behind a generated password.
 # 5. Run again without --domain: nginx's part stays and is kept up to date;
-#    an edit of nginx's file stays; another domain is refused.
+#    an edit of nginx's file stays; another domain is refused (also one in
+#    another script, in its IDNA form, #151).
 # 5a. The sync service follows a restarted server (#130).
 # 6. The layout of camex-nginx-setup.sh (3.9 and before) moves to the new
 #    names; a unit with its own CAMEX_ARGS keeps them in /etc/default/camex;
@@ -242,6 +243,16 @@ out=$(run --domain other.test)
 [ $? -ne 0 ] && echo "$out" | grep -q "has domain=$DOMAIN, not other.test" &&
     x "grep -qx 'domain=$DOMAIN' /etc/camex/camex.conf"
 check $? "another domain is refused, nothing changed"
+# A domain in another script (#151): taken in its IDNA form (idn2 installed
+# for it), upper case as lower; here it is another domain, so refused
+out=$(run --domain "МойДомен.РФ")
+[ $? -ne 0 ] && echo "$out" | grep -q "is xn--d1acklchcc.xn--p1ai (its IDNA form" &&
+    echo "$out" | grep -q "has domain=$DOMAIN, not xn--d1acklchcc.xn--p1ai" &&
+    x "grep -qx 'domain=$DOMAIN' /etc/camex/camex.conf"
+check $? "--domain МойДомен.РФ is xn--d1acklchcc.xn--p1ai; another domain, refused"
+out=$(run --domain "мой домен.рф")
+[ $? -ne 0 ] && echo "$out" | grep -q "not a domain: мой домен.рф"
+check $? "a domain in another script with a blank is refused as given"
 
 echo "== 5a. the service follows a restarted server (#130)"
 x 'systemctl restart camex'
