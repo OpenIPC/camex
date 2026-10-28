@@ -355,6 +355,19 @@ check $? "the server runs over TCP on the given port"
 echo "$out" | grep -qF -- "--port 5900 --transport tcp" && echo "$out" | grep -qF -- "--psk '$OPSK'" &&
     echo "$out" | grep -qF -- '(user camex, password pa:ss\c "word)'
 check $? "the printed client command has the transport, the port and the psk"
+# The Android link (#146): its fields decode to the server's values
+field() {   # field <link> <name>: the %XX-decoded value of <name>=
+    v=$(printf '%s\n' "${1#*#}" | tr '&' '\n' | sed -n "s/^$2=//p")
+    printf '%b' "$(printf '%s' "$v" | sed 's/%\([0-9A-F][0-9A-F]\)/\\x\1/g')"
+}
+OPUB=$(o "sed -n 's/^public_key=//p' /etc/camex/server.key")
+LINK=$(echo "$out" | sed -n 's|^  \(https://openipc.github.io/camex/connect/#.*\)$|\1|p')
+[ -n "$LINK" ] && [ "$(field "$LINK" h)" = opts.test ] && [ "$(field "$LINK" p)" = 5900 ] &&
+    [ "$(field "$LINK" t)" = tcp ] && [ "$(field "$LINK" k)" = "$OPUB" ] &&
+    [ "$(field "$LINK" s)" = "$OPSK" ] &&
+    ! printf '%s' "${LINK#*#}" | grep -q '[^A-Za-z0-9._~%=&-]' &&
+    echo "$out" | grep -qF -- "--server-host opts.test --port 5900 --transport tcp"
+check $? "the Android link: host, port, transport, key and psk of the server, %XX-encoded"
 o 'grep -qE "^[[:space:]]*listen[[:space:]]+85;" /etc/nginx/conf.d/camex-nginx.conf &&
    ! grep -qE "^[[:space:]]*listen[[:space:]]+80;" /etc/nginx/conf.d/camex-nginx.conf &&
    grep -qx "Environment=HTTP_PORT=85" /etc/systemd/system/camex-nginx-sync.service &&
@@ -371,7 +384,6 @@ echo "$out" | grep -q "ok    nginx sends camex-check-[0-9]*\.opts\.test to camex
 check $? "--check asks nginx on port 85; the addresses printed with :85"
 # A client over TCP: the map leads to its web port 8080, the page's link to
 # nginx's port 85
-OPUB=$(o "sed -n 's/^public_key=//p' /etc/camex/server.key")
 docker run -d --name "$P-ocli" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD -e OPSK="$OPSK" \
     "$IMAGE" sh -c 'mkdir -p /dev/net && { [ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200; } &&
      exec /opt/release/camex-x86_64 --mode client --auto --name CAM2 --server-host '"$P-opt"' \
@@ -438,6 +450,13 @@ o 'echo client_timeout=060 >> /etc/camex/camex.conf'
 out=$(orun --client-timeout 60)
 [ $? -eq 0 ] && ! echo "$out" | grep -q "kept client_timeout="
 check $? "client_timeout=060 and --client-timeout 60 are the same"
+out=$(orun --public-host 203.0.113.5)
+[ $? -eq 0 ] && echo "$out" | grep -qF -- "--server-host 203.0.113.5 --port 5900" &&
+    echo "$out" | grep -qF "https://openipc.github.io/camex/connect/#h=203.0.113.5&p=5900&t=tcp&"
+check $? "--public-host: the client command and the Android link have it"
+out=$(orun --public-host "a b")
+[ $? -ne 0 ] && echo "$out" | grep -q -- "--public-host"
+check $? "--public-host with a blank is refused"
 out=$(orun --password x)
 [ $? -ne 0 ] && echo "$out" | grep -q "give --domain"
 check $? "--password without --domain is refused"

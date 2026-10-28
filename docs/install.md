@@ -41,7 +41,9 @@ The steps, printed before it starts and numbered as it goes:
    `/etc/nginx/camex.htpasswd`), the sync script with its service;
    then `nginx -t`, a reload, one sync and `camex-nginx-sync --check`.
 8. Print what the clients need: the server's public key, the psk, a client
-   command line; with `--domain` the addresses and the start page's password.
+   command line and a link for the Android app
+   ([android.md](android.md#a-link-with-the-settings)); with `--domain` the
+   addresses and the start page's password.
 
 Options:
 
@@ -53,10 +55,14 @@ Options:
 | `--psk <key>`               | the clients' pre-shared key: `hex:<64 hex digits>`, `base64:<44 characters>` or a passphrase (a random `hex:` key)                                                                                                   |
 | `--pool <network>/<prefix>` | the clients' pool, `/8` to `/30`; the server gets its first address (`10.200.0.0/24`, the server `10.200.0.1`)                                                                                                       |
 | `--client-timeout <s>`      | `client_timeout=` in a new `camex.conf`: seconds of silence before a client is dropped and its lamp turns red, 60 to 120 (60)                                                                                        |
+| `--public-host <host>`      | the name or address the clients reach this server at, for the printed command and the Android link (the domain, else this host's public address); only printed, nothing kept                                         |
 | `--password <password>`     | with `--domain`: the start page's password, user `camex` (a random one)                                                                                                                                              |
 | `--http-port <port>`        | with `--domain`: the port nginx listens on for the cameras and the start page (80); the start page's links are then `http://<ID>.<domain>:<port>/`                                                                   |
 | `--upstream-port <port>`    | with `--domain`: the cameras' web port in their tunnel (80)                                                                                                                                                          |
 | `--uninstall`               | list every file of camex and the commands to remove them; removes nothing                                                                                                                                            |
+| `-h`, `--help`              | the options                                                                                                                                                                                                          |
+| Option                      | Meaning                                                                                                                                                                                                              |
+|-----------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `-h`, `--help`              | the options                                                                                                                                                                                                          |
 
 ```sh
