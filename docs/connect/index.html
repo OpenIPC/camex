@@ -66,11 +66,10 @@ var CAMEX = {
             try { v = decodeURIComponent(v); } catch (e) { v = null; }
             out.push([k, v]);
         }
-        // A repeated field: the last one, as the app takes it
-        return out.filter(function (x, i) {
-            for (var j = i + 1; j < out.length; j++) if (out[j][0] === x[0]) return false;
-            return true;
-        });
+        // A repeated field: the last one, as the app takes it (one pass)
+        var last = {};
+        for (var i = 0; i < out.length; i++) last[out[i][0]] = i;
+        return out.filter(function (x, i) { return last[x[0]] === i; });
     },
     // As ConnectLink.java takes them: false for a malformed value
     key: function (k) {
@@ -92,7 +91,8 @@ var CAMEX = {
                 if (v.indexOf('hex:') === 0) return /^[0-9a-fA-F]{64}$/.test(v.slice(4)) && !/^0{64}$/.test(v.slice(4));
                 if (v.indexOf('base64:') === 0) return CAMEX.key(v.slice(7));
                 return true;
-            case 'n': return /^[A-Za-z0-9._-]{1,31}$/.test(v);
+            case 'n': return !!v && v === v.replace(/^[\t\n\v\f\r ]+|[\t\n\v\f\r ]+$/g, '') &&
+                unescape(encodeURIComponent(v)).length <= 31 && !/[\u0000-\u001f\u007f\ud800-\udfff]/.test(v);
             case 'm': return n >= 576 && n <= 9000;
             case 'a': return n >= 0 && n <= 3600;
             case 'r': return v === '0' || v === '1';

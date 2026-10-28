@@ -61,12 +61,6 @@ Options:
 | `--upstream-port <port>`    | with `--domain`: the cameras' web port in their tunnel (80)                                                                                                                                                          |
 | `--uninstall`               | list every file of camex and the commands to remove them; removes nothing                                                                                                                                            |
 | `-h`, `--help`              | the options                                                                                                                                                                                                          |
-| Option                      | Meaning                                                                                                                                                                                                              |
-|-----------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `-h`, `--help`              | the options                                                                                                                                                                                                          |
-| Option                      | Meaning                                                                                                                                                                                                              |
-|-----------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `-h`, `--help`              | the options                                                                                                                                                                                                          |
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/OpenIPC/camex/master/install.sh | sudo sh -s -- \

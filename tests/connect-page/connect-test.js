@@ -40,6 +40,13 @@ d = open('#h=x&p=1x&p=5900&k=' + KEY + '&s=y');
 check(!d.getElementById('ok').hidden && /Port5900Server/.test(d.getElementById('fields').textContent) &&
       !/1x/.test(d.getElementById('open').getAttribute('href')),
       'a repeated field: the last one, the link not refused for the first');
+// Many repeated fields: one pass, not one scan per field
+const many = '#h=x&k=' + KEY + '&s=y&' + Array(50001).join('x=1&') + 'p=5800';
+const t0 = Date.now(); d = open(many);
+check(!d.getElementById('ok').hidden && Date.now() - t0 < 5000, '50000 repeated fields: read at once');
+d = open('#h=x&k=' + KEY + '&s=y&n=cam%401');
+check(!d.getElementById('ok').hidden && /--name 'cam@1'/.test(d.getElementById('cli-psk').textContent),
+      'a client name with @: taken, as camex takes it');
 // "#Intent;" in the psk stays inside the query
 d = open('#h=x&k=' + KEY + '&s=a%23Intent%3Bscheme%3Dhttp%3Bend');
 const b2 = d.getElementById('open').getAttribute('href');

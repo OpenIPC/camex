@@ -825,7 +825,11 @@ printf '%s\n' "      --server-pubkey $PUBKEY --psk '$PSK_Q'"
 case "$PUBKEY" in
     "<"*) ;;
     *)
-        if [ ${#HOST} -gt 63 ]; then
+        if [ -z "$HOST" ]; then
+            echo
+            echo "Android: no link, this server's name or address is not known here (no"
+            echo "domain, no public address): run this again with --public-host <host>."
+        elif [ ${#HOST} -gt 63 ]; then
             echo
             echo "Android: no link, the host $HOST is longer than the app takes (63):"
             echo "run this again with a shorter --public-host."
@@ -837,8 +841,7 @@ case "$PUBKEY" in
             echo
             echo "Android: open this link on the phone (Telegram, mail, anything);"
             echo "it has the psk, send it only to the device's owner:"
-            printf '%s\n' "  https://openipc.github.io/camex/connect/#h=$(urlenc "${HOST:-this-host}")&p=${PORT_NOW:-5800}&t=$PROTO&k=$(urlenc "$PUBKEY")&s=$(urlenc "$PSK")"
-            [ -n "$HOST" ] || echo "  (put this server's name or address after h=, or run again with --public-host)"
+            printf '%s\n' "  https://openipc.github.io/camex/connect/#h=$(urlenc "$HOST")&p=${PORT_NOW:-5800}&t=$PROTO&k=$(urlenc "$PUBKEY")&s=$(urlenc "$PSK")"
         fi ;;
 esac
 if [ -n "$DOMAIN" ]; then

@@ -57,7 +57,7 @@ the device's owner. A per-device `psk=` in the device's `[client ID]` block
 | `t`   | transport                    | `udp` or `tcp`                                                                                                                               |
 | `k`   | server public key            | 44 characters (`camex --genkey`), not all zero                                                                                               |
 | `s`   | pre-shared key               | as camex takes it (`hex:`, `base64:` or a passphrase), below 128 bytes, `%XX`-encoded as UTF-8; no control characters, nothing beyond U+FFFF |
-| `n`   | client name (optional)       | letters, digits, `.`, `_`, `-`; up to 31                                                                                                     |
+| `n`   | client name (optional)       | up to 31 bytes of UTF-8, no control characters                                                                                               |
 | `m`   | MTU (optional)               | 576–9000                                                                                                                                     |
 | `a`   | keepalive, s (optional)      | 0–3600                                                                                                                                       |
 | `r`   | route all traffic (optional) | `1` or `0`                                                                                                                                   |

@@ -103,7 +103,7 @@ public class ConnectLinkTest {
 
     @Test
     public void badFieldsRejectedOneByOne() {
-        ConnectLink c = ConnectLink.parse(WEB + "h=a%20b&p=70000&t=sctp&k=short&s=%20x&n=a/b"
+        ConnectLink c = ConnectLink.parse(WEB + "h=a%20b&p=70000&t=sctp&k=short&s=%20x&n=a%09b"
             + "&m=100&a=-1&r=yes&x=later");
         assertNull(c.host);
         assertNull(c.port);
@@ -148,6 +148,17 @@ public class ConnectLinkTest {
         assertEquals(Arrays.asList("s"), ConnectLink.parse(WEB + "s=base64:short").rejected);
         String hex = "hex:5756dc482cd211054279c9054dcf1783430954058c0f5a5c09c6842fb76e3fbd";
         assertEquals(hex, ConnectLink.parse(WEB + "s=" + hex.replace(":", "%3A")).psk);
+    }
+
+    @Test
+    public void clientNamesAsCamexTakesThem() {
+        assertEquals("cam@1", ConnectLink.parse(WEB + "n=cam%401").name);
+        assertEquals("камера", ConnectLink.parse(WEB + "n=%D0%BA%D0%B0%D0%BC%D0%B5%D1%80%D0%B0").name);
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < 16; i++) b.append("%D0%B9");   // 32 bytes
+        assertEquals(Arrays.asList("n"), ConnectLink.parse(WEB + "n=" + b).rejected);
+        assertEquals(Arrays.asList("n"), ConnectLink.parse(WEB + "n=a%09b").rejected);
+        assertEquals(Arrays.asList("n"), ConnectLink.parse(WEB + "n=%20a").rejected);
     }
 
     @Test

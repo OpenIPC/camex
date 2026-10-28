@@ -167,8 +167,15 @@ final class ConnectLink {
                 psk = v;
                 return true;
             case "n":
-                // The client ID (CAMEX_CLIENT_ID_LEN 32 with its NUL)
-                if (!v.matches("[A-Za-z0-9._-]{1,31}")) return false;
+                // The client ID as camex takes it: up to 31 bytes (its
+                // client_id[32]), no control character, no blank at its
+                // ends, nothing JNI would hand over in other bytes
+                if (v.isEmpty() || !v.equals(v.trim())
+                        || v.getBytes(StandardCharsets.UTF_8).length > 31) return false;
+                for (int i = 0; i < v.length(); i++) {
+                    char ch = v.charAt(i);
+                    if (ch < 0x20 || ch == 0x7f || Character.isSurrogate(ch)) return false;
+                }
                 name = v;
                 return true;
             case "m":
