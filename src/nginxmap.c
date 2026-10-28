@@ -780,7 +780,10 @@ char *nginx_index_format(const char *lines, const char *domain,
         "<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
         "<meta name=\"viewport\" content=\"width=device-width,"
         "initial-scale=1\">\n"
-        "<meta http-equiv=\"refresh\" content=\"30\">\n"
+        /* The script below refreshes the page in place (#142); without
+         * it, a reload every 30 s */
+        "<noscript><meta http-equiv=\"refresh\" content=\"30\"></noscript>\n"
+        "<meta name=\"camex-version\" content=\"" CAMEX_VERSION "\">\n"
         "<title>Camex Devices</title>\n"
         "<style>\n"
         ":root{--panel:#2c2119;--panel2:#3d2d22;--brass:#c9a24d;"
@@ -873,6 +876,9 @@ char *nginx_index_format(const char *lines, const char *domain,
         ".foot{margin-top:18px;font-family:'Courier New',monospace;"
         "font-size:11px;color:#5e4d36;letter-spacing:.2em;"
         "text-transform:uppercase;text-align:center}\n"
+        ".stale-mark{display:none;color:var(--red)}\n"
+        "body.stale .stale-mark{display:inline}\n"
+        "body.stale .panel{opacity:.7}\n"
         "@media (max-width:820px){.addr,.hs{display:none}}\n"
         "@media (max-width:560px){.conn,.id{display:none}.panel{padding:26px "
         "14px 18px}td,th{padding:10px 6px}td.tr,th{white-space:normal}"
@@ -885,6 +891,7 @@ char *nginx_index_format(const char *lines, const char *domain,
                "</span><span class=\"rivet bl\"></span><span class=\"rivet "
                "br\"></span>\n"
                "<div class=\"top\"><span class=\"plate\">Device registry"
+               "<span class=\"stale-mark\"> &middot; no connection</span>"
                "</span><span class=\"plate\">camex %s</span></div>\n",
                live, nconf, CAMEX_VERSION);
     /* The tabs: CSS only. Configured opens first when it has devices */
@@ -908,13 +915,71 @@ char *nginx_index_format(const char *lines, const char *domain,
              port);
     buf_printf(&out, "</div>\n<div class=\"foot\">Camex &middot; OpenIPC "
                "&middot; MIT License</div>\n"
-               /* Only remembers the chosen tab; the page works without */
+               /* Remembers the chosen tab, and every 5 s puts the page
+                * of now in place of this one (#142): the same file from
+                * nginx, its counts and lists swapped, the tab and the
+                * scroll kept. No answer: the data stays, marked "no
+                * connection". Another camex version: one full reload.
+                * The page works without it */
                "<script>\n"
-               "try{var t=localStorage.getItem('camex-tab'),r=t&&"
-               "document.getElementById(t);if(r)r.checked=true;"
-               "document.querySelectorAll('.tab').forEach(function(x){"
-               "x.addEventListener('change',function(){try{localStorage."
-               "setItem('camex-tab',x.id)}catch(e){}})})}catch(e){}\n"
+               "(function(){\n"
+               "var V=document.querySelector('meta[name=camex-version]')"
+               ".content;\n"
+               "function tab(){try{var t=localStorage.getItem('camex-tab'),"
+               "r=t&&document.getElementById(t);if(r)r.checked=true}"
+               "catch(e){}}\n"
+               "tab();\n"
+               "document.addEventListener('change',function(e){var x=e.target;"
+               "if(x.classList&&x.classList.contains('tab')){try{localStorage"
+               ".setItem('camex-tab',x.id)}catch(err){}}});\n"
+               "function stale(on){document.body.classList.toggle('stale',on)}"
+               "\n"
+               /* Links with nginx's HTTP port (#141) on a page opened
+                * over HTTPS: the HTTPS listener instead; a peer's link
+                * (its own web port, #119) stays */
+               "function tls(){if(location.protocol!=='https:')return;"
+               "[].forEach.call(document.querySelectorAll("
+               "'a[href^=\"http:\"]:not(.peer)'),"
+               "function(x){var m=x.getAttribute('href').match("
+               "/^http:\\/\\/([^\\/:]+):\\d+\\/$/);if(m)x.setAttribute('href',"
+               "'https://'+m[1]+'/')})}\n"
+               "tls();\n"
+               /* The page's scroll and each list's own stay where they
+                * were */
+               "function swap(d){var a=document.querySelector('.panel'),"
+               "b=d.querySelector('.panel'),s=document.querySelector('.sub'),"
+               "t=d.querySelector('.sub');if(!a||!b)return;"
+               "var c=document.querySelector('.tab:checked'),id=c&&c.id,"
+               "X=window.scrollX,Y=window.scrollY,x={};"
+               "[].forEach.call(document.querySelectorAll('.rack'),function(r){"
+               "x[r.parentNode.className]=r.scrollLeft});"
+               "a.innerHTML=b.innerHTML;if(s&&t)s.innerHTML=t.innerHTML;tls();"
+               "var n=id&&document.getElementById(id);if(n)n.checked=true;"
+               "[].forEach.call(document.querySelectorAll('.rack'),function(r){"
+               "var v=x[r.parentNode.className];if(v)r.scrollLeft=v});"
+               "try{window.scrollTo(X,Y)}catch(e){}}\n"
+               /* One request at a time, no answer in 4 s is "no
+                * connection" (that request's answer, late, is dropped);
+                * an answer to an older request is dropped;
+                * the same page as before changes nothing (a selection
+                * or the focus stays) */
+               "var last=null,busy=0,gen=0;\n"
+               "function tick(){if(busy||!window.fetch||!window.DOMParser)"
+               "return;busy=1;var g=++gen,k=window.AbortController?"
+               "new AbortController():null,w=setTimeout(function(){"
+               "if(k)k.abort();if(g===gen){gen++;busy=0;stale(true)}},4000),"
+               "o={cache:'no-store',credentials:'same-origin'};"
+               "if(k)o.signal=k.signal;"
+               "fetch(location.href,o).then(function(r){if(!r.ok)throw r.status;"
+               "return r.text()}).then(function(h){if(g!==gen)return;"
+               "if(h===last){stale(false);return}var d=new DOMParser()"
+               ".parseFromString(h,'text/html'),m=d.querySelector("
+               "'meta[name=camex-version]');if(!m||m.content!==V){"
+               "location.reload();return}last=h;swap(d);stale(false)})"
+               "['catch'](function(){if(g===gen)stale(true)})"
+               ".then(function(){clearTimeout(w);if(g===gen)busy=0})}\n"
+               "setInterval(tick,5000);\n"
+               "})();\n"
                "</script>\n</body>\n</html>\n");
     free(conf);
     free(autos);

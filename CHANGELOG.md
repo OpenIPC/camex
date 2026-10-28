@@ -6,6 +6,23 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.14.0 — 2026-10-28
+
+- The start page refreshes itself in place every 5 seconds (#142): its inline script fetches
+  the same file again and swaps the counts and both lists, keeping the chosen tab and the
+  scroll, so a device that goes off turns red without a reload. A failed fetch (the server
+  down, a new password) keeps the data and shows "no connection"; a page of another camex
+  version is loaded once in full. One request at a time: no answer in 4 seconds is "no
+  connection", an answer to an older request is dropped, and the same page as before changes
+  nothing (a selection or the focus stays). Over HTTPS a peer's link keeps its own port.
+  Without JavaScript it reloads every 30 seconds as before (`<meta refresh>` inside
+  `<noscript>`). No other file, library or CDN.
+- Tests: the page's version and `<noscript>` (unit); the script run in jsdom (`node:24-slim`)
+  against the page the sync wrote: lists swapped in place, the tab kept, "no connection" and
+  back, a reload for another version, one request at a time with a 4-second limit, the same
+  page rebuilding nothing, a late answer dropped, a peer's link kept over HTTPS (e2e).
+  `docs/nginx.md`.
+
 ## 3.13.0 — 2026-10-28
 
 - `client_timeout=` in `[server]` (#143): how long a silent client stays before its session

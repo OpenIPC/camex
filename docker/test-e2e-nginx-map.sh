@@ -17,6 +17,9 @@
 # 5. A socket left behind by a killed server does not stop the sync.
 # 6. A reload that failed (nginx not running) is tried again by the next
 #    sync, although the map did not change; the start page waits for it.
+# 11. The start page's script (#142), in jsdom: the lists swapped in place,
+#    the tab kept, "no connection" on a failed fetch, a reload for another
+#    camex version.
 # 10. --follow (#130): a sync as soon as a client comes or goes, none while
 #    nothing changes; a server too old for it is synced every 10 seconds; a
 #    server that starts during the wait ends it (#138).
@@ -523,6 +526,36 @@ docker exec "$P-srv" grep -q '"cam-g\.' /etc/nginx/camex-map.conf &&
     docker exec "$P-srv" grep -q "cannot report its changes: a sync every 10 seconds" /tmp/follow-old.log
 check $? "with a server too old for it: a sync every 10 seconds, said once"
 docker exec "$P-srv" sh -c 'pkill -f "camex-nginx-sync --follow"; true'
+
+echo "== 11. the start page refreshes itself in place (#142)"
+# The page as the sync wrote it, a next one (other counts, a marked list)
+# and one of another camex version; its script runs in jsdom with fetch
+# answering those
+JS_DIR="$BUILD_CTX/start-page"
+mkdir -p "$JS_DIR"
+cp "$REPO_DIR/tests/start-page/refresh-test.js" "$JS_DIR/"
+docker exec "$P-srv" cat "$INDEX" > "$JS_DIR/a.html"
+grep -q '<noscript><meta http-equiv="refresh" content="30"></noscript>' "$JS_DIR/a.html" &&
+    grep -q '<meta name="camex-version" content="' "$JS_DIR/a.html"
+check $? "the page has its version, and the 30-second reload only without JS"
+sed -e 's|<div class="tabs">|<div class="tabs" data-t="new">|' \
+    -e 's|<div class="list list-conf">|<div class="list list-conf" data-l="new">|' \
+    -e 's|<div class="list list-auto">|<div class="list list-auto" data-l="new">|' \
+    -e 's|<div class="sub">[0-9]* online|<div class="sub">99 online|' "$JS_DIR/a.html" > "$JS_DIR/b.html"
+sed 's|<meta name="camex-version" content="[^"]*"|<meta name="camex-version" content="0.0.0"|' \
+    "$JS_DIR/b.html" > "$JS_DIR/c.html"
+# (the files go in through stdin: a temporary directory need not be one
+# the Docker daemon sees)
+# (a failure, npm unreachable too, is the check's to report, not set -e's)
+rc=0
+out=$(tar -C "$JS_DIR" -cf - . | docker run --rm -i -e HOME=/tmp -e npm_config_cache=/tmp/npm \
+    node:24-slim sh -c 'mkdir -p /t && cd /t && tar -xf - &&
+        { npm install --silent --no-audit --no-fund jsdom@24 >/dev/null 2>&1 ||
+          { echo "FAIL: npm install jsdom@24"; exit 1; }; } &&
+        node refresh-test.js' 2>&1) || rc=$?
+echo "$out" | sed 's/^/      /'
+[ $rc -eq 0 ] && ! echo "$out" | grep -q "^FAIL"
+check $? "the page's script: swaps the lists in place, keeps the tab, marks no connection, reloads for a new version"
 
 if [ "$FAILS" -ne 0 ]; then
     echo "FAIL: $FAILS check(s) failed"
