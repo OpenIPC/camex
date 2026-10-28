@@ -935,31 +935,48 @@ char *nginx_index_format(const char *lines, const char *domain,
                "function stale(on){document.body.classList.toggle('stale',on)}"
                "\n"
                /* Links with nginx's HTTP port (#141) on a page opened
-                * over HTTPS: the HTTPS listener instead */
+                * over HTTPS: the HTTPS listener instead; a peer's link
+                * (its own web port, #119) stays */
                "function tls(){if(location.protocol!=='https:')return;"
-               "[].forEach.call(document.querySelectorAll('a[href^=\"http:\"]'),"
+               "[].forEach.call(document.querySelectorAll("
+               "'a[href^=\"http:\"]:not(.peer)'),"
                "function(x){var m=x.getAttribute('href').match("
                "/^http:\\/\\/([^\\/:]+):\\d+\\/$/);if(m)x.setAttribute('href',"
                "'https://'+m[1]+'/')})}\n"
                "tls();\n"
+               /* The page's scroll and each list's own stay where they
+                * were */
                "function swap(d){var a=document.querySelector('.panel'),"
                "b=d.querySelector('.panel'),s=document.querySelector('.sub'),"
                "t=d.querySelector('.sub');if(!a||!b)return;"
                "var c=document.querySelector('.tab:checked'),id=c&&c.id,"
-               "x=[].map.call(document.querySelectorAll('.rack'),function(r){"
-               "return r.scrollLeft});"
+               "X=window.scrollX,Y=window.scrollY,x={};"
+               "[].forEach.call(document.querySelectorAll('.rack'),function(r){"
+               "x[r.parentNode.className]=r.scrollLeft});"
                "a.innerHTML=b.innerHTML;if(s&&t)s.innerHTML=t.innerHTML;tls();"
                "var n=id&&document.getElementById(id);if(n)n.checked=true;"
-               "[].forEach.call(document.querySelectorAll('.rack'),function(r,"
-               "i){if(x[i])r.scrollLeft=x[i]})}\n"
-               "function tick(){if(!window.fetch||!window.DOMParser)return;"
-               "fetch(location.href,{cache:'no-store',credentials:"
-               "'same-origin'}).then(function(r){if(!r.ok)throw r.status;"
-               "return r.text()}).then(function(h){var d=new DOMParser()"
+               "[].forEach.call(document.querySelectorAll('.rack'),function(r){"
+               "var v=x[r.parentNode.className];if(v)r.scrollLeft=v});"
+               "try{window.scrollTo(X,Y)}catch(e){}}\n"
+               /* One request at a time, no answer in 4 s is "no
+                * connection"; an answer to an older request is dropped;
+                * the same page as before changes nothing (a selection
+                * or the focus stays) */
+               "var last=null,busy=0,gen=0;\n"
+               "function tick(){if(busy||!window.fetch||!window.DOMParser)"
+               "return;busy=1;var g=++gen,k=window.AbortController?"
+               "new AbortController():null,w=setTimeout(function(){"
+               "if(k)k.abort();if(g===gen){busy=0;stale(true)}},4000),"
+               "o={cache:'no-store',credentials:'same-origin'};"
+               "if(k)o.signal=k.signal;"
+               "fetch(location.href,o).then(function(r){if(!r.ok)throw r.status;"
+               "return r.text()}).then(function(h){if(g!==gen)return;"
+               "if(h===last){stale(false);return}var d=new DOMParser()"
                ".parseFromString(h,'text/html'),m=d.querySelector("
                "'meta[name=camex-version]');if(!m||m.content!==V){"
-               "location.reload();return}swap(d);stale(false)})"
-               "['catch'](function(){stale(true)})}\n"
+               "location.reload();return}last=h;swap(d);stale(false)})"
+               "['catch'](function(){if(g===gen)stale(true)})"
+               ".then(function(){clearTimeout(w);if(g===gen)busy=0})}\n"
                "setInterval(tick,5000);\n"
                "})();\n"
                "</script>\n</body>\n</html>\n");

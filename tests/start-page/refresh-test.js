@@ -11,14 +11,17 @@ const { JSDOM, VirtualConsole } = require('jsdom');
 const a = fs.readFileSync('a.html', 'utf8');
 const b = fs.readFileSync('b.html', 'utf8');
 const c = fs.readFileSync('c.html', 'utf8');   // another camex version
-let tick = null, reply = null, navigated = false, fails = 0;
+let tick = null, reply = null, navigated = false, fails = 0, fetches = 0, timeout = null;
 const vc = new VirtualConsole();
 vc.on('jsdomError', (e) => { if (/navigation/i.test(e.message)) navigated = true; });
 const dom = new JSDOM(a, {
     url: 'http://cams.test/', runScripts: 'dangerously', virtualConsole: vc,
     beforeParse(w) {
         w.setInterval = (f, ms) => { if (ms === 5000) tick = f; return 1; };
-        w.fetch = () => Promise.resolve(reply);
+        w.fetch = () => { fetches++; return typeof reply === 'function' ? reply() : Promise.resolve(reply); };
+        // The 4-second limit of a request: called by the test itself
+        const st = w.setTimeout.bind(w);
+        w.setTimeout = (f, ms) => { if (ms === 4000) { timeout = f; return 7; } return st(f, ms); };
     },
 });
 const d = dom.window.document;
@@ -43,14 +46,36 @@ const flush = () => new Promise((r) => setTimeout(r, 50));
     reply = { ok: true, text: () => Promise.resolve(b) };
     tick(); await flush();
     check(!d.body.classList.contains('stale'), 'an answer again: the mark goes');
+    // The same page again: nothing rebuilt (a selection, the focus stay)
+    d.querySelector('.tabs').setAttribute('data-k', 'kept');
+    tick(); await flush();
+    check(d.querySelector('.tabs').getAttribute('data-k') === 'kept', 'the same page again: the lists are not rebuilt');
+    // A request that hangs: no second one meanwhile; after 4 s "no
+    // connection", its late answer is dropped once a newer one went out
+    let hung = null;
+    reply = () => new Promise((res) => { hung = res; });
+    fetches = 0;
+    tick(); tick(); await flush();
+    check(fetches === 1, 'one request at a time');
+    timeout(); await flush();
+    check(d.body.classList.contains('stale'), 'no answer in 4 s: marked "no connection"');
+    reply = { ok: true, text: () => Promise.resolve(b.replace('99 online', '77 online')) };
+    tick(); await flush();
+    check(fetches === 2 && /77 online/.test(d.querySelector('.sub').textContent) && !d.body.classList.contains('stale'),
+          'after the limit a new request goes out, its answer is shown');
+    hung({ ok: true, text: () => Promise.resolve(b) }); await flush();
+    check(/77 online/.test(d.querySelector('.sub').textContent), 'the late answer of the older request is dropped');
     reply = { ok: true, text: () => Promise.resolve(c) };
     tick(); await flush();
     check(navigated, 'another camex version: a full reload');
     // A link with nginx's HTTP port, the page opened over HTTPS (#141)
-    const tlsPage = a.replace(/<\/tbody>/, '<tr><td><a href="http://cam9.cams.test:85/">x</a></td></tr></tbody>');
+    const tlsPage = a.replace(/<\/tbody>/, '<tr><td><a href="http://cam9.cams.test:85/">x</a></td>' +
+        '<td><a class="peer" href="http://192.0.2.10:8080/">p</a></td></tr></tbody>');
     const t = new JSDOM(tlsPage, { url: 'https://cams.test/', runScripts: 'dangerously',
         virtualConsole: new VirtualConsole(), beforeParse(w) { w.setInterval = () => 1; } });
     check(t.window.document.querySelector('a[href="https://cam9.cams.test/"]') !== null,
           'over HTTPS, a link with the HTTP port goes to https:// without it');
+    check(t.window.document.querySelector('a.peer[href="http://192.0.2.10:8080/"]') !== null,
+          'over HTTPS, a peer\'s link to its own web port stays');
     process.exit(fails ? 1 : 0);
 })();
