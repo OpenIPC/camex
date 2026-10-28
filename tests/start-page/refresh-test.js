@@ -65,6 +65,14 @@ const flush = () => new Promise((r) => setTimeout(r, 50));
           'after the limit a new request goes out, its answer is shown');
     hung({ ok: true, text: () => Promise.resolve(b) }); await flush();
     check(/77 online/.test(d.querySelector('.sub').textContent), 'the late answer of the older request is dropped');
+    // Past the limit and before the next tick: its late answer is dropped,
+    // "no connection" stays
+    reply = () => new Promise((res) => { hung = res; });
+    tick(); await flush();
+    timeout(); await flush();
+    hung({ ok: true, text: () => Promise.resolve(b.replace('99 online', '55 online')) }); await flush();
+    check(d.body.classList.contains('stale') && /77 online/.test(d.querySelector('.sub').textContent),
+          'an answer after the 4-second limit is dropped, "no connection" stays');
     reply = { ok: true, text: () => Promise.resolve(c) };
     tick(); await flush();
     check(navigated, 'another camex version: a full reload');

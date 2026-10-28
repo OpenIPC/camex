@@ -544,11 +544,13 @@ sed 's|<meta name="camex-version" content="[^"]*"|<meta name="camex-version" con
     "$JS_DIR/b.html" > "$JS_DIR/c.html"
 # (the files go in through stdin: a temporary directory need not be one
 # the Docker daemon sees)
+# (a failure, npm unreachable too, is the check's to report, not set -e's)
+rc=0
 out=$(tar -C "$JS_DIR" -cf - . | docker run --rm -i -e HOME=/tmp -e npm_config_cache=/tmp/npm \
     node:24-slim sh -c 'mkdir -p /t && cd /t && tar -xf - &&
-        npm install --silent --no-audit --no-fund jsdom@24 >/dev/null 2>&1 &&
-        node refresh-test.js' 2>&1)
-rc=$?
+        { npm install --silent --no-audit --no-fund jsdom@24 >/dev/null 2>&1 ||
+          { echo "FAIL: npm install jsdom@24"; exit 1; }; } &&
+        node refresh-test.js' 2>&1) || rc=$?
 echo "$out" | sed 's/^/      /'
 [ $rc -eq 0 ] && ! echo "$out" | grep -q "^FAIL"
 check $? "the page's script: swaps the lists in place, keeps the tab, marks no connection, reloads for a new version"

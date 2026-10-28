@@ -959,14 +959,15 @@ char *nginx_index_format(const char *lines, const char *domain,
                "var v=x[r.parentNode.className];if(v)r.scrollLeft=v});"
                "try{window.scrollTo(X,Y)}catch(e){}}\n"
                /* One request at a time, no answer in 4 s is "no
-                * connection"; an answer to an older request is dropped;
+                * connection" (that request's answer, late, is dropped);
+                * an answer to an older request is dropped;
                 * the same page as before changes nothing (a selection
                 * or the focus stays) */
                "var last=null,busy=0,gen=0;\n"
                "function tick(){if(busy||!window.fetch||!window.DOMParser)"
                "return;busy=1;var g=++gen,k=window.AbortController?"
                "new AbortController():null,w=setTimeout(function(){"
-               "if(k)k.abort();if(g===gen){busy=0;stale(true)}},4000),"
+               "if(k)k.abort();if(g===gen){gen++;busy=0;stale(true)}},4000),"
                "o={cache:'no-store',credentials:'same-origin'};"
                "if(k)o.signal=k.signal;"
                "fetch(location.href,o).then(function(r){if(!r.ok)throw r.status;"
