@@ -133,6 +133,10 @@ jobs:
         run: ./docker/test-e2e-nginx-map.sh
         if: matrix.target == 'x86_64'
 
+      - name: The page of a camex link in jsdom (issue #146)
+        run: ./docker/test-connect-page.sh
+        if: matrix.target == 'x86_64'
+
       - name: E2E test (a persistent TUN interface is left clean, issue #99)
         run: ./docker/test-e2e-persistent-tun.sh
         if: matrix.target == 'x86_64'
@@ -248,7 +252,8 @@ jobs:
           CAMEX_KEY_PASSWORD: ${{ secrets.CAMEX_KEY_PASSWORD }}
         run: |
           cd android
-          gradle assembleRelease
+          # The link parser's unit tests (#146) on the JVM, then the APK
+          gradle testReleaseUnitTest assembleRelease
           OUT=app/build/outputs/apk/release
           ls -lh "$OUT/"
           # Output is app-release.apk when signed, app-release-unsigned.apk otherwise.

@@ -7,20 +7,28 @@ package org.openipc.camex;
 
 import android.app.Activity;
 import android.content.SharedPreferences;
+import android.graphics.drawable.ColorDrawable;
+import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
 import android.text.TextUtils;
-import android.util.Base64;
+import android.view.View;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.RadioGroup;
 import android.widget.Switch;
+import android.widget.TextView;
 import android.widget.Toast;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Editable connection settings persisted to the "camex" SharedPreferences, read
- * back by {@link TunnelService} when building the camex argv.
+ * back by {@link TunnelService} when building the camex argv. Also opened by a
+ * camex link ({@link ConnectLink}, #146): its values are filled in and marked,
+ * nothing is saved or connected until the user taps Save.
  */
 public class SettingsActivity extends Activity {
 
@@ -31,6 +39,12 @@ public class SettingsActivity extends Activity {
     private static final int DEFAULT_MTU = 1500;
     private static final int DEFAULT_KEEPALIVE = 10;
     private static final int DEFAULT_TIMEOUT = 20;
+    // The overlay of a field a link changed (green, light)
+    private static final int LINK_MARK = 0x332E7D32;
+    private static final String STATE_NOTE = "link_note";
+    private static final String STATE_MARKED = "link_marked";
+    // The ids of the fields a link changed
+    private final List<Integer> marked = new ArrayList<>();
 
     private EditText hostInput, portInput, nameInput, pskInput;
     private EditText pubkeyInput;
@@ -66,7 +80,19 @@ public class SettingsActivity extends Activity {
 
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         // After a rotation the views restore what was typed: keep it
-        if (savedInstanceState == null) load(prefs);
+        if (savedInstanceState == null) {
+            load(prefs);
+            Uri data = getIntent().getData();
+            if (data != null) fromLink(data.toString());
+        } else {
+            // What a link changed stays shown after a rotation
+            CharSequence note = savedInstanceState.getCharSequence(STATE_NOTE);
+            if (note != null) showNote(note);
+            int[] marked = savedInstanceState.getIntArray(STATE_MARKED);
+            if (marked != null) {
+                for (int id : marked) mark(findViewById(id));
+            }
+        }
 
         Button save = findViewById(R.id.btn_save);
         save.setOnClickListener(view -> save(prefs));
@@ -87,6 +113,130 @@ public class SettingsActivity extends Activity {
         mtuInput.setText(String.valueOf(prefs.getInt("mtu", DEFAULT_MTU)));
         keepaliveInput.setText(String.valueOf(prefs.getInt("keepalive", DEFAULT_KEEPALIVE)));
         timeoutInput.setText(String.valueOf(prefs.getInt("server_timeout", DEFAULT_TIMEOUT)));
+    }
+
+    /*
+     * One settings screen (singleTask): a link opened while it is up comes
+     * here, so no older screen is left behind to save stale values over it
+     */
+    @Override
+    protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        Uri data = intent.getData();
+        if (data == null) return;
+        // A link with nothing usable leaves what is on the screen as it is
+        ConnectLink c = ConnectLink.parse(data.toString());
+        if (c == null || c.isEmpty()) {
+            fromLink(data.toString());   // only its note
+            if (!marked.isEmpty()) {
+                // The marks on the screen are an earlier link's, not this one's
+                TextView note = findViewById(R.id.text_link_note);
+                showNote(note.getText() + "\n" + getString(R.string.link_earlier));
+            }
+            return;
+        }
+        // The saved settings again, the marks of an earlier link gone: only
+        // this link's values over them
+        for (int id : marked) unmark(findViewById(id));
+        marked.clear();
+        load(getSharedPreferences(PREFS, MODE_PRIVATE));
+        fromLink(data.toString());
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle out) {
+        super.onSaveInstanceState(out);
+        TextView note = findViewById(R.id.text_link_note);
+        if (note.getVisibility() == View.VISIBLE) out.putCharSequence(STATE_NOTE, note.getText());
+        int[] ids = new int[marked.size()];
+        for (int i = 0; i < ids.length; i++) ids[i] = marked.get(i);
+        out.putIntArray(STATE_MARKED, ids);
+    }
+
+    /** A link's values over the saved ones: the changed fields marked. */
+    private void fromLink(String link) {
+        ConnectLink c = ConnectLink.parse(link);
+        if (c == null) {
+            showNote(getString(R.string.link_unknown));
+            return;
+        }
+        List<String> changed = new ArrayList<>();
+        set(hostInput, c.host, R.string.server_host, changed);
+        set(portInput, c.port == null ? null : String.valueOf(c.port), R.string.server_port, changed);
+        set(nameInput, c.name, R.string.client_name, changed);
+        set(pubkeyInput, c.pubkey, R.string.server_pubkey, changed);
+        set(pskInput, c.psk, R.string.psk, changed);
+        set(mtuInput, c.mtu == null ? null : String.valueOf(c.mtu), R.string.mtu, changed);
+        set(keepaliveInput, c.keepalive == null ? null : String.valueOf(c.keepalive),
+            R.string.keepalive, changed);
+        if (c.transport != null) {
+            int id = "tcp".equals(c.transport) ? R.id.btn_tcp : R.id.btn_udp;
+            if (transportGroup.getCheckedRadioButtonId() != id) {
+                transportGroup.check(id);
+                mark(findViewById(id));
+                changed.add(getString(R.string.transport));
+            }
+        }
+        if (c.fullTunnel != null && fullTunnelSwitch.isChecked() != c.fullTunnel) {
+            fullTunnelSwitch.setChecked(c.fullTunnel);
+            mark(fullTunnelSwitch);
+            changed.add(getString(R.string.full_tunnel));
+        }
+        StringBuilder note = new StringBuilder();
+        // Nothing came through (a cut link, every field malformed): not
+        // "the settings saved already"
+        note.append(c.isEmpty() ? getString(R.string.link_unknown)
+            : changed.isEmpty() ? getString(R.string.link_same)
+            : getString(R.string.link_changed, TextUtils.join(", ", changed)));
+        if (!c.rejected.isEmpty()) {
+            List<String> bad = new ArrayList<>();
+            for (String key : c.rejected) bad.add(label(key));
+            note.append('\n').append(getString(R.string.link_rejected,
+                TextUtils.join(", ", bad)));
+        }
+        showNote(note);
+    }
+
+    private void showNote(CharSequence text) {
+        TextView view = findViewById(R.id.text_link_note);
+        view.setText(text);
+        view.setVisibility(View.VISIBLE);
+    }
+
+    /** The name of a link's field, as the screen shows it. */
+    private String label(String key) {
+        switch (key) {
+            case "h": return getString(R.string.server_host);
+            case "p": return getString(R.string.server_port);
+            case "t": return getString(R.string.transport);
+            case "k": return getString(R.string.server_pubkey);
+            case "s": return getString(R.string.psk);
+            case "n": return getString(R.string.client_name);
+            case "m": return getString(R.string.mtu);
+            case "a": return getString(R.string.keepalive);
+            case "r": return getString(R.string.full_tunnel);
+            default: return key;
+        }
+    }
+
+    // A field a link changed: a light overlay of its own (the theme's tints
+    // stay as they are, so removing it leaves the field as it was)
+    private void mark(View field) {
+        if (field == null) return;
+        field.setForeground(new ColorDrawable(LINK_MARK));
+        if (!marked.contains(field.getId())) marked.add(field.getId());
+    }
+
+    private void unmark(View field) {
+        if (field != null) field.setForeground(null);
+    }
+
+    private void set(EditText input, String value, int label, List<String> changed) {
+        if (value == null || value.equals(text(input))) return;
+        input.setText(value);
+        mark(input);
+        changed.add(getString(label));
     }
 
     private void save(SharedPreferences prefs) {
@@ -157,7 +307,10 @@ public class SettingsActivity extends Activity {
             .putInt("server_timeout", timeout)
             .apply();
 
-        Toast.makeText(this, R.string.save, Toast.LENGTH_SHORT).show();
+        // From a link the screen opened by itself, even with the tunnel up
+        // (TunnelService reads the settings when it starts)
+        Toast.makeText(this, getIntent().getData() != null ? R.string.saved_next_start
+            : R.string.save, Toast.LENGTH_LONG).show();
         finish();
     }
 
@@ -177,12 +330,6 @@ public class SettingsActivity extends Activity {
 
     /** A server public key: base64 of exactly 32 bytes (camex --genkey). */
     static boolean isServerPubkey(String key) {
-        // Exactly what camex accepts: 43 base64 characters and '='
-        if (key == null || !key.matches("[A-Za-z0-9+/]{43}=")) return false;
-        try {
-            return Base64.decode(key, Base64.NO_WRAP).length == 32;
-        } catch (IllegalArgumentException e) {
-            return false;
-        }
+        return ConnectLink.isServerPubkey(key);
     }
 }

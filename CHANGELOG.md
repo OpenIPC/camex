@@ -6,6 +6,29 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.15.0 — 2026-10-28
+
+- A link that opens the Android app with a server's settings (#146). `install.sh` prints it
+  next to the client's command line:
+  `https://openipc.github.io/camex/connect/#h=<host>&p=<port>&t=<udp|tcp>&k=<server public key>&s=<psk>`
+  (optional `n` client name, `m` MTU, `a` keepalive, `r` route all traffic). The settings are
+  after `#`: the browser keeps them, they reach no server. The link has the psk: it is a
+  password.
+  - The app opens it (and `camex://connect?…`) on its settings screen: the link's values
+    filled in, the changed fields marked, malformed ones named and left out. Nothing is saved
+    or connected until Save.
+  - `docs/connect/index.html` on GitHub Pages: when the link opens in a browser, the server's
+    settings (not the psk), "Open in Camex", the APK, and the desktop client's command. It
+    loads nothing and sends no referrer.
+  - An App Link: `https://openipc.github.io/.well-known/assetlinks.json` (the content of
+    `android/assetlinks.json`, OpenIPC/openipc.github.io#26) names the release key, so the
+    link opens the app directly; an APK signed with another key gets the page.
+- `install.sh --public-host <name|address>`: the host in the printed command and link (else
+  the domain, else this host's public address, else a placeholder).
+- Tests: the link parser on the JVM (`gradle testReleaseUnitTest` in CI), the page in jsdom
+  (`docker/test-connect-page.sh`), the printed link decoded in `test-e2e-install.sh`.
+  `docs/android.md`, `docs/install.md`.
+
 ## 3.14.3 — 2026-10-28
 
 - A handshake dropped because its timestamp is not newer than the latest accepted for a

@@ -78,4 +78,6 @@ dependencies {
     // Platform classes only (#55): no AppCompat, Material or AndroidX core.
     // @Keep for the method native code calls; R8's default rules honour it.
     implementation("androidx.annotation:annotation:1.7.1")
+    // The link parser on the JVM (#146)
+    testImplementation("junit:junit:4.13.2")
 }

@@ -71,6 +71,8 @@ camex --mode client --auto --name 0203A104B5AE \
 ### Android
 
 应用以自动模式连接：地址、路由和 MTU 由服务器下发（[docs/android.md](docs/android.md)）。
+`install.sh` 会打印一个带有服务器设置的链接：在手机上打开后，应用会把这些设置填入设置界面，点击 Save
+后才会生效（[docs/android.md](docs/android.md#a-link-with-the-settings)）。
 
 | 主界面                                  | 设置                                      |
 |-----------------------------------------|-------------------------------------------|

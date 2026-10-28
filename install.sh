@@ -47,6 +47,9 @@ Usage: install.sh [--domain <domain>] [options]
                           address (10.200.0.0/24)
   --client-timeout <s>    seconds of silence before a client is dropped,
                           60 to 120 (60)
+  --public-host <host>    the name or address clients reach this server at,
+                          for the printed command and Android link (the
+                          domain, else this host's public address)
   With --domain:
   --password <password>   the start page's password, user camex (a random one)
   --http-port <port>      the port nginx listens on (80)
@@ -98,6 +101,7 @@ TRANSPORT=
 PSK_OPT=
 POOL=
 CLIENT_TIMEOUT=
+PUBLIC_HOST=
 PASSWORD=
 HTTP_PORT=
 UPSTREAM_PORT=
@@ -155,6 +159,38 @@ conf_server() {
              sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); d = $0
          }
          END { if (d != "") print d }' "${2:-$CONF}" 2>/dev/null
+}
+# urlenc <text>: %XX for every byte but letters, digits and -._~ (the
+# Android link's fields, #146)
+urlenc() {
+    printf '%s' "$1" | od -An -v -tx1 | tr -s ' ' '\n' | grep . | while read -r h; do
+        case $h in
+            3[0-9]|4[1-9a-f]|5[0-9a]|6[1-9a-f]|7[0-9a]|2d|2e|5f|7e)
+                # shellcheck disable=SC2059
+                printf "\\$(printf '%03o' "0x$h")" ;;
+            *) printf '%%%s' "$h" | tr 'a-f' 'A-F' ;;
+        esac
+    done
+}
+# link_psk_ok <psk>: the Android app takes it from a link (ConnectLink: UTF-8,
+# no control character, nothing beyond U+FFFF, i.e. no 4-byte UTF-8)
+link_psk_ok() {
+    # (iconv is libc-bin's; without it the UTF-8 check is left out)
+    { ! command -v iconv >/dev/null 2>&1 ||
+        printf '%s' "$1" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; } &&
+        ! printf '%s' "$1" | LC_ALL=C grep -q "$(printf '[\001-\037\177\360-\377]')"
+}
+# public_addr: this host's own address towards the internet when it is a
+# public one (not behind NAT); none else
+public_addr() {
+    a=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1)
+    case "$a" in
+        # private, shared (CGNAT), loopback, link-local, documentation,
+        # benchmarking, multicast and reserved: none is reachable from outside
+        ''|0.*|10.*|127.*|169.254.*|192.168.*|100.6[4-9].*|100.[7-9][0-9].*|100.1[01][0-9].*|100.12[0-7].*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) ;;
+        192.0.0.*|192.0.2.*|198.51.100.*|203.0.113.*|198.1[89].*|22[4-9].*|2[3-5][0-9].*) ;;
+        *) printf '%s\n' "$a" ;;
+    esac
 }
 # read_args: what camex.service really runs with, from CAMEX_ARGS of
 # /etc/default/camex as the shell splits it there; its command line wins over
@@ -247,7 +283,7 @@ uninstall_list() {
 while [ $# -gt 0 ]; do
     # An option given with an empty value is a mistake, not "the default"
     case "$1" in
-        --domain|--port|--transport|--psk|--pool|--password|--http-port|--upstream-port|--client-timeout)
+        --domain|--port|--transport|--psk|--pool|--password|--http-port|--upstream-port|--client-timeout|--public-host)
             [ $# -ge 2 ] || usage
             [ -n "$2" ] || die "$1: empty" ;;
     esac
@@ -258,6 +294,7 @@ while [ $# -gt 0 ]; do
         --psk)       [ $# -ge 2 ] || usage; PSK_OPT=$2; shift 2 ;;
         --pool)      [ $# -ge 2 ] || usage; POOL=$2; shift 2 ;;
         --client-timeout) [ $# -ge 2 ] || usage; CLIENT_TIMEOUT=$2; shift 2 ;;
+        --public-host) [ $# -ge 2 ] || usage; PUBLIC_HOST=$2; shift 2 ;;
         --password)  [ $# -ge 2 ] || usage; PASSWORD=$2; shift 2 ;;
         --http-port) [ $# -ge 2 ] || usage; HTTP_PORT=$2; shift 2 ;;
         --upstream-port) [ $# -ge 2 ] || usage; UPSTREAM_PORT=$2; shift 2 ;;
@@ -346,6 +383,13 @@ if [ -n "$PSK_OPT" ]; then
             [ ${#raw} -eq 64 ] || die "--psk: base64: not 32 bytes"
             [ "$raw" != "$(printf '%064d' 0)" ] || die "--psk: an all-zero key" ;;
     esac
+fi
+# A host name or an IPv4 address (camex resolves IPv4 only), in camex's
+# server_host[64]
+if [ -n "$PUBLIC_HOST" ]; then
+    [ ${#PUBLIC_HOST} -le 63 ] && printf '%s\n' "$PUBLIC_HOST" |
+        grep -qxE '[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*' ||
+        die "--public-host: a host name or an IPv4 address, up to 63 characters"
 fi
 case "$PASSWORD" in
     *"
@@ -767,10 +811,39 @@ echo "camex server is running: systemctl status camex, camex --status"
 TOPT=
 [ "$PROTO" = tcp ] && TOPT=" --transport tcp" || PROTO=udp
 echo "Open $(echo $PROTO | tr a-z A-Z) port ${PORT_NOW:-5800} in the firewall${DOMAIN:+, and TCP ${WEB_PORT:-80} for nginx}."
+# Where the clients reach this server: --public-host, the domain of the
+# camex.conf the service reads (its DNS points here; a rerun keeps it), this
+# host's public address
+HOST=${PUBLIC_HOST:-$(conf_server domain "$USED_CONF" | tr 'A-Z' 'a-z')}
+HOST=${HOST:-$(public_addr)}
 echo "A client connects with:"
 echo
-echo "  camex --mode client --auto --server-host <this host> --port ${PORT_NOW:-5800}$TOPT \\"
+echo "  camex --mode client --auto --server-host ${HOST:-<this host>} --port ${PORT_NOW:-5800}$TOPT \\"
 printf '%s\n' "      --server-pubkey $PUBKEY --psk '$PSK_Q'"
+# The same settings for the Android app (#146): the fields after '#' never
+# leave the phone's browser; the psk is in it, so it is a password
+case "$PUBKEY" in
+    "<"*) ;;
+    *)
+        if [ -z "$HOST" ]; then
+            echo
+            echo "Android: no link, this server's name or address is not known here (no"
+            echo "domain, no public address): run this again with --public-host <host>."
+        elif [ ${#HOST} -gt 63 ]; then
+            echo
+            echo "Android: no link, the host $HOST is longer than the app takes (63):"
+            echo "run this again with a shorter --public-host."
+        elif [ -n "$PSK" ] && ! link_psk_ok "$PSK"; then
+            echo
+            echo "Android: no link, the psk has a character the app does not take (a"
+            echo "control character or one beyond U+FFFF): type it in the app's settings."
+        elif [ -n "$PSK" ]; then
+            echo
+            echo "Android: open this link on the phone (Telegram, mail, anything);"
+            echo "it has the psk, send it only to the device's owner:"
+            printf '%s\n' "  https://openipc.github.io/camex/connect/#h=$(urlenc "$HOST")&p=${PORT_NOW:-5800}&t=$PROTO&k=$(urlenc "$PUBKEY")&s=$(urlenc "$PSK")"
+        fi ;;
+esac
 if [ -n "$DOMAIN" ]; then
     WP=
     [ "${WEB_PORT:-80}" != 80 ] && WP=":$WEB_PORT"
