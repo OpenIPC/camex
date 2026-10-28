@@ -326,10 +326,11 @@ orun() {    # orun <args>: install.sh there
         "$P-opt" sh -c 'cat /opt/src/install.sh | sh -s -- "$@"' sh "$@" 2>&1
 }
 # A backslash in the psk and the password: written and printed as given,
-# not as an echo of dash reads it
+# not as an echo of dash reads it; a quote in the password: --check opens
+# the start page with it
 OPSK='my long\cpass\nphrase'
 out=$(orun --domain opts.test --port 5900 --transport tcp --pool 10.60.1.7/22 \
-    --psk "$OPSK" --password 'pa:ss\c word' --http-port 85 --upstream-port 8080)
+    --psk "$OPSK" --password 'pa:ss\c "word' --http-port 85 --upstream-port 8080)
 rc=$?
 echo "$out" | sed 's/^/      /'
 [ $rc -eq 0 ] && o 'grep -qx "local_cidr=10.60.0.1/22" /etc/camex/camex.conf &&
@@ -339,7 +340,7 @@ check $? "camex.conf: port, the pool's network with the server first, the given 
 o 'grep -q -- "--transport tcp" /etc/default/camex && camex --status | grep -q "tcp port 5900"'
 check $? "the server runs over TCP on the given port"
 echo "$out" | grep -qF -- "--port 5900 --transport tcp" && echo "$out" | grep -qF -- "--psk '$OPSK'" &&
-    echo "$out" | grep -qF -- "(user camex, password pa:ss\c word)"
+    echo "$out" | grep -qF -- '(user camex, password pa:ss\c "word)'
 check $? "the printed client command has the transport, the port and the psk"
 o 'grep -qE "^[[:space:]]*listen[[:space:]]+85;" /etc/nginx/conf.d/camex-nginx.conf &&
    ! grep -qE "^[[:space:]]*listen[[:space:]]+80;" /etc/nginx/conf.d/camex-nginx.conf &&
@@ -349,9 +350,10 @@ check $? "nginx listens on 85; the sync service has HTTP_PORT and UPSTREAM_PORT"
 code() {    # code [<user:password>]: the start page's status on port 85
     o "curl -s -o /dev/null -w '%{http_code}' -m 10 ${1:+-u '$1'} -H 'Host: opts.test' http://127.0.0.1:85/"
 }
-[ "$(code)" = 401 ] && [ "$(code 'camex:pa:ss\c word')" = 200 ]
+[ "$(code)" = 401 ] && [ "$(code 'camex:pa:ss\c "word')" = 200 ]
 check $? "the start page on port 85 opens with the given password"
 echo "$out" | grep -q "ok    nginx sends camex-check-[0-9]*\.opts\.test to camex" &&
+    echo "$out" | grep -q "ok    nginx serves the start page on opts.test" &&
     echo "$out" | grep -q "Start page:       http://opts.test:85/"
 check $? "--check asks nginx on port 85; the addresses printed with :85"
 # A client over TCP: the map leads to its web port 8080, the page's link to
@@ -385,8 +387,22 @@ rc=$?
        grep -qx "Environment=HTTP_PORT=85" /etc/systemd/system/camex-nginx-sync.service' &&
     echo "$out" | grep -qF -- "--port 5900 --transport tcp" &&
     o 'grep -qxF "psk=$1" /etc/camex/camex.conf && grep -qx "port=5900" /etc/camex/camex.conf' "$OPSK" &&
-    [ "$(code 'camex:pa:ss\c word')" = 200 ]
+    [ "$(code 'camex:pa:ss\c "word')" = 200 ]
 check $? "a rerun with other values changes none of them and says what to edit"
+# nginx's file made again: the sync service takes its port, not the old one;
+# the service gone: made again with the port of the kept file
+o 'rm /etc/nginx/conf.d/camex-nginx.conf'
+out=$(orun --domain opts.test --http-port 87)
+[ $? -eq 0 ] && o 'grep -qE "^[[:space:]]*listen[[:space:]]+87;" /etc/nginx/conf.d/camex-nginx.conf &&
+    grep -qx "Environment=HTTP_PORT=87" /etc/systemd/system/camex-nginx-sync.service' &&
+    echo "$out" | grep -q "Start page:       http://opts.test:87/"
+check $? "a new nginx file on --http-port 87: the sync service and the addresses follow it"
+o 'systemctl disable --now camex-nginx-sync.service >/dev/null 2>&1;
+   rm /etc/systemd/system/camex-nginx-sync.service'
+out=$(orun --domain opts.test)
+[ $? -eq 0 ] && o 'grep -qx "Environment=HTTP_PORT=87" /etc/systemd/system/camex-nginx-sync.service' &&
+    echo "$out" | grep -q "ok    nginx serves the start page on opts.test"
+check $? "the sync service made again takes port 87 of the kept nginx file"
 out=$(orun --password x)
 [ $? -ne 0 ] && echo "$out" | grep -q "give --domain"
 check $? "--password without --domain is refused"

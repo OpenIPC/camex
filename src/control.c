@@ -1581,6 +1581,7 @@ int control_nginx_index(const char *path, const char *domain, int http_port)
 {
     (void)path;
     (void)domain;
+    (void)http_port;
     fprintf(stderr, "camex: --status is not available on Windows\n");
     return 1;
 }

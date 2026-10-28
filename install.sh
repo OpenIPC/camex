@@ -535,9 +535,13 @@ else
     # (its server_name and the other files were checked in step 1)
     if [ -f "$NGINX_CONF" ]; then
         say "kept: $NGINX_CONF"
-        [ -z "$HTTP_PORT" ] || grep -qE "^[[:space:]]*listen[[:space:]]+$HTTP_PORT;" "$NGINX_CONF" ||
+        # Its port is what the links and --check use (#141): the first
+        # listen line's
+        NGINX_PORT=$(sed -n 's/^[[:space:]]*listen[[:space:]]\{1,\}\([0-9]\{1,5\}\)[[:space:];].*/\1/p' \
+                     "$NGINX_CONF" | head -n 1)
+        [ -z "$HTTP_PORT" ] || [ "$HTTP_PORT" = "${NGINX_PORT:-80}" ] ||
             say "kept the listen lines of $NGINX_CONF, not --http-port $HTTP_PORT:" \
-                "edit them there, and HTTP_PORT in $UNITS/camex-nginx-sync.service"
+                "edit them there, then run this again"
         grep -qiE "server_name[[:space:]]+$(echo "$DOMAIN" | sed 's/\./\\./g');" "$NGINX_CONF" ||
             say "WARNING: $NGINX_CONF has no server block for $DOMAIN itself:" \
                 "no start page there (see examples/nginx-camex.conf)"
@@ -552,6 +556,7 @@ else
         [ -n "$HTTP_PORT" ] &&
             sed -i "s/^\([[:space:]]*listen[[:space:]]\{1,\}\)80;/\1$HTTP_PORT;/" "$TMP/nginx.conf"
         put "$TMP/nginx.conf" "$NGINX_CONF" 644
+        NGINX_PORT=${HTTP_PORT:-80}
     fi
     if [ ! -f "$MAP" ]; then
         printf 'map $host $camex_upstream {\n}\n' > "$MAP"
@@ -602,18 +607,20 @@ else
             *) sed -i "s|^Environment=INDEX=.*|Environment=INDEX=$index|" "$TMP/sync.service" ;;
         esac
     fi
-    # Its ports (#141), settings made once: those of the installed service
-    # (none there: 80), else the option
+    # Its ports (#141): HTTP_PORT that of nginx's file (kept or just made);
+    # UPSTREAM_PORT made once: that of the installed service (none there:
+    # 80), else the option
     for v in HTTP_PORT UPSTREAM_PORT; do
         eval "opt=\$$v"
-        if [ -f "$UNITS/camex-nginx-sync.service" ]; then
+        if [ $v = HTTP_PORT ]; then
+            val=${NGINX_PORT:-80}
+        elif [ -f "$UNITS/camex-nginx-sync.service" ]; then
             val=$(sed -n "s/^Environment=$v=\([0-9]*\)\$/\1/p" \
                   "$UNITS/camex-nginx-sync.service" | tail -n 1)
             val=${val:-80}
             [ -z "$opt" ] || [ "$opt" = "$val" ] ||
                 say "kept $v=$val of camex-nginx-sync.service, not $opt: edit it" \
-                    "in $UNITS/camex-nginx-sync.service$([ $v = HTTP_PORT ] &&
-                    echo " and the listen lines of $NGINX_CONF")"
+                    "in $UNITS/camex-nginx-sync.service"
         else
             val=${opt:-80}
         fi

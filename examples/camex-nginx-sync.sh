@@ -487,9 +487,12 @@ check_all() {
                             ok "nginx answers on $dom (the page itself not" \
                                "checked: no $PASSWORD_FILE)"
                         else
-                            # To curl in a file of its own, not in ps
+                            # To curl in a file of its own, not in ps; a
+                            # backslash and a quote escaped, as curl's
+                            # quoted values want
                             kf=$(mktemp) &&
-                                printf 'user = "camex:%s"\n' "$pw" > "$kf" &&
+                                printf 'user = "camex:%s"\n' \
+                                    "$(printf '%s' "$pw" | sed 's/[\\"]/\\&/g')" > "$kf" &&
                                 b=$(probe "$dom" -K "$kf") || b=
                             [ -n "${kf-}" ] && rm -f "$kf"
                             case "$b" in
