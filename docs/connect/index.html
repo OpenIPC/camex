@@ -40,6 +40,7 @@ pre{padding:10px;white-space:pre-wrap;word-break:break-all}
 (Android 8.0 and later), then open this link again.</p>
 <p class="dim">On a computer, the same server with camex (its routes come from the server: "Route all traffic" is the Android app's own setting):</p>
 <pre id="cli"></pre>
+<p id="cli-defaults" class="dim" hidden></p>
 <details><summary class="dim">The command with the psk (it is the password)</summary><pre id="cli-psk"></pre></details>
 </div>
 <p id="bad" class="err" hidden>This link has no camex settings: copy it whole from install.sh's output.</p>
@@ -159,6 +160,18 @@ var CAMEX = {
     document.getElementById('open').href = CAMEX.intent(f);
     document.getElementById('cli').textContent = CAMEX.cli(f, false);
     document.getElementById('cli-psk').textContent = CAMEX.cli(f, true);
+    // The app keeps its saved port and transport when the link has none; the
+    // command takes camex's defaults (#154)
+    var none = [];
+    if (!has.p) none.push(['port', 'port 5800 (this page\'s)']);
+    if (!has.t) none.push(['transport', 'UDP (camex\'s default)']);
+    if (none.length) {
+        var c = document.getElementById('cli-defaults');
+        c.textContent = 'The link has no ' + none.map(function (x) { return x[0]; }).join(' and no ') +
+            ': the command uses ' + none.map(function (x) { return x[1]; }).join(' and ') +
+            ', the app keeps what it has saved.';
+        c.hidden = false;
+    }
     document.getElementById('ok').hidden = false;
 })();
 </script>

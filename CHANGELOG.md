@@ -6,6 +6,16 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.15.1 — 2026-10-28
+
+- `install.sh` on a rerun (#149): an older unit's `--port` or `--psk` in `CAMEX_ARGS` of
+  `/etc/default/camex` wins over `camex.conf`, so the options are compared with it and the
+  installer says to edit it there.
+- The Android link (#154): none when the server's public key is not known to the installer
+  (a key file of its own without `public_key=`, or `server_key=` in `camex.conf`); the page
+  says when a link has no port or transport, so the desktop command uses camex's defaults.
+- e2e: both in `test-e2e-install.sh`, the page's note in jsdom. `docs/install.md`.
+
 ## 3.15.0 — 2026-10-28
 
 - A link that opens the Android app with a server's settings (#146). `install.sh` prints it

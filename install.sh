@@ -196,7 +196,16 @@ public_addr() {
 # /etc/default/camex as the shell splits it there; its command line wins over
 # camex.conf (an older unit's arguments moved there may have --psk or --port)
 read_args() {
-    ARGS=$(sed -n 's/^CAMEX_ARGS="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$DEFAULTS" | tail -n 1)
+    # (in double or single quotes, as systemd's EnvironmentFile= takes them;
+    # before step 6 has moved them, an older unit's own CAMEX_ARGS)
+    if [ -f "$DEFAULTS" ]; then
+        ARGS=$(sed -n "s/^CAMEX_ARGS=[\"']\{0,1\}\(.*\)/\1/p" "$DEFAULTS" | tail -n 1)
+    else
+        ARGS=$(sed -n 's/^Environment="\{0,1\}CAMEX_ARGS=\(.*\)/\1/p' \
+               "$UNITS/camex.service" 2>/dev/null | tail -n 1)
+        case "$ARGS" in *SERVER_PUBLIC_KEY*) ARGS= ;; esac
+    fi
+    ARGS=$(printf '%s' "$ARGS" | sed "s/[\"']\$//")
     # camex reads /etc/camex/camex.conf without --config
     USED_CONF=$CONF; USED_KEY=; ARG_PSK=; ARG_PORT=; PROTO=udp
     set -f
@@ -579,12 +588,25 @@ else
     say "created: $CONF (port $PORT, pool ${POOL_NET:-10.200.0.0/24}," \
         "${PSK_OPT:+the given psk}${PSK_OPT:-a new psk})"
 fi
-# Settings made once: a different value is said, not applied
-if [ -n "$PORT_OPT" ] && [ "$(conf_server port)" != "$PORT_OPT" ]; then
+# Settings made once: a different value is said, not applied. An older
+# unit's --port or --psk, moved to CAMEX_ARGS, wins over camex.conf: then
+# that is the one to compare and to edit (#149)
+read_args
+if [ -n "$PORT_OPT" ] && [ -n "$ARG_PORT" ]; then
+    [ "$ARG_PORT" = "$PORT_OPT" ] ||
+        say "kept --port $ARG_PORT of CAMEX_ARGS in $DEFAULTS (it wins over" \
+            "port= of $CONF), not --port $PORT_OPT: edit it there, then" \
+            "systemctl restart camex (the clients need the same)"
+elif [ -n "$PORT_OPT" ] && [ "$(conf_server port)" != "$PORT_OPT" ]; then
     say "kept port= of $CONF, not --port $PORT_OPT: edit it there, then" \
         "systemctl restart camex (the clients need the same)"
 fi
-if [ -n "$PSK_OPT" ] && [ "$(conf_server psk)" != "$PSK_OPT" ]; then
+if [ -n "$PSK_OPT" ] && [ -n "$ARG_PSK" ]; then
+    [ "$ARG_PSK" = "$PSK_OPT" ] ||
+        say "kept --psk of CAMEX_ARGS in $DEFAULTS (it wins over psk= of" \
+            "$CONF), not --psk: edit it there, then systemctl restart camex" \
+            "(the clients need the same)"
+elif [ -n "$PSK_OPT" ] && [ "$(conf_server psk)" != "$PSK_OPT" ]; then
     say "kept psk= of $CONF, not --psk: edit it there (the clients need the same)"
 fi
 # Without the key camex uses 120 s, the same as --client-timeout 120
@@ -802,6 +824,8 @@ elif [ -n "$(conf_server server_key "$USED_CONF")" ]; then
     say "WARNING: camex uses server_key= of $USED_CONF, not $KEY: give the" \
         "clients the public key made with it"
 fi
+# A key file of its own without public_key= (#154): not known here
+PUBKEY=${PUBKEY:-<the public key of ${USED_KEY:-$KEY}>}
 PSK=${ARG_PSK:-$(conf_server psk "$USED_CONF")}
 PORT_NOW=${ARG_PORT:-$(conf_server port "$USED_CONF")}
 # Quoted for the shell the command is pasted into: ' as '\''
@@ -823,7 +847,10 @@ printf '%s\n' "      --server-pubkey $PUBKEY --psk '$PSK_Q'"
 # The same settings for the Android app (#146): the fields after '#' never
 # leave the phone's browser; the psk is in it, so it is a password
 case "$PUBKEY" in
-    "<"*) ;;
+    "<"*)
+        echo
+        echo "Android: no link, the server's public key is not known here: put it"
+        echo "in the app's settings by hand." ;;
     *)
         if [ -z "$HOST" ]; then
             echo

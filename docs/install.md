@@ -70,6 +70,9 @@ curl -fsSL https://raw.githubusercontent.com/OpenIPC/camex/master/install.sh | s
 
 The options are settings made once, as the files they go to: on a rerun a
 different value is not applied; the installer says which line to edit where.
+On a server set up by hand before (camex 3.9 and earlier), `--port` or `--psk`
+in `CAMEX_ARGS` of `/etc/default/camex` win over `camex.conf`: then those are
+compared, and the installer says to edit them there.
 A new start page password: remove `/etc/camex/nginx-password` and run it again
 with `--password` (or without, for a random one).
 
