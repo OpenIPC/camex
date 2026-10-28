@@ -790,9 +790,11 @@ void server_drop_entry(server_client_t *entry)
  * [server] (#143, a reload applies it), else CAMEX_CLIENT_TIMEOUT. The
  * environment variable CAMEX_CLIENT_TIMEOUT (5..120) wins over both, for
  * tests */
-/* A handshake not newer than the live session's (#135): a replay, another
- * client with this ID and key, or this client's clock behind. Said once in
- * 30 s for the client, with the number of those not said since. */
+/* A handshake not newer than the latest accepted for a live client (#135):
+ * a replay, another client with this ID and key, or this client's clock
+ * behind. Said once in 30 s for the client (a clock stepped back ends the
+ * wait), with the number of those not said since; log_peer() caps them all
+ * together as before. */
 static void server_log_stale_handshake(server_client_t *owner,
                                        const char *peer, const char *id,
                                        const uint8_t ts[V2_TIMESTAMP_LEN])
@@ -804,6 +806,7 @@ static void server_log_stale_handshake(server_client_t *owner,
                       v2_timestamp_seconds(ts);
 
     if (owner->stale_hs_logged != 0 &&
+        difftime(g_now, owner->stale_hs_logged) >= 0.0 &&
         difftime(g_now, owner->stale_hs_logged) < 30.0) {
         owner->stale_hs_quiet++;
         return;
@@ -819,11 +822,12 @@ static void server_log_stale_handshake(server_client_t *owner,
         snprintf(more, sizeof(more), " [%u more since the last such line]",
                  (unsigned)owner->stale_hs_quiet);
     }
-    log_message(LOG_WARNING, "Dropped handshake from %s (%s): its timestamp "
-                "%s that of the live session from %s: a replay, another "
-                "client with this ID, or this client's clock is behind (it "
-                "is taken once that session is silent for %.0f s)%s",
-                peer, id, gap, live, server_client_timeout(), more);
+    /* owner->addr: where its latest authenticated packet came from */
+    log_peer(LOG_WARNING, "Dropped handshake from %s (%s): its timestamp %s "
+             "the latest accepted for this client, live, last from %s: a "
+             "replay, another client with this ID, or this client's clock is "
+             "behind (it is taken once the client is silent for %.0f s)%s",
+             peer, id, gap, live, server_client_timeout(), more);
     owner->stale_hs_logged = g_now;
     owner->stale_hs_quiet = 0U;
 }

@@ -15,7 +15,7 @@
 #      INIT and DATA must be rejected as well;
 #   3. more old INITs within 30 s: no new line, the next one counts them.
 # The server's line says why (#135): how much older the timestamp is than
-# that of the live session, and from where that session is.
+# the latest accepted for the client, and its last address.
 # After each attack the client must still reach the server.
 # In protocol v2 a replayed INIT carries an old timestamp, and replayed
 # DATA fails the replay window or names a session that no longer exists.
@@ -118,7 +118,7 @@ replay() {
 # dropped_regs: lines of handshakes the server dropped as not newer than
 # the live session's (#135: one line in 30 s per client)
 dropped_regs() {
-    docker logs "$SRV" 2>&1 | grep -c "Dropped handshake.*its timestamp.*live session" || true
+    docker logs "$SRV" 2>&1 | grep -c "Dropped handshake.*its timestamp.*the latest accepted for this client" || true
 }
 # wait_quiet: past the 30 s in which the server says no more of them
 wait_quiet() {
@@ -183,7 +183,7 @@ after=$(icmp_in "$SRV")
 [ "$after" = "$before" ]; check $? "replayed pings do not reach the server (echo requests: $before -> $after)"
 [ "$(dropped_regs)" -gt "$drops" ]; check $? "the server rejected the replayed handshake"
 LAST_DROP=$SECONDS
-docker logs "$SRV" 2>&1 | grep -q "Dropped handshake from .*: its timestamp is not newer than that of the live session from $CLI_IP:[0-9]*: a replay, another client with this ID, or this client's clock is behind (it is taken once that session is silent for 120 s)"
+docker logs "$SRV" 2>&1 | grep -q "Dropped handshake from .*: its timestamp is not newer than the latest accepted for this client, live, last from $CLI_IP:[0-9]*: a replay, another client with this ID, or this client's clock is behind (it is taken once the client is silent for 120 s)"
 check $? "the server says why: the same timestamp as the live session from the client's address (#135)"
 docker logs "$SRV" 2>&1 | grep -q "reconnected: .*$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$ATK")"
 [ $? != 0 ]; check $? "the session did not move to the attacker's address"
@@ -204,7 +204,7 @@ after=$(icmp_in "$SRV")
 [ "$after" = "$before" ]; check $? "old session's pings do not reach the server (echo requests: $before -> $after)"
 [ "$(dropped_regs)" -eq $((drops + 1)) ]; check $? "the $regs old handshakes rejected, said in one line"
 LAST_DROP=$SECONDS
-docker logs "$SRV" 2>&1 | grep -qE "Dropped handshake from .*: its timestamp is [0-9]+ s older than that of the live session from $CLI_IP:[0-9]+: "
+docker logs "$SRV" 2>&1 | grep -qE "Dropped handshake from .*: its timestamp is [0-9]+ s older than the latest accepted for this client, live, last from $CLI_IP:[0-9]+: "
 check $? "the server says how much older the old session's timestamp is (#135)"
 still_up
 
