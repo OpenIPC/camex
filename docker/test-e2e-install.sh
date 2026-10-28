@@ -403,17 +403,26 @@ out=$(orun --domain opts.test)
 [ $? -eq 0 ] && o 'grep -qx "Environment=HTTP_PORT=87" /etc/systemd/system/camex-nginx-sync.service' &&
     echo "$out" | grep -q "ok    nginx serves the start page on opts.test"
 check $? "the sync service made again takes port 87 of the kept nginx file"
+# listen with an address; CAMEX_ARGS with more blanks before tcp
+o 'sed -i "s/^\([[:space:]]*listen[[:space:]]*\)87;/\10.0.0.0:87;/" /etc/nginx/conf.d/camex-nginx.conf &&
+   grep -q "listen 0.0.0.0:87;" /etc/nginx/conf.d/camex-nginx.conf &&
+   sed -i "s/-Rtcp/--transport   tcp/" /etc/default/camex'
+out=$(orun --domain opts.test --transport tcp)
+[ $? -eq 0 ] && o 'grep -qx "Environment=HTTP_PORT=87" /etc/systemd/system/camex-nginx-sync.service' &&
+    ! echo "$out" | grep -q "kept the server's transport" &&
+    echo "$out" | grep -qF -- "--transport tcp"
+check $? "listen 0.0.0.0:87 is port 87; --transport   tcp in CAMEX_ARGS is TCP"
 out=$(orun --password x)
 [ $? -ne 0 ] && echo "$out" | grep -q "give --domain"
 check $? "--password without --domain is refused"
 bad=0
 for psk in "" " lead" "trail " "hex:$(printf '%064d' 0)" "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" \
-           "base64:short=" "$(printf 'x%.0s' $(seq 1 128))"; do
+           "base64:short=" "$(printf 'x%.0s' $(seq 1 128))" "$(printf 'é%.0s' $(seq 1 64))"; do
     out=$(orun --psk "$psk")
     [ $? -ne 0 ] && echo "$out" | grep -q -- "--psk" || { bad=1; echo "      accepted: '$psk'"; }
 done
 [ $bad = 0 ]
-check $? "--psk: empty, blanks at its ends, all-zero keys, bad base64, 128 characters refused"
+check $? "--psk: empty, blanks at its ends, all-zero keys, bad base64, 128 bytes (also in 64 letters) refused"
 
 if [ "$FAILS" -ne 0 ]; then
     echo "FAIL: $FAILS check(s) failed"

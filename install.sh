@@ -153,6 +153,38 @@ conf_server() {
          }
          END { if (d != "") print d }' "${2:-$CONF}" 2>/dev/null
 }
+# read_args: what camex.service really runs with, from CAMEX_ARGS of
+# /etc/default/camex as the shell splits it there; its command line wins over
+# camex.conf (an older unit's arguments moved there may have --psk or --port)
+read_args() {
+    ARGS=$(sed -n 's/^CAMEX_ARGS="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$DEFAULTS" | tail -n 1)
+    # camex reads /etc/camex/camex.conf without --config
+    USED_CONF=$CONF; USED_KEY=; ARG_PSK=; ARG_PORT=; PROTO=udp
+    set -f
+    # shellcheck disable=SC2086
+    set -- $ARGS
+    set +f
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --config|-f)       USED_CONF=${2-}; shift ;;
+            --config=*)        USED_CONF=${1#*=} ;;
+            --server-key-file|-S) USED_KEY=${2-}; shift ;;
+            --server-key-file=*)  USED_KEY=${1#*=} ;;
+            --psk|-k)          ARG_PSK=${2-}; shift ;;
+            --psk=*)           ARG_PSK=${1#*=} ;;
+            --port|-p)         ARG_PORT=${2-}; shift ;;
+            --port=*)          ARG_PORT=${1#*=} ;;
+            --transport|-R)    PROTO=${2-}; shift ;;
+            --transport=*)     PROTO=${1#*=} ;;
+            -R*)               PROTO=${1#-R} ;;
+            -f*)               USED_CONF=${1#-f} ;;
+            -S*)               USED_KEY=${1#-S} ;;
+            -k*)               ARG_PSK=${1#-k} ;;
+            -p*)               ARG_PORT=${1#-p} ;;
+        esac
+        shift
+    done
+}
 conf_domain() {
     conf_server domain | tr 'A-Z' 'a-z'
 }
@@ -259,7 +291,8 @@ if [ -n "$PSK_OPT" ]; then
 "*) die "--psk: one line" ;;
         [[:space:]]*|*[[:space:]]) die "--psk: no blank at its start or end" ;;
     esac
-    [ ${#PSK_OPT} -lt 128 ] || die "--psk: below 128 characters"
+    # In bytes, as camex counts it (a UTF-8 letter may be two or more)
+    [ "$(printf '%s' "$PSK_OPT" | LC_ALL=C wc -c)" -lt 128 ] || die "--psk: below 128 bytes"
     case "$PSK_OPT" in
         hex:*)
             printf '%s\n' "${PSK_OPT#hex:}" | grep -qxE '[0-9a-fA-F]{64}' ||
@@ -495,8 +528,9 @@ else
 fi
 # Also when an older unit's arguments were moved there
 if [ -n "$TRANSPORT" ]; then
+    read_args
     have=udp
-    grep -qE -- '(--transport[ =]|-R ?)tcp' "$DEFAULTS" && have=tcp
+    [ "$PROTO" = tcp ] && have=tcp
     [ "$have" = "$TRANSPORT" ] ||
         say "kept the server's transport $have, not --transport $TRANSPORT:" \
             "edit CAMEX_ARGS in $DEFAULTS, then systemctl restart camex"
@@ -535,10 +569,14 @@ else
     # (its server_name and the other files were checked in step 1)
     if [ -f "$NGINX_CONF" ]; then
         say "kept: $NGINX_CONF"
-        # Its port is what the links and --check use (#141): the first
-        # listen line's
-        NGINX_PORT=$(sed -n 's/^[[:space:]]*listen[[:space:]]\{1,\}\([0-9]\{1,5\}\)[[:space:];].*/\1/p' \
-                     "$NGINX_CONF" | head -n 1)
+        # Its port is what the links and --check use (#141): that of the
+        # first plain HTTP listen line (<port>, <address>:<port>, [::]:<port>;
+        # not ssl or quic)
+        NGINX_PORT=$(awk '/^[[:space:]]*listen[[:space:]]/ &&
+                          !/[[:space:]](ssl|quic)([[:space:];]|$)/ {
+                              v = $2; sub(/;.*$/, "", v); sub(/^.*:/, "", v)
+                              if (v ~ /^[0-9]+$/) { print v; exit }
+                          }' "$NGINX_CONF")
         [ -z "$HTTP_PORT" ] || [ "$HTTP_PORT" = "${NGINX_PORT:-80}" ] ||
             say "kept the listen lines of $NGINX_CONF, not --http-port $HTTP_PORT:" \
                 "edit them there, then run this again"
@@ -656,33 +694,7 @@ fi
 step 8 "Done"
 # What camex really uses: its command line wins over camex.conf (an older
 # unit's arguments moved to /etc/default/camex may have --psk or --port)
-ARGS=$(sed -n 's/^CAMEX_ARGS="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$DEFAULTS" | tail -n 1)
-# camex reads /etc/camex/camex.conf without --config
-USED_CONF=$CONF; USED_KEY=; ARG_PSK=; ARG_PORT=; PROTO=udp
-set -f
-# shellcheck disable=SC2086
-set -- $ARGS
-set +f
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --config|-f)       USED_CONF=${2-}; shift ;;
-        --config=*)        USED_CONF=${1#*=} ;;
-        --server-key-file|-S) USED_KEY=${2-}; shift ;;
-        --server-key-file=*)  USED_KEY=${1#*=} ;;
-        --psk|-k)          ARG_PSK=${2-}; shift ;;
-        --psk=*)           ARG_PSK=${1#*=} ;;
-        --port|-p)         ARG_PORT=${2-}; shift ;;
-        --port=*)          ARG_PORT=${1#*=} ;;
-        --transport|-R)    PROTO=${2-}; shift ;;
-        --transport=*)     PROTO=${1#*=} ;;
-        -R*)               PROTO=${1#-R} ;;
-        -f*)               USED_CONF=${1#-f} ;;
-        -S*)               USED_KEY=${1#-S} ;;
-        -k*)               ARG_PSK=${1#-k} ;;
-        -p*)               ARG_PORT=${1#-p} ;;
-    esac
-    shift
-done
+read_args
 if [ "$USED_CONF" != "$CONF" ]; then
     say "WARNING: camex.service reads $USED_CONF, not $CONF" \
         "(CAMEX_ARGS in $DEFAULTS): the settings made here are not used"
