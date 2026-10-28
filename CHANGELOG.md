@@ -6,6 +6,15 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.14.3 — 2026-10-28
+
+- A handshake dropped because its timestamp is not newer than the latest accepted for a
+  live client (#135) is logged with why: how many seconds older it is, the client's last
+  address, and the likely causes (a replay, another client with the same ID and key, or
+  this client's clock behind); once in 30 s per client, with the number not logged since.
+  The handshake is still dropped. `docs/security.md`.
+- e2e `test-e2e-register-replay.sh`: the new text, one line for several within 30 s.
+
 ## 3.14.2 — 2026-10-28
 
 - `install.sh --domain` in another script (#151): `мойдомен.рф` (any case) is taken in its

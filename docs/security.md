@@ -29,6 +29,23 @@ protects before exposing it to an untrusted network.
   a new session replaces the old one only with the client's first packet on it
   (a client whose clock went back after a reboot still reconnects). Packets of
   an ended session cannot be replayed into a new one: its keys are different.
+  Such a handshake is logged once in 30 s for the client (#135):
+
+  ```
+  Dropped handshake from 203.0.113.7:41508 (cam1): its timestamp is 95 s older
+  than the latest accepted for this client, live, last from 198.51.100.4:33279:
+  a replay, another client with this ID, or this client's clock is behind (it is
+  taken once the client is silent for 120 s)
+  ```
+
+  with `[N more since the last such line]` at its end when more came in the
+  meantime. It is one of three things. A replay of a captured handshake: it
+  is dropped and takes nothing over; a peer you do not know sending it again
+  and again is someone with a capture of your traffic. Another client with the
+  same `--name` and key (the last address says where the other one is): stop
+  one of them, or give it its own ID. This client's clock behind that of the
+  one that made the live session: set the time (NTP). In the last two cases
+  this client gets in once the other has been silent for `client_timeout=`.
 - **Roaming.** A session is found by its index, not by the client's address:
   after a NAT rebinding the client keeps its session.
 - **Config reload.** After `SIGHUP`, a live session whose key was removed or
