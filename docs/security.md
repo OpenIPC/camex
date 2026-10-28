@@ -39,10 +39,12 @@ protects before exposing it to an untrusted network.
   ```
 
   with `[N more since the last such line]` at its end when more came in the
-  meantime. Not an attack, it is one of two things: another client runs with
-  the same `--name` and key (the last address says where the other one is;
-  stop one of them, or give it its own ID), or this client's clock is behind
-  that of the one that made the live session (set the time, NTP). Either way
+  meantime. It is one of three things. A replay of a captured handshake: it
+  is dropped and takes nothing over; a peer you do not know sending it again
+  and again is someone with a capture of your traffic. Another client with the
+  same `--name` and key (the last address says where the other one is): stop
+  one of them, or give it its own ID. This client's clock behind that of the
+  one that made the live session: set the time (NTP). In the last two cases
   this client gets in once the other has been silent for `client_timeout=`.
 - **Roaming.** A session is found by its index, not by the client's address:
   after a NAT rebinding the client keeps its session.
