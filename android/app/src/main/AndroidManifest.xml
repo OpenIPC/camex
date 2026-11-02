@@ -19,9 +19,23 @@
         android:protectionLevel="signature" />
     <uses-permission android:name="org.openipc.camex.permission.INTERNAL" />
 
+    <!-- Android TV (#156): on the TV home screen through LEANBACK_LAUNCHER,
+         still installable on phones; no touchscreen on a TV box, and Wi-Fi
+         is not needed (ACCESS_WIFI_STATE alone would require it): Ethernet boxes -->
+    <uses-feature
+        android:name="android.software.leanback"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.wifi"
+        android:required="false" />
+
     <application
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
+        android:banner="@drawable/banner"
         android:allowBackup="false"
         android:supportsRtl="true">
 
@@ -32,6 +46,7 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
 
