@@ -6,6 +6,15 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.15.2 — 2026-11-02
+
+- Android app (#156): the OpenIPC brand icon, the same in all OpenIPC Android apps. Launcher
+  icon: the OpenIPC logo in white on `#4C60D8` (was a PNG on `#4D60D9`), a vector with a
+  monochrome layer for themed icons; the name comes from the launcher label. Android TV: the
+  app is on the home screen now, with a banner (the icon, then "Camex" on a white panel),
+  `LEANBACK_LAUNCHER`; leanback, touchscreen and Wi-Fi are not required (Ethernet-only boxes).
+  The resources are made by the OpenIPC brand kit.
+
 ## 3.15.1 — 2026-10-28
 
 - `install.sh` on a rerun (#149): an older unit's `--port` or `--psk` in `CAMEX_ARGS` of
