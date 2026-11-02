@@ -8,7 +8,10 @@ package org.openipc.camex;
 import android.app.Activity;
 import android.content.SharedPreferences;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.LayerDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
 import android.text.TextUtils;
@@ -41,6 +44,8 @@ public class SettingsActivity extends Activity {
     private static final int DEFAULT_TIMEOUT = 20;
     // The overlay of a field a link changed (green, light)
     private static final int LINK_MARK = 0x332E7D32;
+    // Before API 23: a marked field that had no background of its own
+    private static final Object NO_BACKGROUND = new Object();
     private static final String STATE_NOTE = "link_note";
     private static final String STATE_MARKED = "link_marked";
     // The ids of the fields a link changed
@@ -221,15 +226,33 @@ public class SettingsActivity extends Activity {
     }
 
     // A field a link changed: a light overlay of its own (the theme's tints
-    // stay as they are, so removing it leaves the field as it was)
+    // stay as they are, so removing it leaves the field as it was). A view's
+    // foreground is API 23; before it the overlay is layered over the field's
+    // own background, which is put back as it was (#158)
     private void mark(View field) {
         if (field == null) return;
-        field.setForeground(new ColorDrawable(LINK_MARK));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            field.setForeground(new ColorDrawable(LINK_MARK));
+        } else if (field.getTag(R.id.link_mark) == null) {
+            Drawable own = field.getBackground();
+            field.setTag(R.id.link_mark, own != null ? own : NO_BACKGROUND);
+            field.setBackground(own != null
+                ? new LayerDrawable(new Drawable[]{ own, new ColorDrawable(LINK_MARK) })
+                : new ColorDrawable(LINK_MARK));
+        }
         if (!marked.contains(field.getId())) marked.add(field.getId());
     }
 
     private void unmark(View field) {
-        if (field != null) field.setForeground(null);
+        if (field == null) return;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            field.setForeground(null);
+            return;
+        }
+        Object own = field.getTag(R.id.link_mark);
+        if (own == null) return;
+        field.setBackground(own == NO_BACKGROUND ? null : (Drawable) own);
+        field.setTag(R.id.link_mark, null);
     }
 
     private void set(EditText input, String value, int label, List<String> changed) {

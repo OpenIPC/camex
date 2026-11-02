@@ -29,7 +29,7 @@ android {
 
     defaultConfig {
         applicationId = "org.openipc.camex"
-        minSdk = 26
+        minSdk = 21
         targetSdk = 34
         versionCode = camexVersionCode
         versionName = camexVersion

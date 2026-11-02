@@ -109,7 +109,7 @@ camex --mode client --auto --name 0203A104B5AE \
 | `camex-arm`                | Linux 32-bit ARM, статически (musl): камеры OpenIPC                              |
 | `camex-mipsel`             | Linux MIPS little-endian, статически (musl, soft-float): камеры Ingenic, роутеры |
 | `camex-x86_64`             | Linux x86_64, статически (musl)                                                  |
-| `camex-android.apk`        | Android 8.0 и новее                                                              |
+| `camex-android.apk`        | Android 5.0 и новее                                                              |
 | `camex-macos.zip`          | macOS (utun): `camex`, LICENSE, README                                           |
 | `camex-windows-x86_64.zip` | Windows 64-bit: `camex.exe` и `wintun.dll`                                       |
 | `camex-windows-i686.zip`   | Windows 32-bit: `camex.exe` и `wintun.dll`                                       |

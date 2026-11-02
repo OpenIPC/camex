@@ -117,15 +117,20 @@ fi
 
 # ---------------------------------------------------------------- app
 echo "== install $APK"
-# CI signs every debug build with a fresh key: replace an older install
-if ! $ADB install -r -g "$APK" >/dev/null 2>"$CTX/install.err"; then
+# CI signs every debug build with a fresh key: replace an older install.
+# -g (grant runtime permissions) exists from Android 6; Android 5 rejects it
+# with exit status 0 (#158), so check that the package is there afterwards
+SDK=$($ADB shell getprop ro.build.version.sdk | tr -d '\r')
+GRANT=; [ "${SDK:-0}" -ge 23 ] && GRANT=-g
+if ! $ADB install -r $GRANT "$APK" >/dev/null 2>"$CTX/install.err"; then
     if grep -q INSTALL_FAILED_UPDATE_INCOMPATIBLE "$CTX/install.err"; then
         $ADB uninstall "$PKG" >/dev/null
-        $ADB install -g "$APK" >/dev/null
+        $ADB install $GRANT "$APK" >/dev/null
     else
         cat "$CTX/install.err"; exit 1
     fi
 fi
+$ADB shell pm list packages "$PKG" | grep -q "package:$PKG" || { echo "not installed: $PKG"; exit 1; }
 $ADB shell am force-stop "$PKG"
 
 # Settings: server through adb reverse, TCP, server key, full tunnel OFF so
@@ -155,26 +160,46 @@ $ADB shell rm /data/local/tmp/camex.xml
 $ADB shell cmd appops set "$PKG" ACTIVATE_VPN allow >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------- start
+# A dump taken while a window still animates in misses its views (slow
+# emulators, #158): try a few times
 tap_text() {   # tap the UI element whose text matches $1 (regex)
-    local xy
-    $ADB shell uiautomator dump /data/local/tmp/ui.xml >/dev/null 2>&1
-    xy=$($ADB shell cat /data/local/tmp/ui.xml | tr '>' '\n' |
-        grep -iE "text=\"[^\"]*($1)[^\"]*\"" | head -1 |
-        sed -nE 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/p' |
-        awk '{ print int(($1 + $3) / 2), int(($2 + $4) / 2) }')
-    [ -n "$xy" ] || return 1
-    $ADB shell input tap $xy
+    local xy _
+    for _ in 1 2 3 4 5; do
+        $ADB shell uiautomator dump /data/local/tmp/ui.xml >/dev/null 2>&1
+        xy=$($ADB shell cat /data/local/tmp/ui.xml | tr '>' '\n' |
+            grep -iE "text=\"[^\"]*($1)[^\"]*\"" | head -1 |
+            sed -nE 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/p' |
+            awk '{ print int(($1 + $3) / 2), int(($2 + $4) / 2) }')
+        [ -n "$xy" ] && { $ADB shell input tap $xy; return 0; }
+        sleep 1
+    done
+    return 1
 }
 
 tap_exact() {  # tap the UI element whose text is exactly $1 ("Stop", not "stopped")
-    local xy
-    $ADB shell uiautomator dump /data/local/tmp/ui.xml >/dev/null 2>&1
-    xy=$($ADB shell cat /data/local/tmp/ui.xml | tr '>' '\n' |
-        grep -iF "text=\"$1\"" | head -1 |
-        sed -nE 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/p' |
-        awk '{ print int(($1 + $3) / 2), int(($2 + $4) / 2) }')
-    [ -n "$xy" ] || return 1
-    $ADB shell input tap $xy
+    local xy _
+    for _ in 1 2 3 4 5; do
+        $ADB shell uiautomator dump /data/local/tmp/ui.xml >/dev/null 2>&1
+        xy=$($ADB shell cat /data/local/tmp/ui.xml | tr '>' '\n' |
+            grep -iF "text=\"$1\"" | head -1 |
+            sed -nE 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/p' |
+            awk '{ print int(($1 + $3) / 2), int(($2 + $4) / 2) }')
+        [ -n "$xy" ] && { $ADB shell input tap $xy; return 0; }
+        sleep 1
+    done
+    return 1
+}
+
+# MTU of a device interface: sysfs, or `ip addr` where SELinux keeps the
+# shell out of /sys/class/net (Android 7, #158)
+iface_mtu() {
+    local m
+    m=$($ADB shell cat /sys/class/net/"$1"/mtu 2>/dev/null | tr -d '\r')
+    case "$m" in
+        ''|*[!0-9]*) m=$($ADB shell ip addr show dev "$1" 2>/dev/null |
+            sed -nE 's/.* mtu ([0-9]+).*/\1/p' | head -1 | tr -d '\r') ;;
+    esac
+    echo "$m"
 }
 
 set +e   # from here on, check() reports failures
@@ -195,7 +220,7 @@ done
 check $up "VPN interface has the CONFIG address 10.200.0.7/24"
 
 IFACE=$($ADB shell ip -o addr | awk '/10.200.0.7\// { print $2; exit }')
-MTU=$($ADB shell cat /sys/class/net/"$IFACE"/mtu 2>/dev/null | tr -d '\r')
+MTU=$(iface_mtu "$IFACE")
 [ "$MTU" = 1400 ]; check $? "VPN interface MTU is the CONFIG value 1400 (got ${MTU:-none})"
 
 RULES=$($ADB shell ip route show table all 2>/dev/null | grep " dev $IFACE" || true)
@@ -223,7 +248,7 @@ for _ in $(seq 1 40); do
 done
 check $moved "VPN interface moved to 10.200.0.8/24"
 IFACE=$($ADB shell ip -o addr | awk '/10.200.0.8\// { print $2; exit }')
-MTU=$($ADB shell cat /sys/class/net/"$IFACE"/mtu 2>/dev/null | tr -d '\r')
+MTU=$(iface_mtu "$IFACE")
 [ "$MTU" = 1300 ]; check $? "VPN interface MTU is now 1300 (got ${MTU:-none})"
 RULES=$($ADB shell ip route show table all 2>/dev/null | grep " dev $IFACE" || true)
 echo "$RULES" | grep -q "192.168.79.0/24" && ! echo "$RULES" | grep -q "192.168.77.0/24"

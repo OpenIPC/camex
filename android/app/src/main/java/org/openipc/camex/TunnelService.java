@@ -301,18 +301,21 @@ public class TunnelService extends VpnService {
             NotificationChannel chan = new NotificationChannel(
                 CHANNEL_ID, getString(R.string.app_name),
                 NotificationManager.IMPORTANCE_LOW);
-            NotificationManager mgr = getSystemService(NotificationManager.class);
-            mgr.createNotificationChannel(chan);
+            notificationManager().createNotificationChannel(chan);
         }
     }
 
+    @SuppressWarnings("deprecation") // Notification.Builder(Context) before Android 8
     private Notification buildNotification(String text) {
         Intent intent = new Intent(this, MainActivity.class);
         PendingIntent pi = PendingIntent.getActivity(
             this, 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        return new Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle(getString(R.string.app_name))
+        // Channels exist from Android 8 (#158)
+        Notification.Builder b = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            ? new Notification.Builder(this, CHANNEL_ID)
+            : new Notification.Builder(this);
+        return b.setContentTitle(getString(R.string.app_name))
             .setContentText(text)
             .setContentIntent(pi)
             .setSmallIcon(android.R.drawable.ic_lock_lock)
@@ -320,7 +323,11 @@ public class TunnelService extends VpnService {
     }
 
     private void updateNotification(String text) {
-        NotificationManager mgr = getSystemService(NotificationManager.class);
-        mgr.notify(NOTIFY_ID, buildNotification(text));
+        notificationManager().notify(NOTIFY_ID, buildNotification(text));
+    }
+
+    // getSystemService(Class) is API 23 (#158)
+    private NotificationManager notificationManager() {
+        return (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
     }
 }

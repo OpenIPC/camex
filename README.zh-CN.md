@@ -102,7 +102,7 @@ CI 会在每次推送到 `master` 时重新构建。其标题显示 camex 版本
 | `camex-arm`                | Linux 32 位 ARM，静态链接（musl）：OpenIPC 摄像头             |
 | `camex-mipsel`             | Linux MIPS 小端，静态链接（musl，软浮点）：君正摄像头、路由器 |
 | `camex-x86_64`             | Linux x86_64，静态链接（musl）                                |
-| `camex-android.apk`        | Android 8.0 及更高版本                                        |
+| `camex-android.apk`        | Android 5.0 及更高版本                                        |
 | `camex-macos.zip`          | macOS（utun）：`camex`、LICENSE、README                       |
 | `camex-windows-x86_64.zip` | Windows 64 位：`camex.exe` 和 `wintun.dll`                    |
 | `camex-windows-i686.zip`   | Windows 32 位：`camex.exe` 和 `wintun.dll`                    |

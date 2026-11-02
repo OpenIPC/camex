@@ -8,7 +8,6 @@ package org.openipc.camex;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -212,14 +211,31 @@ final class ConnectLink {
     // not all zero
     private static boolean isKey(String key) {
         if (key == null || !key.matches("[A-Za-z0-9+/]{43}=")) return false;
-        byte[] raw;
-        try {
-            raw = Base64.getDecoder().decode(key);
-        } catch (IllegalArgumentException e) {
-            return false;
-        }
+        byte[] raw = base64(key);
         if (raw.length != 32) return false;
         for (byte x : raw) if (x != 0) return true;
         return false;
+    }
+
+    /**
+     * Decodes base64 that isKey() already checked (43 characters and '=').
+     * java.util.Base64 needs API 26 and android.util.Base64 is a stub in the
+     * JVM tests (#158); like camex's own decoder, the unused low bits of the
+     * last character are not checked.
+     */
+    static byte[] base64(String s) {
+        final String abc =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        int bits = 0, n = 0;
+        for (int i = 0; i < s.length() && s.charAt(i) != '='; i++) {
+            bits = (bits << 6) | abc.indexOf(s.charAt(i));
+            n += 6;
+            if (n >= 8) {
+                n -= 8;
+                out.write((bits >> n) & 0xff);
+            }
+        }
+        return out.toByteArray();
     }
 }

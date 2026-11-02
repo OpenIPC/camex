@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Copyright (c) OpenIPC  https://openipc.org  MIT License
+
+    ids.xml — view tag keys
+-->
+<resources>
+    <!-- SettingsActivity before API 23: the field's own background under the link mark (#158) -->
+    <item name="link_mark" type="id" />
+</resources>

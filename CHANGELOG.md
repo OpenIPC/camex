@@ -6,6 +6,17 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.16.0 — 2026-11-02
+
+- The Android app runs on Android 5.0 and later (`minSdk` 21, was 26; #158): older TV boxes
+  and phones. Before Android 8 the service starts without `startForegroundService` and the
+  notification has no channel; the link's key check decodes base64 itself; before Android 6
+  the fields a link changed are marked through their background. A launcher icon for
+  Android 5–7 (the brand kit's fallback, a rounded square), the adaptive one from Android 8.
+- `tests/android/device-test.sh` runs on Android 5–7 too: `install -g` only from Android 6,
+  the MTU from `ip addr` where SELinux hides `/sys/class/net` (Android 7), taps retried while
+  a window animates in. PASS on emulators with Android 5.0, 6.0 and 7.1.
+
 ## 3.15.2 — 2026-11-02
 
 - Android app (#156): the OpenIPC brand icon, the same in all OpenIPC Android apps. Launcher

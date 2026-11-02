@@ -3,7 +3,7 @@
 # Android app
 
 `camex-android.apk` of the [`latest`](../README.md#permanent-links) release,
-Android 8.0 and later. The app connects in auto mode: the server sends the
+Android 5.0 and later. The app connects in auto mode: the server sends the
 address, routes and MTU.
 
 | Main screen                             | Settings                                 |

@@ -108,7 +108,7 @@ rebuilt by CI from every push to `master`. Its title shows the camex version
 | `camex-arm`                | Linux 32-bit ARM, static (musl): OpenIPC cameras                              |
 | `camex-mipsel`             | Linux MIPS little-endian, static (musl, soft-float): Ingenic cameras, routers |
 | `camex-x86_64`             | Linux x86_64, static (musl)                                                   |
-| `camex-android.apk`        | Android 8.0 and later                                                         |
+| `camex-android.apk`        | Android 5.0 and later                                                         |
 | `camex-macos.zip`          | macOS (utun): `camex`, LICENSE, README                                        |
 | `camex-windows-x86_64.zip` | Windows 64-bit: `camex.exe` and `wintun.dll`                                  |
 | `camex-windows-i686.zip`   | Windows 32-bit: `camex.exe` and `wintun.dll`                                  |
