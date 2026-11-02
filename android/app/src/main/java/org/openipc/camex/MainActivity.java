@@ -6,6 +6,7 @@
 package org.openipc.camex;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -54,11 +55,24 @@ public class MainActivity extends Activity {
 
         requestNotificationPermission();
         updateStatus(false);
-        // Only our own service may send ACTION_EXITED: Android 13+ honours the
-        // not-exported flag, older versions the signature permission of this app
-        // (what ContextCompat.registerReceiver does)
-        registerReceiver(exitReceiver, new IntentFilter(TunnelService.ACTION_EXITED),
-            TunnelService.PERMISSION_INTERNAL, null, RECEIVER_NOT_EXPORTED);
+        registerExitReceiver();
+    }
+
+    // Only our own service may send ACTION_EXITED: Android 13+ honours the
+    // not-exported flag, older versions the signature permission of this app
+    // (what ContextCompat.registerReceiver does). The form with flags is API 26;
+    // before it the permission alone protects the receiver, and the flag lint
+    // asks for matters only from Android 14 (#158)
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    private void registerExitReceiver() {
+        IntentFilter exited = new IntentFilter(TunnelService.ACTION_EXITED);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            registerReceiver(exitReceiver, exited,
+                TunnelService.PERMISSION_INTERNAL, null, RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(exitReceiver, exited,
+                TunnelService.PERMISSION_INTERNAL, null);
+        }
     }
 
     private void openSettings() {
@@ -102,7 +116,12 @@ public class MainActivity extends Activity {
         super.onActivityResult(request, result, data);
         if (result == RESULT_OK) {
             Intent svc = new Intent(this, TunnelService.class);
-            startForegroundService(svc);
+            // Before Android 8 a started service may go foreground later (#158)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(svc);
+            } else {
+                startService(svc);
+            }
             updateStatus(true);
         }
     }

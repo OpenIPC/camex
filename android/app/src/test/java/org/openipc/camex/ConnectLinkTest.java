@@ -5,12 +5,15 @@
  */
 package org.openipc.camex;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Arrays;
+import java.util.Base64;
+import java.util.Random;
 
 import org.junit.Test;
 
@@ -174,5 +177,21 @@ public class ConnectLinkTest {
     public void lastOfARepeatedFieldWins() {
         ConnectLink c = ConnectLink.parse(WEB + "p=1&p=2");
         assertEquals(Integer.valueOf(2), c.port);
+    }
+
+    // The key check decodes base64 itself (no java.util.Base64 before API 26, #158):
+    // the same bytes as the JDK for any 32-byte key
+    @Test
+    public void ownBase64DecoderMatchesTheJdk() {
+        Random rnd = new Random(158);
+        byte[] key = new byte[32];
+        for (int i = 0; i < 1000; i++) {
+            rnd.nextBytes(key);
+            String text = Base64.getEncoder().encodeToString(key);
+            assertArrayEquals(key, ConnectLink.base64(text));
+        }
+        assertEquals(KEY, Base64.getEncoder().encodeToString(ConnectLink.base64(KEY)));
+        assertEquals(Arrays.asList("k"), ConnectLink.parse(WEB + "k="
+            + Base64.getEncoder().encodeToString(new byte[32])).rejected);
     }
 }
