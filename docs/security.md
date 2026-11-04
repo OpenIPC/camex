@@ -129,8 +129,8 @@ encryption is done by the userspace app.
 ## Android app
 
 The app uses `VpnService`, so Android shows the VPN key icon while the tunnel is
-up; there is no way around that with `VpnService` (a client without TUN is
-tracked in #21). Only the tunnel network and the routes the server sends go
-through the tunnel; a `0.0.0.0/0` route from the server is ignored unless
-**Route all traffic through the tunnel** is enabled in the settings. That
-switch covers IPv4 only: IPv6 traffic does not go through the tunnel.
+up; there is no way around that with `VpnService`. Only the tunnel network and
+the routes the server sends go through the tunnel; a `0.0.0.0/0` route from the
+server is ignored unless **Route all traffic through the tunnel** is enabled in
+the settings. That switch covers IPv4 only: IPv6 traffic does not go through the
+tunnel.
