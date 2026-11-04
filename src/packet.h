@@ -26,8 +26,8 @@ typedef struct {
 
 /*
  * A packet backend (#20). The client and server read and write tunnel
- * packets only through it, so a source other than a TUN device (e.g. a
- * userspace network stack, #21, or memory in tests) can be plugged in.
+ * packets only through it, so a source other than a TUN device (e.g.
+ * memory in tests) can be plugged in.
  */
 typedef struct {
     const char *name;
