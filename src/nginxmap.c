@@ -784,10 +784,17 @@ char *nginx_index_format(const char *lines, const char *domain,
          * it, a reload every 30 s */
         "<noscript><meta http-equiv=\"refresh\" content=\"30\"></noscript>\n"
         "<meta name=\"camex-version\" content=\"" CAMEX_VERSION "\">\n"
-        "<title>Camex Devices</title>\n"
+        /* The state in the title: seen from another browser tab (#162).
+         * Online counts the auto devices too, so it is no share of the
+         * configured ones */
+        "<title>%ld online", live);
+    if (off > 0) {
+        buf_printf(&out, ", %ld offline", off);
+    }
+    buf_printf(&out, " &middot; Camex Devices</title>\n"
         "<style>\n"
         ":root{--panel:#2c2119;--panel2:#3d2d22;--brass:#c9a24d;"
-        "--brass2:#8c6a2a;--amber:#ffb347;--ink:#e8d9b8;--dim:#8a7455;"
+        "--brass2:#8c6a2a;--amber:#ffb347;--ink:#e8d9b8;--dim:#b09873;"
         "--green:#5ad38f;--red:#c8452c}\n"
         "*{box-sizing:border-box}\n"
         "body{margin:0;min-height:100vh;background:radial-gradient(ellipse "
@@ -867,14 +874,14 @@ char *nginx_index_format(const char *lines, const char *domain,
         "a:hover{text-decoration:underline}\n"
         "a.peer{font-size:13px;letter-spacing:0;text-shadow:none}\n"
         ".nm{font-size:17px;letter-spacing:.04em;color:var(--dim)}\n"
-        ".off td{opacity:.75}\n"
+        ".off td{opacity:.9}\n"
         ".empty{margin-top:14px;font-family:'Courier New',monospace;"
         "font-size:clamp(16px,3vw,22px);letter-spacing:.18em;"
         "text-transform:uppercase;color:var(--dim);padding:14px 16px;"
         "border:2px solid #574123;border-radius:8px;background:#120d0a;"
         "box-shadow:inset 0 0 20px rgba(0,0,0,.8);text-align:center}\n"
         ".foot{margin-top:18px;font-family:'Courier New',monospace;"
-        "font-size:11px;color:#5e4d36;letter-spacing:.2em;"
+        "font-size:11px;color:#958061;letter-spacing:.2em;"
         "text-transform:uppercase;text-align:center}\n"
         ".stale-mark{display:none;color:var(--red)}\n"
         "body.stale .stale-mark{display:inline}\n"
@@ -953,7 +960,8 @@ char *nginx_index_format(const char *lines, const char *domain,
                "X=window.scrollX,Y=window.scrollY,x={};"
                "[].forEach.call(document.querySelectorAll('.rack'),function(r){"
                "x[r.parentNode.className]=r.scrollLeft});"
-               "a.innerHTML=b.innerHTML;if(s&&t)s.innerHTML=t.innerHTML;tls();"
+               "a.innerHTML=b.innerHTML;if(s&&t)s.innerHTML=t.innerHTML;"
+               "document.title=d.title;tls();"
                "var n=id&&document.getElementById(id);if(n)n.checked=true;"
                "[].forEach.call(document.querySelectorAll('.rack'),function(r){"
                "var v=x[r.parentNode.className];if(v)r.scrollLeft=v});"

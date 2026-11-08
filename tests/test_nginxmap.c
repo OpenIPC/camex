@@ -108,6 +108,8 @@ static void test_index(void)
     /* No clients: both lists say so, Configured opens */
     m = page("", "openipc.click", &n, warn, sizeof(warn));
     CHECK(m != NULL && n == 0U && strstr(m, "<!doctype html>\n") == m &&
+              strstr(m, "<title>0 online &middot; Camex Devices</title>") !=
+                  NULL &&
               strstr(m, "<div class=\"sub\">0 online &middot; 0 configured"
                      "</div>") != NULL &&
               strstr(m, "No [client ID] blocks in the server&#39;s file") ==
@@ -134,6 +136,10 @@ static void test_index(void)
               strstr(m, "<div class=\"sub\">4 online &middot; 5 configured"
                      "</div>") != NULL,
           "four online, five configured");
+    CHECK(m != NULL && strstr(m, "<title>4 online, 2 offline &middot; Camex "
+                              "Devices</title>") != NULL,
+          "the title counts the online devices, auto ones too, and the "
+          "offline ones");
     CHECK(m != NULL && strstr(m, "Configured <b>5</b> &middot; <i>2 offline"
                               "</i></label><label for=\"tab-auto\">Auto <b>1"
                               "</b>") != NULL,
