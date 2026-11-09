@@ -110,6 +110,7 @@ static void test_index(void)
     CHECK(m != NULL && n == 0U && strstr(m, "<!doctype html>\n") == m &&
               strstr(m, "<title>0 online &middot; Camex Devices</title>") !=
                   NULL &&
+              strstr(m, "fill=%27%235ad38f%27/%3E%3C/svg%3E\">") != NULL &&
               strstr(m, "<div class=\"sub\">0 online &middot; 0 configured"
                      "</div>") != NULL &&
               strstr(m, "No [client ID] blocks in the server&#39;s file") ==
@@ -140,6 +141,14 @@ static void test_index(void)
                               "Devices</title>") != NULL,
           "the title counts the online devices, auto ones too, and the "
           "offline ones");
+    CHECK(m != NULL && strstr(m, "<link rel=\"icon\" href=\"data:image/svg+"
+                              "xml,%3Csvg ") != NULL &&
+              strstr(m, "fill=%27%23c8452c%27/%3E%3C/svg%3E\">") != NULL &&
+              strstr(m, "%235ad38f") == NULL &&
+              strstr(m, "lamp(on?'data:image/svg+xml,") != NULL &&
+              strstr(m, "%23b09873") != NULL,
+          "a device offline: the tab icon is the red lamp; the grey one is "
+          "the script's");
     CHECK(m != NULL && strstr(m, "Configured <b>5</b> &middot; <i>2 offline"
                               "</i></label><label for=\"tab-auto\">Auto <b>1"
                               "</b>") != NULL,
@@ -179,8 +188,8 @@ static void test_index(void)
                   pa > conf && pa < aut,
               "auto1 under Auto, the configured ones under Configured");
         CHECK(pa != NULL && pc != NULL && pd != NULL && pe != NULL &&
-                  pb != NULL && pa < pc && pc < pe && pe < pd && pd < pb,
-              "sorted by name, offline ones among them");
+                  pb != NULL && pe < pd && pd < pa && pa < pc && pc < pb,
+              "offline ones first, each group sorted by name (#164)");
     }
     CHECK(warn[0] == '\0', "no warnings");
     free(m);

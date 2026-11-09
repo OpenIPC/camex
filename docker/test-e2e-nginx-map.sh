@@ -190,8 +190,13 @@ check $? "CAM-A (configured) under Configured, CAM-B (auto pool) under Auto"
 echo "$conf_part" | grep -qF '<tr class="dev off"><td class="lamp"><span class="bulb"></span></td><td><span class="nm">Gate</span></td><td class="id">cam-z</td>' &&
     ! echo "$home" | grep -q "//cam-z." &&
     echo "$home" | grep -qF 'Configured <b>2</b> &middot; <i>1 offline</i>' &&
-    echo "$home" | grep -qF '<title>2 online, 1 offline &middot; Camex Devices</title>'
-check $? "CAM-Z, configured and never connected, is listed offline without a link, and counted in the title"
+    echo "$home" | grep -qF '<title>2 online, 1 offline &middot; Camex Devices</title>' &&
+    echo "$home" | grep -q '^<link rel="icon" href="data:image/svg+xml,.*%23c8452c%27'
+check $? "CAM-Z, configured and never connected, is listed offline without a link, counted in the title, the tab's lamp red"
+z_at=$(echo "$conf_part" | grep -n '<span class="nm">Gate</span>' | cut -d: -f1)
+a_at=$(echo "$conf_part" | grep -n "//cam-a.$DOMAIN/" | cut -d: -f1)
+[ -n "$z_at" ] && [ -n "$a_at" ] && [ "$z_at" -lt "$a_at" ]
+check $? "offline CAM-Z (Gate) listed before the online CAM-A (#164)"
 hs=$(docker exec "$P-srv" camex --status --json | python3 -c 'import json,sys; print([c for s in json.load(sys.stdin)["servers"] for c in s["clients"] if c["id"]=="CAM-A"][0]["handshakes"])')
 echo "$home" | grep -F "//cam-a.$DOMAIN/" | grep -qE "<td class=\"hs\">[0-9dhms]+ ago &middot; $hs</td><td class=\"tr\">[0-9.&#;]+ / [0-9.&#;]+</td>"
 check $? "CAM-A's row has its handshakes ($hs, as --json says), ages and traffic"
@@ -543,7 +548,9 @@ sed -e 's|<div class="tabs">|<div class="tabs" data-t="new">|' \
     -e 's|<div class="list list-conf">|<div class="list list-conf" data-l="new">|' \
     -e 's|<div class="list list-auto">|<div class="list list-auto" data-l="new">|' \
     -e 's|<div class="sub">[0-9]* online|<div class="sub">99 online|' \
-    -e 's|<title>[0-9]* online|<title>98 online|' "$JS_DIR/a.html" > "$JS_DIR/b.html"
+    -e 's|<title>[0-9]* online|<title>98 online|' \
+    -e '/^<link rel="icon"/s|fill=%27%23[0-9a-f]*%27|fill=%27%23123456%27|' \
+    "$JS_DIR/a.html" > "$JS_DIR/b.html"
 sed 's|<meta name="camex-version" content="[^"]*"|<meta name="camex-version" content="0.0.0"|' \
     "$JS_DIR/b.html" > "$JS_DIR/c.html"
 # (the files go in through stdin: a temporary directory need not be one
