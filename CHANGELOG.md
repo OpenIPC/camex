@@ -6,6 +6,18 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.16.1 — 2026-11-09
+
+- The device page (`camex --status --format nginx-index`, #162): the browser tab shows the
+  state, `3 online, 1 offline · Camex Devices` (the offline part only when there are offline
+  devices), also without JavaScript and after an in-place refresh; while the page gets no
+  answer it starts with `No connection ·`. Secondary text is easier
+  to read: `--dim` is `#b09873`, the footer `#a08a69`, rows of offline devices are dimmed
+  less (`opacity` .95); the offline count on the tabs is `#e8755c` on an inactive tab and
+  `#4a0e08` on the active one. They reach 4.5:1 against their background except at the far
+  ends of two gradients: the footer on a very tall window (about 4.4:1 at 1900 px) and the
+  active tab's count at the bottom edge of the brass (about 4.4:1).
+
 ## 3.16.0 — 2026-11-02
 
 - The Android app runs on Android 5.0 and later (`minSdk` 21, was 26; #158): older TV boxes
