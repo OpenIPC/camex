@@ -784,11 +784,19 @@ char *nginx_index_format(const char *lines, const char *domain,
          * it, a reload every 30 s */
         "<noscript><meta http-equiv=\"refresh\" content=\"30\"></noscript>\n"
         "<meta name=\"camex-version\" content=\"" CAMEX_VERSION "\">\n"
-        "<title>Camex Devices</title>\n"
+        /* The state in the title: seen from another browser tab (#162).
+         * Online counts the auto devices too, so it is no share of the
+         * configured ones */
+        "<title>%ld online", live);
+    if (off > 0) {
+        buf_printf(&out, ", %ld offline", off);
+    }
+    buf_printf(&out, " &middot; Camex Devices</title>\n"
         "<style>\n"
         ":root{--panel:#2c2119;--panel2:#3d2d22;--brass:#c9a24d;"
-        "--brass2:#8c6a2a;--amber:#ffb347;--ink:#e8d9b8;--dim:#8a7455;"
-        "--green:#5ad38f;--red:#c8452c}\n"
+        "--brass2:#8c6a2a;--amber:#ffb347;--ink:#e8d9b8;--dim:#b09873;"
+        "--green:#5ad38f;--red:#c8452c;--off:#e8755c;--off-brass:#4a0e08;"
+        "--foot:#a08a69}\n"
         "*{box-sizing:border-box}\n"
         "body{margin:0;min-height:100vh;background:radial-gradient(ellipse "
         "at 50%% 0,#3b2c22 0,#1a1512 55%%,#0f0b09 100%%);color:var(--ink);"
@@ -827,14 +835,14 @@ char *nginx_index_format(const char *lines, const char *domain,
         "border-radius:8px;background:rgba(0,0,0,.25);"
         "box-shadow:inset 0 2px 6px rgba(0,0,0,.5)}\n"
         ".tabs label b{color:var(--ink);font-weight:normal}\n"
-        ".tabs label i{font-style:normal;color:var(--red)}\n"
+        ".tabs label i{font-style:normal;color:var(--off)}\n"
         "#tab-conf:checked~.tabs label[for=tab-conf],#tab-auto:checked~.tabs "
         "label[for=tab-auto]{color:#2a1c10;background:linear-gradient(180deg,"
         "#e2c377,#a88237);border-color:#5b4416;box-shadow:inset 0 1px 0 "
         "#fbe6a8,0 1px 2px #000}\n"
         "#tab-conf:checked~.tabs label[for=tab-conf] b,#tab-auto:checked~"
         ".tabs label[for=tab-auto] b{color:#2a1c10;font-weight:bold}\n"
-        "#tab-conf:checked~.tabs label[for=tab-conf] i{color:#7a1a10}\n"
+        "#tab-conf:checked~.tabs label[for=tab-conf] i{color:var(--off-brass)}\n"
         ".tab:focus-visible~.tabs label{outline:1px dotted var(--dim)}\n"
         ".list{display:none}\n"
         "#tab-conf:checked~.list-conf,#tab-auto:checked~.list-auto"
@@ -867,14 +875,14 @@ char *nginx_index_format(const char *lines, const char *domain,
         "a:hover{text-decoration:underline}\n"
         "a.peer{font-size:13px;letter-spacing:0;text-shadow:none}\n"
         ".nm{font-size:17px;letter-spacing:.04em;color:var(--dim)}\n"
-        ".off td{opacity:.75}\n"
+        ".off td{opacity:.95}\n"
         ".empty{margin-top:14px;font-family:'Courier New',monospace;"
         "font-size:clamp(16px,3vw,22px);letter-spacing:.18em;"
         "text-transform:uppercase;color:var(--dim);padding:14px 16px;"
         "border:2px solid #574123;border-radius:8px;background:#120d0a;"
         "box-shadow:inset 0 0 20px rgba(0,0,0,.8);text-align:center}\n"
         ".foot{margin-top:18px;font-family:'Courier New',monospace;"
-        "font-size:11px;color:#5e4d36;letter-spacing:.2em;"
+        "font-size:11px;color:var(--foot);letter-spacing:.2em;"
         "text-transform:uppercase;text-align:center}\n"
         ".stale-mark{display:none;color:var(--red)}\n"
         "body.stale .stale-mark{display:inline}\n"
@@ -932,8 +940,10 @@ char *nginx_index_format(const char *lines, const char *domain,
                "document.addEventListener('change',function(e){var x=e.target;"
                "if(x.classList&&x.classList.contains('tab')){try{localStorage"
                ".setItem('camex-tab',x.id)}catch(err){}}});\n"
-               "function stale(on){document.body.classList.toggle('stale',on)}"
-               "\n"
+               /* The title says it too: it is what another tab shows */
+               "var T=document.title;\n"
+               "function stale(on){document.body.classList.toggle('stale',on);"
+               "document.title=on?'No connection \\u00b7 '+T:T}\n"
                /* Links with nginx's HTTP port (#141) on a page opened
                 * over HTTPS: the HTTPS listener instead; a peer's link
                 * (its own web port, #119) stays */
@@ -953,7 +963,8 @@ char *nginx_index_format(const char *lines, const char *domain,
                "X=window.scrollX,Y=window.scrollY,x={};"
                "[].forEach.call(document.querySelectorAll('.rack'),function(r){"
                "x[r.parentNode.className]=r.scrollLeft});"
-               "a.innerHTML=b.innerHTML;if(s&&t)s.innerHTML=t.innerHTML;tls();"
+               "a.innerHTML=b.innerHTML;if(s&&t)s.innerHTML=t.innerHTML;"
+               "T=d.title;document.title=T;tls();"
                "var n=id&&document.getElementById(id);if(n)n.checked=true;"
                "[].forEach.call(document.querySelectorAll('.rack'),function(r){"
                "var v=x[r.parentNode.className];if(v)r.scrollLeft=v});"

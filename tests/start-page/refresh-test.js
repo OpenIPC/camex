@@ -37,6 +37,7 @@ const flush = () => new Promise((r) => setTimeout(r, 50));
     check(d.querySelector('.tabs').getAttribute('data-t') === 'new' &&
           /99 online/.test(d.querySelector('.sub').textContent),
           'the lists and counts of the new page are in place, no reload');
+    check(/^98 online/.test(d.title), 'the title of the new page is in place');
     check(d.querySelectorAll('.list-conf[data-l="new"]').length === 1 &&
           d.querySelectorAll('.list-auto[data-l="new"]').length === 1,
           'both device lists are those of the new page');
@@ -46,9 +47,11 @@ const flush = () => new Promise((r) => setTimeout(r, 50));
     tick(); await flush();
     check(d.body.classList.contains('stale') && /99 online/.test(d.querySelector('.sub').textContent),
           'no answer: the data stays, marked "no connection"');
+    check(/^No connection · 98 online/.test(d.title), 'no answer: the title says so, the counts after it');
     reply = { ok: true, text: () => Promise.resolve(b) };
     tick(); await flush();
     check(!d.body.classList.contains('stale'), 'an answer again: the mark goes');
+    check(/^98 online/.test(d.title), 'an answer again: the title is the page\'s own');
     // The same page again: nothing rebuilt (a selection, the focus stay)
     d.querySelector('.tabs').setAttribute('data-k', 'kept');
     tick(); await flush();
