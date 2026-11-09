@@ -6,6 +6,14 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.17.0 — 2026-11-09
+
+- The device page (`camex --status --format nginx-index`, #164): the browser tab has an
+  icon, a lamp like those of the rows: green when every device is online, red when one is
+  offline, grey while the page gets no answer. It works without JavaScript and follows the
+  in-place refresh. Offline devices are listed first in each list, then the online ones,
+  each group by name and ID as before; an unchanged state still gives the same file.
+
 ## 3.16.1 — 2026-11-09
 
 - The device page (`camex --status --format nginx-index`, #162): the browser tab shows the
