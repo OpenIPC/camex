@@ -340,8 +340,14 @@ blocks in the file, Auto otherwise, and the browser remembers the tab chosen
   one is listed by its ID. A reload (`kill -HUP`) applies new names; the server
   refuses to load a file with a name that is not valid. `camex --status` shows
   the names in a NAME column, `--json` as `"name"`.
-- **Order**: by name (A–Z in any case alike), then by ID, connected or not, so
-  a camera keeps its place in the list.
+- **Order**: the cameras that are not connected first, so one that went down
+  is not lost in a long list (#164); within each group by name (A–Z in any
+  case alike), then by ID.
+- **Browser tab**: the title gives the counts, `3 online, 1 offline · Camex
+  Devices`, and the icon is a lamp: green when every camera is online, red
+  when one is not, grey while the page gets no answer (then the title starts
+  with `No connection ·`). Both work without JavaScript and follow the page's
+  refresh.
 - **Freshness**: the ages and the traffic are those of the last sync (at
   least every 10 seconds with `--follow` and `INDEX`; a client that comes or
   goes at once). An open page refreshes itself in place every 5 seconds

@@ -19,6 +19,16 @@
 
 #define MAP_HOST_MAX 253   /* a host name, without its NUL */
 
+/* The start page's tab icon (#164): the lamp of its rows, an SVG in a
+ * data: URL. No quote in it, so it fits an HTML attribute and a JS string
+ * alike; passed as a %s argument, its % signs are no format */
+#define LAMP_ICON(rgb) "data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org" \
+    "/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Ccircle cx=%278%27 cy=%278%27 " \
+    "r=%277%27 fill=%27%23" rgb "%27/%3E%3C/svg%3E"
+#define LAMP_ON LAMP_ICON("5ad38f")      /* --green: every device online */
+#define LAMP_OFF LAMP_ICON("c8452c")     /* --red: a device offline */
+#define LAMP_STALE LAMP_ICON("b09873")   /* --dim: no answer */
+
 typedef struct {
     char host[MAP_HOST_MAX + 1];
     uint32_t addr;         /* host order, for the order of duplicates */
@@ -541,9 +551,10 @@ static const char *shown_name(const map_entry_t *e)
     return e->name[0] != '\0' ? e->name : e->label;
 }
 
-/* By name, letters A-Z in any case alike (bytes otherwise), then by ID:
- * the order does not depend on the servers' order, the locale or the
- * case of a name */
+/* Offline devices first, so one that went down is not lost in a long list
+ * (#164); then by name, letters A-Z in any case alike (bytes otherwise),
+ * then by ID: the order does not depend on the servers' order, the locale
+ * or the case of a name, and has no time in it */
 static int cmp_shown(const void *a, const void *b)
 {
     const map_entry_t *x = a, *y = b;
@@ -551,6 +562,9 @@ static int cmp_shown(const void *a, const void *b)
     const unsigned char *q = (const unsigned char *)shown_name(y);
     int c;
 
+    if (x->live != y->live) {
+        return x->live ? 1 : -1;
+    }
     while (*p != '\0' && tolower(*p) == tolower(*q)) {
         p++;
         q++;
@@ -792,6 +806,7 @@ char *nginx_index_format(const char *lines, const char *domain,
         buf_printf(&out, ", %ld offline", off);
     }
     buf_printf(&out, " &middot; Camex Devices</title>\n"
+        "<link rel=\"icon\" href=\"%s\">\n"
         "<style>\n"
         ":root{--panel:#2c2119;--panel2:#3d2d22;--brass:#c9a24d;"
         "--brass2:#8c6a2a;--amber:#ffb347;--ink:#e8d9b8;--dim:#b09873;"
@@ -891,7 +906,8 @@ char *nginx_index_format(const char *lines, const char *domain,
         "@media (max-width:560px){.conn,.id{display:none}.panel{padding:26px "
         "14px 18px}td,th{padding:10px 6px}td.tr,th{white-space:normal}"
         ".tabs{gap:6px}.tabs label{padding:7px 9px;letter-spacing:.08em}}\n"
-        "</style>\n</head>\n<body>\n<h1>Camex Devices</h1>\n");
+        "</style>\n</head>\n<body>\n<h1>Camex Devices</h1>\n",
+        off > 0 ? LAMP_OFF : LAMP_ON);
     buf_printf(&out, "<div class=\"sub\">%ld online &middot; %ld configured"
                "</div>\n"
                "<div class=\"panel\">\n"
@@ -940,10 +956,15 @@ char *nginx_index_format(const char *lines, const char *domain,
                "document.addEventListener('change',function(e){var x=e.target;"
                "if(x.classList&&x.classList.contains('tab')){try{localStorage"
                ".setItem('camex-tab',x.id)}catch(err){}}});\n"
-               /* The title says it too: it is what another tab shows */
-               "var T=document.title;\n"
+               /* The title and the icon say it too: they are what
+                * another tab shows (#164: the lamp grey) */
+               "var T=document.title,L=document.querySelector("
+               "'link[rel=icon]'),I=L&&L.getAttribute('href');\n"
+               "function lamp(h){if(L&&h&&L.getAttribute('href')!==h)"
+               "L.setAttribute('href',h)}\n"
                "function stale(on){document.body.classList.toggle('stale',on);"
-               "document.title=on?'No connection \\u00b7 '+T:T}\n"
+               "document.title=on?'No connection \\u00b7 '+T:T;"
+               "lamp(on?'%s':I)}\n"
                /* Links with nginx's HTTP port (#141) on a page opened
                 * over HTTPS: the HTTPS listener instead; a peer's link
                 * (its own web port, #119) stays */
@@ -964,7 +985,9 @@ char *nginx_index_format(const char *lines, const char *domain,
                "[].forEach.call(document.querySelectorAll('.rack'),function(r){"
                "x[r.parentNode.className]=r.scrollLeft});"
                "a.innerHTML=b.innerHTML;if(s&&t)s.innerHTML=t.innerHTML;"
-               "T=d.title;document.title=T;tls();"
+               "T=d.title;document.title=T;var e=d.querySelector("
+               "'link[rel=icon]');if(e){I=e.getAttribute('href');lamp(I)}"
+               "tls();"
                "var n=id&&document.getElementById(id);if(n)n.checked=true;"
                "[].forEach.call(document.querySelectorAll('.rack'),function(r){"
                "var v=x[r.parentNode.className];if(v)r.scrollLeft=v});"
@@ -991,7 +1014,7 @@ char *nginx_index_format(const char *lines, const char *domain,
                ".then(function(){clearTimeout(w);if(g===gen)busy=0})}\n"
                "setInterval(tick,5000);\n"
                "})();\n"
-               "</script>\n</body>\n</html>\n");
+               "</script>\n</body>\n</html>\n", LAMP_STALE);
     free(conf);
     free(autos);
     if (out.err) {
