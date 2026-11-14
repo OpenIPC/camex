@@ -6,6 +6,12 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.17.1 — 2026-11-14
+
+- The device page (`camex --status --format nginx-index`, #166): the tab icon lamp has a
+  thin brass rim (`#6e5320`, radius 6.5), the same icon as the other brass pages; its
+  colours are unchanged.
+
 ## 3.17.0 — 2026-11-09
 
 - The device page (`camex --status --format nginx-index`, #164): the browser tab has an
