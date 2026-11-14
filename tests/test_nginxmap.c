@@ -110,7 +110,8 @@ static void test_index(void)
     CHECK(m != NULL && n == 0U && strstr(m, "<!doctype html>\n") == m &&
               strstr(m, "<title>0 online &middot; Camex Devices</title>") !=
                   NULL &&
-              strstr(m, "fill=%27%235ad38f%27/%3E%3C/svg%3E\">") != NULL &&
+              strstr(m, "r=%276.5%27 stroke=%27%236e5320%27 fill=%27%235ad38f"
+                        "%27/%3E%3C/svg%3E\">") != NULL &&
               strstr(m, "<div class=\"sub\">0 online &middot; 0 configured"
                      "</div>") != NULL &&
               strstr(m, "No [client ID] blocks in the server&#39;s file") ==

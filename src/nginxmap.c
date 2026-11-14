@@ -20,11 +20,11 @@
 #define MAP_HOST_MAX 253   /* a host name, without its NUL */
 
 /* The start page's tab icon (#164): the lamp of its rows, an SVG in a
- * data: URL. No quote in it, so it fits an HTML attribute and a JS string
- * alike; passed as a %s argument, its % signs are no format */
+ * data: URL, with the brass rim of the page's lamps (#6e5320). No quote
+ * in it, so it fits an HTML attribute and a JS string alike; passed as a %s argument, its % signs are no format */
 #define LAMP_ICON(rgb) "data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org" \
     "/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Ccircle cx=%278%27 cy=%278%27 " \
-    "r=%277%27 fill=%27%23" rgb "%27/%3E%3C/svg%3E"
+    "r=%276.5%27 stroke=%27%236e5320%27 fill=%27%23" rgb "%27/%3E%3C/svg%3E"
 #define LAMP_ON LAMP_ICON("5ad38f")      /* --green: every device online */
 #define LAMP_OFF LAMP_ICON("c8452c")     /* --red: a device offline */
 #define LAMP_STALE LAMP_ICON("b09873")   /* --dim: no answer */
