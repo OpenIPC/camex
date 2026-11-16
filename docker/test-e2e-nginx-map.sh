@@ -23,6 +23,9 @@
 # 10. --follow (#130): a sync as soon as a client comes or goes, none while
 #    nothing changes; a server too old for it is synced every 10 seconds; a
 #    server that starts during the wait ends it (#138).
+# 10a. A client that announces its web port (--web-port 8080, #174) is in
+#    the map on that port and reached by nginx; --status shows it; a 2 MB
+#    upload through nginx is not refused (client_max_body_size).
 # The start page (#105) along the way: the bare domain lists the live
 # clients with their name= (escaped) or ID and links that reach them;
 # --status shows the name; an unchanged state leaves the file alone; bad
@@ -116,6 +119,17 @@ client() {  # client <name> [<port>]: a camex client serving "I am <name>" on po
          exec /usr/local/bin/camex-run --mode client --auto --name "$CAMEX_ID" \
              --server-host '"$P-srv"' --port '"${2:-5800}"' --server-pubkey '"$SERVER_PUBKEY"' \
              --psk '"$PSK"' --keepalive 2' >/dev/null
+}
+
+client_web() {  # client_web <name> <port>: serves "I am <name>" on <port> only,
+                # and announces it with --web-port (#174)
+    docker run -d --name "$P-$1" --network "$NET_NAME" --cap-add NET_ADMIN \
+        --cap-add MKNOD -e CAMEX_ID="$1" -e WEB="$2" --entrypoint /bin/sh "$IMAGE" -c \
+        'mkdir -p /www && echo "I am $CAMEX_ID" > /www/index.html &&
+         (cd /www && python3 -m http.server "$WEB" >/dev/null 2>&1 &) &&
+         exec /usr/local/bin/camex-run --mode client --auto --name "$CAMEX_ID" \
+             --server-host '"$P-srv"' --port 5800 --server-pubkey '"$SERVER_PUBKEY"' \
+             --psk '"$PSK"' --keepalive 2 --web-port "$WEB"' >/dev/null
 }
 
 sync() {    # sync: the example sync script in the server container; nginx
@@ -532,6 +546,32 @@ docker exec "$P-srv" grep -q '"cam-g\.' /etc/nginx/camex-map.conf &&
     docker exec "$P-srv" grep -q "cannot report its changes: a sync every 10 seconds" /tmp/follow-old.log
 check $? "with a server too old for it: a sync every 10 seconds, said once"
 docker exec "$P-srv" sh -c 'pkill -f "camex-nginx-sync --follow"; true'
+
+echo "== 10a. a client's own web port (#174), uploads above 1 MB"
+client_web WEB-1 8080
+wait_registered WEB-1
+sleep 2
+sync | sed 's/^/      /'
+docker exec "$P-srv" cat /etc/nginx/camex-map.conf | sed 's/^/      /'
+# (the name as the map has it: an earlier section may have changed the domain)
+WEB_HOST=$(docker exec "$P-srv" sed -n 's/^    "\(web-1\.[^"]*\)" 10\.200\.0\.[0-9]*:8080;$/\1/p' \
+    /etc/nginx/camex-map.conf)
+[ -n "$WEB_HOST" ] &&
+    ! docker exec "$P-srv" grep -v '"web-1\.' /etc/nginx/camex-map.conf | grep -q ':8080;'
+check $? "the map has WEB-1 on its announced port 8080, the others on their own"
+[ "$(get "$WEB_HOST")" = "I am WEB-1" ]
+check $? "nginx reaches WEB-1's page on its own port"
+docker exec "$P-srv" camex --status --json | grep -q '"id":"WEB-1"[^}]*"web_port":8080' &&
+    docker exec "$P-srv" camex --status | grep -E '^WEB-1 ' | grep -q ':8080'
+check $? "--status and --json show its web port"
+# 2 MB through nginx to a device: nginx passes it on (the device's own
+# answer, 501 from python's http.server), no 413 of its 1 MB default
+code=$(docker exec "$P-srv" sh -c 'head -c 2097152 /dev/zero > /tmp/big &&
+    curl -s -o /dev/null -w "%{http_code}" -m 20 -H "Host: '"$WEB_HOST"'" \
+        --data-binary @/tmp/big http://127.0.0.1/')
+[ "$code" != 413 ] && [ "$code" != 503 ] && [ -n "$code" ] && [ "$code" != 000 ]
+check $? "a 2 MB upload goes through nginx to the device (got $code, not 413)"
+docker rm -f "$P-WEB-1" >/dev/null
 
 echo "== 11. the start page refreshes itself in place (#142)"
 # The page as the sync wrote it, a next one (other counts, a marked list)

@@ -1778,6 +1778,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     char client_id[CAMEX_CLIENT_ID_LEN];
     char local_ip[16];
     uint8_t auto_request = 0U;
+    int web_port = 0;
     uint8_t e_seed[NOISE_DHLEN];
     uint8_t resp[V2_RESP_HDR + NOISE_MSG2_OVERHEAD + CAMEX_CONTROL_MAX];
     uint8_t c1[NOISE_KEYLEN];
@@ -1923,7 +1924,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     local_ip[0] = '\0';
     if (proto_parse_register(message, client_id, sizeof(client_id),
                              local_ip, sizeof(local_ip),
-                             &auto_request) != 0 ||
+                             &auto_request, &web_port) != 0 ||
         server_register_allowed(used_key, client_id, sizeof(client_id),
                                 local_ip, auto_request, from) != 0) {
         noise_wipe(&hs);
@@ -2090,6 +2091,8 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     memcpy(entry->psk_key, used_key, 32);
     memcpy(entry->hs_ts, payload, V2_TIMESTAMP_LEN);
     entry->registered = 1U;
+    /* Every handshake says it again: one without it means none (#174) */
+    entry->web_port = web_port;
 
     /* The reply goes where message 1 came from */
     if (entry->tcp_fd >= 0) {
@@ -2610,6 +2613,9 @@ char *server_status(int json, size_t *len)
         w = (int)strlen(peer);
         peer_w = w > peer_w ? w : peer_w;
         w = c->pending_ip_be != 0U ? 34 : 15;   /* "a.b.c.d -> e.f.g.h" */
+        if (config_db_web_port(c->client_id, c->web_port) > 0) {
+            w += 6;   /* ":65535", its web port (#174) */
+        }
         addr_w = w > addr_w ? w : addr_w;
     }
     leased = server_lease_used;   /* no scan of the table (#82) */
@@ -2702,6 +2708,13 @@ char *server_status(int json, size_t *len)
             } else {
                 sb_printf(&b, "null");
             }
+            sb_printf(&b, ",\"web_port\":");
+            if (config_db_web_port(c->client_id, c->web_port) > 0) {
+                sb_printf(&b, "%d", config_db_web_port(c->client_id,
+                                                       c->web_port));
+            } else {
+                sb_printf(&b, "null");
+            }
             sb_printf(&b, ",\"peer\":\"%s\",\"transport\":\"%s\","
                       "\"registered\":%ld,\"connected_s\":%.0f,"
                       "\"last_packet_s\":", peer,
@@ -2723,14 +2736,22 @@ char *server_status(int json, size_t *len)
                       (unsigned long long)c->tx_bytes,
                       (unsigned long long)c->isolation_drops);
         } else {
-            char addr[40], d1[32], d2[32], d3[32], rx[24], tx[24];
+            char addr[48], d1[32], d2[32], d3[32], rx[24], tx[24];
             char idbuf[CAMEX_CLIENT_ID_LEN];
             const char *name = status_name(c->client_id);
+
+            int wp = config_db_web_port(c->client_id, c->web_port);
 
             if (pend[0] != '\0') {
                 snprintf(addr, sizeof(addr), "%s -> %s", ip, pend);
             } else {
                 snprintf(addr, sizeof(addr), "%s", ip);
+            }
+            /* nginx's port on it (#174) */
+            if (wp > 0) {
+                size_t al = strlen(addr);
+
+                snprintf(addr + al, sizeof(addr) - al, ":%d", wp);
             }
             status_dur(d1, sizeof(d1), since);
             if (last < 0.0) {
@@ -2936,6 +2957,12 @@ uint64_t server_state_hash(void)
         name = status_name(c->client_id);
         port = config_db_peer_port(c->client_id);
         h = state_mix(h, c->client_id, strlen(c->client_id));
+        {
+            /* a new web port changes the map (#174) */
+            int wp = config_db_web_port(c->client_id, c->web_port);
+
+            h = state_mix(h, &wp, sizeof(wp));
+        }
         h = state_mix(h, &c->ip_be, sizeof(c->ip_be));
         h = state_mix(h, &c->addr.sin_addr.s_addr,
                       sizeof(c->addr.sin_addr.s_addr));
@@ -2960,7 +2987,7 @@ uint64_t server_state_hash(void)
 /* The live clients as "<client ID> <tunnel address>" lines, for the nginx
  * map (#84): clients with an ID and an address only; with names, " <name>"
  * follows for a client with name= (#105) */
-char *server_clients_list(int names, size_t *len)
+char *server_clients_list(int names, int web, size_t *len)
 {
     status_buf_t b = { NULL, 0U, 0U, 0 };
     size_t i;
@@ -2992,6 +3019,18 @@ char *server_clients_list(int names, size_t *len)
         name = names ? status_name(c->client_id) : NULL;
         /* The name is the rest of the line: it was checked to have no
          * control characters when the file was loaded */
+        if (web) {
+            /* CLIENTS WEB (#174): its web port as a third field, when it
+             * has one */
+            int wp = config_db_web_port(c->client_id, c->web_port);
+
+            if (wp > 0) {
+                sb_printf(&b, "%s %s %d\n", c->client_id, ip, wp);
+            } else {
+                sb_printf(&b, "%s %s\n", c->client_id, ip);
+            }
+            continue;
+        }
         sb_printf(&b, "%s %s%s%s\n", c->client_id, ip,
                   name != NULL ? " " : "", name != NULL ? name : "");
     }

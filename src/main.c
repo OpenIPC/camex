@@ -117,6 +117,7 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         { "wait", required_argument, NULL, 'w' },
         { "wait-timeout", required_argument, NULL, 'x' },
         { "http-port", required_argument, NULL, 'z' },
+        { "web-port", required_argument, NULL, 'y' },
         { NULL, 0, NULL, 0 }
     };
     int opt;
@@ -367,6 +368,21 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
                 config->map_http_port = (int)val;
             }
             break;
+        case 'y':
+            /* Long only: the port of this client's web UI, for nginx on
+             * the server (#174) */
+            {
+                char *end = NULL;
+                long val = strtol(optarg, &end, 10);
+
+                if (end == optarg || *end != '\0' || val < 1 || val > 65535) {
+                    log_message(LOG_ERR, "--web-port must be 1..65535, "
+                                "got: %s", optarg);
+                    return -1;
+                }
+                config->web_port = (int)val;
+            }
+            break;
         case 'w':
             /* Long only (not in the short options): the token of the last
              * --wait, "-" for the state now */
@@ -439,6 +455,13 @@ int validate_config(camex_config_t *config)
                     "client needs --server-pubkey");
         return -1;
     }
+    if (config->web_port != 0 &&
+        (config->mode != CAMEX_MODE_CLIENT || !config->auto_config)) {
+        log_message(LOG_ERR, "--web-port is for a client in auto mode "
+                    "(--mode client --auto)");
+        return -1;
+    }
+
     if (config->mode == CAMEX_MODE_SERVER && config->server_pubkey[0] != '\0') {
         log_message(LOG_ERR, "--server-pubkey is for the client; the server "
                     "needs --server-key-file");
@@ -559,6 +582,8 @@ void print_usage(const char *progname)
     printf("  -a, --auto              "
            "Fetch tunnel parameters from the server\n");
     printf("  -n, --name <id>         Client ID (auto mode; optional in manual mode)\n");
+    printf("      --web-port <port>   Auto client: the port of its web UI, for nginx\n"
+           "                          on the server (#174; needs a server 3.19.0+)\n");
     printf("  -l, --local-cidr <cidr>  Local tunnel address in CIDR form\n");
     printf("  -g, --gateway-ip <addr>  Gateway inside the tunnel\n");
     printf("  -s, --server-host <addr> Tunnel server host or address\n");

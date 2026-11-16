@@ -46,6 +46,7 @@ typedef struct {
     unsigned long long tx;
     char peer[16];         /* its external IP (#119), "" = not known */
     long peer_port;        /* the port of its link, 0 = no link */
+    long web_port;         /* the map: nginx's port on it (#174), 0 = --upstream-port */
 } map_entry_t;
 
 typedef struct {
@@ -319,7 +320,7 @@ static int split_tabs(char *line, char **f, int max)
 static int parse_record(const char *p, size_t ll, const char *domain,
                         size_t dlen, int index, FILE *warn, map_entry_t *e)
 {
-    char line[512], id[64], addr[32], extra[2], shown[64];
+    char line[512], id[64], addr[32], port[8], extra[2], shown[64];
     const char *name = NULL;
     size_t k;
     uint32_t a = 0U;
@@ -334,9 +335,18 @@ static int parse_record(const char *p, size_t ll, const char *domain,
     e->live = 1U;
     e->last = -1;
     if (!index) {
-        if (sscanf(line, "%63s %31s %1s", id, addr, extra) != 2 ||
-            !parse_addr(addr, &a)) {
+        /* "<ID> <address>", or with its web port (CLIENTS WEB, #174) */
+        int got = sscanf(line, "%63s %31s %7s %1s", id, addr, port, extra);
+        unsigned long long wp;
+
+        if ((got != 2 && got != 3) || !parse_addr(addr, &a)) {
             return 0;
+        }
+        if (got == 3) {
+            if (!parse_num(port, 65535U, &wp) || wp == 0U) {
+                return 0;
+            }
+            e->web_port = (long)wp;
         }
     } else {
         char *f[13];
@@ -531,9 +541,10 @@ char *nginx_map_format(const char *lines, const char *domain, int port,
         }
         /* Quoted; an ID such as "default" or "include" also needs the
          * backslash to stay a host (without --domain) */
-        buf_printf(&out, "    \"%s%s\" %s:%d;\n",
+        buf_printf(&out, "    \"%s%s\" %s:%ld;\n",
                    map_reserved(e[i].host) ? "\\" : "", e[i].host,
-                   e[i].addr_text, port);
+                   e[i].addr_text,
+                   e[i].web_port > 0 ? e[i].web_port : (long)port);
         (*count)++;
     }
     buf_printf(&out, "}\n");

@@ -44,7 +44,7 @@ int proto_build_register(const camex_config_t *config,
 int proto_parse_register(char *message,
                          char *client_id, size_t client_id_size,
                          char *local_ip, size_t local_ip_size,
-                         uint8_t *auto_request);
+                         uint8_t *auto_request, int *web_port);
 
 /* Build CONFIG text message */
 int proto_build_config(const char *client_id,

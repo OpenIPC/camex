@@ -495,6 +495,115 @@ int main(void)
         }
     }
 
+    /* web_port= (#174): [client ID] > announced > [defaults] > none (0);
+     * 1..65535; not in [server] */
+    {
+        static const char *const bad[] = {
+            "[defaults]\nweb_port=0\n",
+            "[client cam1]\nweb_port=65536\n",
+            "[client cam1]\nweb_port=+80\n",
+            "[client cam1]\nweb_port=none\n",
+            "[server]\nweb_port=8080\n",
+        };
+        static const struct {
+            const char *conf;
+            int cam1, cam1_ann, auto7, auto7_ann;
+        } cases[] = {
+            /* nothing set: none, or what the client announced */
+            { "[client cam1]\nmtu=1400\n", 0, 8080, 0, 8080 },
+            /* [defaults] only below an announcement */
+            { "[defaults]\nweb_port=81\n", 81, 8080, 81, 8080 },
+            /* the client's own block wins over both */
+            { "[defaults]\nweb_port=81\n[client cam1]\nweb_port=8443\n",
+              8443, 8443, 81, 8080 },
+        };
+        char path[] = "/tmp/test_proto_XXXXXX";
+        int fd = mkstemp(path);
+        FILE *fp = fd >= 0 ? fdopen(fd, "w") : NULL;
+        size_t k;
+
+        if (fp != NULL) {
+            fclose(fp);
+            for (k = 0U; k < sizeof(cases) / sizeof(cases[0]); ++k) {
+                fp = fopen(path, "w");
+                if (fp == NULL) {
+                    break;
+                }
+                fputs(cases[k].conf, fp);
+                fclose(fp);
+                config_db_free(&server_db);
+                if (config_db_load_file(path) != 0 ||
+                    config_db_web_port("cam1", 0) != cases[k].cam1 ||
+                    config_db_web_port("CAM1", 8080) != cases[k].cam1_ann ||
+                    config_db_web_port("auto7", 0) != cases[k].auto7 ||
+                    config_db_web_port("auto7", 8080) != cases[k].auto7_ann) {
+                    fprintf(stderr, "FAIL: web_port= case %u: %d %d %d %d\n",
+                            (unsigned)k, config_db_web_port("cam1", 0),
+                            config_db_web_port("CAM1", 8080),
+                            config_db_web_port("auto7", 0),
+                            config_db_web_port("auto7", 8080));
+                    ++failures;
+                }
+            }
+            config_db_free(&server_db);
+            for (k = 0U; k < sizeof(bad) / sizeof(bad[0]); ++k) {
+                fp = fopen(path, "w");
+                if (fp == NULL) {
+                    break;
+                }
+                fputs(bad[k], fp);
+                fclose(fp);
+                if (config_db_load_file(path) == 0) {
+                    fprintf(stderr, "FAIL: bad web_port= %u accepted\n",
+                            (unsigned)k);
+                    ++failures;
+                }
+                config_db_free(&server_db);
+            }
+            unlink(path);
+        }
+    }
+
+    /* REGISTER with WEB_PORT (#174): built only when set, parsed, checked */
+    {
+        camex_config_t c;
+        char buf[CAMEX_CONTROL_MAX], id[CAMEX_CLIENT_ID_LEN], ip[16];
+        uint8_t autoreq = 0U;
+        int wp = -1;
+        static const char *const badwp[] = { "0", "65536", "-1", "80x", "" };
+        size_t k;
+
+        memset(&c, 0, sizeof(c));
+        c.auto_config = 1U;
+        snprintf(c.client_id, sizeof(c.client_id), "box1");
+        if (proto_build_register(&c, buf, sizeof(buf)) != 0 ||
+            strstr(buf, "WEB_PORT") != NULL) {
+            fprintf(stderr, "FAIL: REGISTER has WEB_PORT without one: %s", buf);
+            ++failures;
+        }
+        c.web_port = 8080;
+        id[0] = ip[0] = '\0';
+        if (proto_build_register(&c, buf, sizeof(buf)) != 0 ||
+            strstr(buf, " WEB_PORT=8080") == NULL ||
+            proto_parse_register(buf, id, sizeof(id), ip, sizeof(ip),
+                                 &autoreq, &wp) != 0 ||
+            wp != 8080 || !autoreq || strcmp(id, "box1") != 0) {
+            fprintf(stderr, "FAIL: REGISTER WEB_PORT=8080 round trip: %d\n", wp);
+            ++failures;
+        }
+        for (k = 0U; k < sizeof(badwp) / sizeof(badwp[0]); ++k) {
+            snprintf(buf, sizeof(buf),
+                     "CAMEX REGISTER VER=2 MODE=AUTO CLIENT_ID=box1 WEB_PORT=%s\n",
+                     badwp[k]);
+            id[0] = ip[0] = '\0';
+            if (proto_parse_register(buf, id, sizeof(id), ip, sizeof(ip),
+                                     &autoreq, &wp) == 0) {
+                fprintf(stderr, "FAIL: bad WEB_PORT=%s accepted\n", badwp[k]);
+                ++failures;
+            }
+        }
+    }
+
     /* The server public key must not be all zero */
     if (crypto_set_server_pub("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=") == 0) {
         fprintf(stderr, "FAIL: an all-zero server public key was accepted\n");

@@ -59,6 +59,13 @@ int proto_build_register(const camex_config_t *config,
                                  " LOCAL_IP=%s", config->local_ip) != 0) {
             return -1;
         }
+        /* Only when given: a server before 3.19.0 refuses a REGISTER with
+         * a field it does not know (#174) */
+        if (config->web_port > 0 &&
+            append_control_field(buffer, size, &offset,
+                                 " WEB_PORT=%d", config->web_port) != 0) {
+            return -1;
+        }
     } else {
         if (append_control_field(buffer, size, &offset,
                                  " MODE=MANUAL LOCAL_IP=%s",
@@ -84,7 +91,7 @@ int proto_build_register(const camex_config_t *config,
 int proto_parse_register(char *message,
                          char *client_id, size_t client_id_size,
                          char *local_ip, size_t local_ip_size,
-                         uint8_t *auto_request)
+                         uint8_t *auto_request, int *web_port)
 {
     char *saveptr = NULL;
     char *token;
@@ -147,6 +154,24 @@ int proto_parse_register(char *message,
             if (copy_option(client_id, client_id_size, value,
                             "client ID") != 0) {
                 return -1;
+            }
+            continue;
+        }
+
+        if (token_value(token, "WEB_PORT", value, sizeof(value)) == 0) {
+            /* The port of the client's web UI (#174): 1..65535 */
+            char *end = NULL;
+            unsigned long wp;
+
+            if (value[0] == '\0' ||
+                strspn(value, "0123456789") != strlen(value) ||
+                strlen(value) > 5U ||
+                (wp = strtoul(value, &end, 10)) < 1UL || wp > 65535UL) {
+                log_peer(LOG_ERR, "Invalid WEB_PORT: %s", value);
+                return -1;
+            }
+            if (web_port != NULL) {
+                *web_port = (int)wp;
             }
             continue;
         }
