@@ -77,6 +77,7 @@ public final class CamexTunnel {
     // The latest start; a stop or a refused start moves it on, so a start the service has not
     // seen yet is dropped when it arrives
     private static final AtomicLong TOKEN = new AtomicLong();
+    private static final Object START_LOCK = new Object();
 
     // Read anywhere; written in post(), under STATE_LOCK
     private static final Object STATE_LOCK = new Object();
@@ -127,41 +128,51 @@ public final class CamexTunnel {
         if (bad != null) {
             // a running tunnel stops: it is not what the app asks for now; the reason names
             // the field, never its value (a psk)
-            TOKEN.incrementAndGet();
-            CamexVpnService.stopTunnel();
-            post(State.FAILED, "", "bad " + bad[0] + ": " + bad[1]);
+            refuse(0, State.FAILED, "bad " + bad[0] + ": " + bad[1]);
             return false;
         }
         if (VpnService.prepare(app) != null) {
-            TOKEN.incrementAndGet();
-            CamexVpnService.stopTunnel();
-            post(State.NEEDS_CONSENT, "", "VPN consent needed");
+            refuse(0, State.NEEDS_CONSENT, "VPN consent needed");
             return false;
+        }
+        long token;
+        // the token and the state move together: a stop() meanwhile comes after both
+        synchronized (START_LOCK) {
+            token = TOKEN.incrementAndGet();
+            post(State.CONNECTING, "", "");
         }
         Intent i = new Intent(app, CamexVpnService.class)
                 .setAction(CamexVpnService.ACTION_START)
                 .putExtra(CamexVpnService.EXTRA_ARGV, Values.argv(values))
-                .putExtra(CamexVpnService.EXTRA_TOKEN, TOKEN.incrementAndGet());
+                .putExtra(CamexVpnService.EXTRA_TOKEN, token);
         try {
             if (Build.VERSION.SDK_INT >= 26) app.startForegroundService(i);
             else app.startService(i);
         } catch (RuntimeException e) {
             // e.g. a start from the background the system does not allow; a running tunnel
             // with the old values stops as well
-            TOKEN.incrementAndGet();
-            CamexVpnService.stopTunnel();
-            post(State.FAILED, "", "cannot start the service: " + e.getClass().getSimpleName());
+            refuse(token, State.FAILED, "cannot start the service: " + e.getClass().getSimpleName());
             return false;
         }
-        post(State.CONNECTING, "", "");
         return true;
     }
 
     /** Stops the tunnel and its reconnects; the state becomes STOPPED. */
     public static void stop() {
-        TOKEN.incrementAndGet();
+        refuse(0, State.STOPPED, "");
+    }
+
+    /**
+     * Cancels the starts so far, sets the state and stops the running tunnel; the token and
+     * the state move together under START_LOCK. With a token, only when no newer start came.
+     */
+    private static void refuse(long token, State s, String error) {
+        synchronized (START_LOCK) {
+            if (token != 0 && TOKEN.get() != token) return;   // a newer start stands
+            TOKEN.incrementAndGet();
+            post(s, "", error);
+        }
         CamexVpnService.stopTunnel();
-        post(State.STOPPED, "", "");
     }
 
     /** The number of the latest start: a start with another number is stale. */

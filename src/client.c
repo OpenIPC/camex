@@ -47,6 +47,9 @@ void client_state_init(client_state_t *state)
         return;
     }
     memset(state, 0, sizeof(*state));
+    /* A new run (camex_main again in one process, the Android library)
+     * starts with the shortest reconnect delay */
+    reconnect_backoff = 0;
 }
 
 void client_wipe(void)

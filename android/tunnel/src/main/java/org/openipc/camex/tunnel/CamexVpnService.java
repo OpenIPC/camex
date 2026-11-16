@@ -246,6 +246,12 @@ public final class CamexVpnService extends VpnService {
         }
     }
 
+    // No VPN consent while camex runs: it stops, the state is NEEDS_CONSENT
+    private void lostConsent() {
+        requestStop(true);
+        post(State.NEEDS_CONSENT, "", "VPN consent needed");
+    }
+
     /** Stops camex and the reconnects; consentLost: the state is NEEDS_CONSENT. */
     private void requestStop(boolean lostConsent) {
         synchronized (lock) {
@@ -285,9 +291,8 @@ public final class CamexVpnService extends VpnService {
                 return -1;
             }
             if (VpnService.prepare(this) != null) {
-                synchronized (lock) {
-                    consentLost = true;
-                }
+                // camex would keep asking on every handshake: stop it, and tell the app
+                lostConsent();
                 return -1;
             }
             Builder b = new Builder()
@@ -313,9 +318,7 @@ public final class CamexVpnService extends VpnService {
             ParcelFileDescriptor pfd = b.establish();
             if (pfd == null) {
                 // not prepared any more
-                synchronized (lock) {
-                    consentLost = true;
-                }
+                lostConsent();
                 return -1;
             }
             synchronized (lock) {
