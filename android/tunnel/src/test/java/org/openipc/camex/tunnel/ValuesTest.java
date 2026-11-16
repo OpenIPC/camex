@@ -61,6 +61,10 @@ public class ValuesTest {
         v.put(Values.KEEPALIVE, "0");
         v.put(Values.PSK, "a plain pass phrase");
         assertNull(Values.check(v));
+        // camex takes a passphrase as it is, blanks at its ends included
+        v.put(Values.PSK, " padded ");
+        assertNull(Values.check(v));
+        assertEquals(" padded ", Values.argv(v)[Arrays.asList(Values.argv(v)).indexOf("--psk") + 1]);
     }
 
     @Test

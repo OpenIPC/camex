@@ -17,6 +17,7 @@ import android.os.Looper;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * camex (OpenIPC/camex) as a client in auto mode inside the app: the server gives the
@@ -73,6 +74,9 @@ public final class CamexTunnel {
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final List<Listener> LISTENERS = new CopyOnWriteArrayList<>();
+    // The latest start; a stop or a refused start moves it on, so a start the service has not
+    // seen yet is dropped when it arrives
+    private static final AtomicLong TOKEN = new AtomicLong();
 
     // Read anywhere, written on the main thread only
     private static volatile State state = State.STOPPED;
@@ -122,18 +126,21 @@ public final class CamexTunnel {
         if (bad != null) {
             // a running tunnel stops: it is not what the app asks for now; the reason names
             // the field, never its value (a psk)
+            TOKEN.incrementAndGet();
             CamexVpnService.stopTunnel();
             post(State.FAILED, "", "bad " + bad[0] + ": " + bad[1]);
             return false;
         }
         if (VpnService.prepare(app) != null) {
+            TOKEN.incrementAndGet();
             CamexVpnService.stopTunnel();
             post(State.NEEDS_CONSENT, "", "VPN consent needed");
             return false;
         }
         Intent i = new Intent(app, CamexVpnService.class)
                 .setAction(CamexVpnService.ACTION_START)
-                .putExtra(CamexVpnService.EXTRA_ARGV, Values.argv(values));
+                .putExtra(CamexVpnService.EXTRA_ARGV, Values.argv(values))
+                .putExtra(CamexVpnService.EXTRA_TOKEN, TOKEN.incrementAndGet());
         try {
             if (Build.VERSION.SDK_INT >= 26) app.startForegroundService(i);
             else app.startService(i);
@@ -147,11 +154,16 @@ public final class CamexTunnel {
 
     /** Stops the tunnel and its reconnects; the state becomes STOPPED. */
     public static void stop() {
+        TOKEN.incrementAndGet();
         CamexVpnService.stopTunnel();
         post(State.STOPPED, "", "");
     }
 
     /** True from {@link #start} to {@link #stop}, while the tunnel connects or is up. */
+    static long token() {
+        return TOKEN.get();
+    }
+
     public static boolean running() {
         State s = state;
         return s == State.CONNECTING || s == State.CONNECTED;

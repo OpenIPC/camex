@@ -121,8 +121,11 @@ run, and a reason from `check()` names the field, never its value.
 | `NEEDS_CONSENT` | no VPN consent (never given, revoked, or another VPN app took over): give it and call `start()` again      |
 | `FAILED`        | the values were refused (`bad <key>: <reason>`), or the service could not start                           |
 
-While camex reconnects to its server by itself, the state stays `CONNECTED`:
-it says the tunnel is up on the device, not that the server answers.
+`CONNECTED` means camex has a session with its server. When camex loses the
+server and reconnects by itself (the VPN stays), the state is `CONNECTING`
+(`lastError()`: `no answer from the server, reconnecting`) and turns
+`CONNECTED` again once the session is back; the library looks at it every
+2 s.
 
 ### VPN consent
 
@@ -133,11 +136,16 @@ Android lets an app run a VPN only after a consent. Both ways work at once:
   `startActivityForResult` once. After OK the consent stays, and `start()` works
   from anywhere, on every boot.
 - **An unattended device:** the consent is given while the device is
-  prepared, over adb, with no dialog (no root needed, it survives reboots):
+  prepared, over adb, with no dialog and no root:
 
   ```sh
   adb shell appops set <package> ACTIVATE_VPN allow
+  adb shell appops write-settings
   ```
+
+  `write-settings` writes it to disk at once: Android saves app ops later on its
+  own, and a reboot before that loses the consent. Once written, it survives
+  reboots.
 
   Android 5.0 (API 21) does not know this operation (`Unknown operation string`):
   there the dialog is confirmed once, on the screen or over adb (`input tap` on
@@ -189,6 +197,9 @@ values over its own settings, checks them with `check()` and saves them.
 
 - `gradle :tunnel:testReleaseUnitTest` (CI): the fields, the checks, camex's
   command line and the link parser on the JVM.
+The instrumented test has its own Activity (it shows the consent dialog on
+Android 5.0); it lives in `src/androidTest` only and is not part of the library.
+
 - `tests/android/tunnel-e2e.sh [API]`: the library on an x86_64 emulator in
   Docker. A camex server and a client "peer" run in containers; the
   instrumented test is the second client. It checks `NEEDS_CONSENT` without the

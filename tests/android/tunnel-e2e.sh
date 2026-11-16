@@ -21,7 +21,9 @@
 #                 the system dialog, its OK tapped): CONNECTED
 #                 with the address, the routes as above and no default route, TCP out to
 #                 the peer through the tunnel, TCP in from the peer to the app's listening
-#                 socket 0.0.0.0:8080, stop() and the VPN gone.
+#                 socket 0.0.0.0:8080; new values while running (camex again in-process);
+#                 the server stopped (CONNECTING) and started (CONNECTED); stop() and the
+#                 VPN gone; start() after stop(); stop() right after start().
 #
 # Usage: tests/android/tunnel-e2e.sh [API]   (API 21 by default; 34 needs the android-34 image)
 #   ANDROID_IMAGE, CROSS_IMAGE, EMULATOR_IMAGE, PEER_IMAGE  Docker images (see below)
@@ -208,6 +210,17 @@ for i in $(seq 1 120); do
     kill -0 $RUN 2>/dev/null || break
     sleep 1
 done
+# the server goes away while the app is connected, and comes back
+lost=
+for i in $(seq 1 300); do
+    LOG=$($ADB logcat -d -s CAMEX_E2E 2>/dev/null)
+    if grep -q "server-loss ready" <<<"$LOG"; then
+        if [ -z "$lost" ]; then docker stop -t 1 "$SRV" >/dev/null; lost=1; fi
+        if grep -q "lost OK" <<<"$LOG"; then docker start "$SRV" >/dev/null; break; fi
+    fi
+    kill -0 $RUN 2>/dev/null || break
+    sleep 1
+done
 wait $RUN || true
 $ADB logcat -d > "$OUT/logcat.txt" 2>&1 || true
 L=$(grep CAMEX_E2E "$OUT/logcat.txt" || true)
@@ -221,7 +234,13 @@ echo "$L" | grep -q "outgoing OK" && ok "TCP to the peer $PEER_IP through the tu
     || bad "TCP to the peer through the tunnel"
 [ "$got" = app-ok ] && ok "TCP from the peer to the app's 0.0.0.0:8080 through the tunnel" \
     || bad "TCP from the peer to the app's listening socket"
+echo "$L" | grep -q "restart OK" && ok "new values while running: camex again in-process, CONNECTED, peer reached" \
+    || bad "restart with new values"
+echo "$L" | grep -q "lost OK" && ok "server stopped: CONNECTING" || bad "no CONNECTING when the server went away"
+echo "$L" | grep -q "back OK" && ok "server back: CONNECTED, peer reached" || bad "not CONNECTED after the server came back"
 echo "$L" | grep -q "stop OK" && ok "stop(): STOPPED and the VPN gone" || bad "stop()"
+echo "$L" | grep -q "start after stop OK" && ok "start() after stop(): CONNECTED" || bad "start() after stop()"
+echo "$L" | grep -q "quick stop OK" && ok "stop() right after start(): stays STOPPED" || bad "stop() right after start()"
 if passed "$(cat "$OUT/run.log")"; then ok "the run step passed"; else bad "the run step"; tail -30 "$OUT/run.log"; fi
 grep -q 'FATAL EXCEPTION' "$OUT/logcat.txt" && bad "a crash in logcat ($OUT/logcat.txt)" || ok "no crash"
 # the psk never reaches logcat (the test runner logs its own arguments: not the library)

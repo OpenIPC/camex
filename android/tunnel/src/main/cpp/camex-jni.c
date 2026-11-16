@@ -21,13 +21,16 @@
  * between acquire and run clears `running`, and nativeRun() does not set it
  * again, so camex exits at once.
  */
+#include <errno.h>
 #include <jni.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 #include "camex.h"
+#include "client.h"
 #include "log.h"
 #include "tun.h"
 
@@ -50,15 +53,25 @@ int __wrap_socket(int domain, int type, int protocol)
         && g_service != NULL && pthread_equal(pthread_self(), g_thread)) {
         jclass cls = (*env)->GetObjectClass(env, g_service);
         jmethodID mid = cls ? (*env)->GetMethodID(env, cls, "protect", "(I)Z") : NULL;
+        jboolean ok = JNI_FALSE;
 
-        if (mid == NULL || !(*env)->CallBooleanMethod(env, g_service, mid, fd)) {
-            log_message(LOG_WARNING, "socket %d not protected from the VPN", fd);
+        if (mid != NULL) {
+            ok = (*env)->CallBooleanMethod(env, g_service, mid, fd);
         }
         if ((*env)->ExceptionCheck(env)) {
             (*env)->ExceptionClear(env);
+            ok = JNI_FALSE;
         }
         if (cls != NULL) {
             (*env)->DeleteLocalRef(env, cls);
+        }
+        if (!ok) {
+            /* An unprotected socket would send the server connection into
+             * the tunnel once a route covers the server: camex retries */
+            log_message(LOG_WARNING, "socket %d not protected from the VPN", fd);
+            close(fd);
+            errno = EPERM;
+            return -1;
         }
     }
     return fd;
@@ -197,6 +210,16 @@ out:
         free(argv);
     }
     return (jint)ret;
+}
+
+/* Whether camex has a session with its server now: cleared when it starts to
+ * reconnect, set when the handshake is done (a byte read across threads). */
+JNIEXPORT jboolean JNICALL
+Java_org_openipc_camex_tunnel_CamexVpnService_nativeEstablished(JNIEnv *env, jclass cls)
+{
+    (void)env;
+    (void)cls;
+    return client_state.established ? JNI_TRUE : JNI_FALSE;
 }
 
 /* Ask camex to stop; nativeRun() returns within about a second. */

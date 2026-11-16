@@ -38,10 +38,13 @@ import org.openipc.camex.tunnel.CamexTunnel.State;
 public final class CamexVpnService extends VpnService {
     static final String ACTION_START = "org.openipc.camex.tunnel.START";
     static final String EXTRA_ARGV = "argv";
+    static final String EXTRA_TOKEN = "token";
     private static final String TAG = "camex";
     private static final String CHANNEL = "camex_tunnel";
     private static final long BACKOFF_MIN_MS = 1000;
     private static final long BACKOFF_MAX_MS = 60000;
+    // How often the server session is looked at while the tunnel is up
+    private static final long SESSION_POLL_MS = 2000;
 
     private static native boolean nativeAcquire();
 
@@ -50,6 +53,8 @@ public final class CamexVpnService extends VpnService {
     private static native void nativeRelease();
 
     private static native void nativeStop();
+
+    private static native boolean nativeEstablished();
 
     static {
         System.loadLibrary("camex");
@@ -67,10 +72,13 @@ public final class CamexVpnService extends VpnService {
     private boolean nudged;             // a network came up: retry now
     private boolean consentLost;
     private boolean upThisRun;
+    private String tunAddress = "";     // the address of this run's TUN, "" before it is up
     private Thread worker;
 
     private ConnectivityManager.NetworkCallback networkCallback;
     private boolean foreground;
+    private final android.os.Handler main = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable sessionPoll = this::pollSession;
 
     /** From CamexTunnel.stop(): stop the run and the reconnects. */
     static void stopTunnel() {
@@ -92,6 +100,8 @@ public final class CamexVpnService extends VpnService {
             synchronized (s.lock) {
                 if (!s.stopped) return;   // a newer start runs: its state follows
             }
+            // the app's own notification shows the final state before it is let go
+            if (s.foreground && CamexTunnel.notificationFactory != null) s.notifyState();
             s.leaveForeground();
             s.stopSelf();
         }
@@ -102,6 +112,7 @@ public final class CamexVpnService extends VpnService {
         super.onCreate();
         instance = this;
         watchNetworks();
+        main.postDelayed(sessionPoll, SESSION_POLL_MS);
     }
 
     @Override
@@ -111,6 +122,16 @@ public final class CamexVpnService extends VpnService {
         goForeground();
         String[] a = intent != null && ACTION_START.equals(intent.getAction())
                 ? intent.getStringArrayExtra(EXTRA_ARGV) : null;
+        if (a != null && intent.getLongExtra(EXTRA_TOKEN, -1) != CamexTunnel.token()) {
+            // a start the app has stopped or replaced since: drop it
+            Log.i(TAG, "a stale start is dropped");
+            synchronized (lock) {
+                if (!stopped) return START_NOT_STICKY;
+            }
+            leaveForeground();
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         if (a == null) {
             // a restart by the system or an always-on VPN: the library stores no values
             Log.w(TAG, "started without values; the app starts the tunnel");
@@ -125,6 +146,7 @@ public final class CamexVpnService extends VpnService {
             argv = a;
             generation++;
             stopped = false;
+            tunAddress = "";   // the running TUN is the old values' one
             consentLost = false;
             // a running camex ends, and the worker starts it with the new values
             if (acquired) nativeStop();
@@ -146,10 +168,14 @@ public final class CamexVpnService extends VpnService {
                 String[] a;
                 long gen;
                 synchronized (lock) {
-                    if (stopped) return;
+                    if (stopped) {
+                        worker = null;   // in the same lock: a start now makes a new worker
+                        return;
+                    }
                     a = argv;
                     gen = generation;
                     upThisRun = false;
+                    tunAddress = "";
                 }
                 if (!acquire(gen)) continue;
                 int ret;
@@ -163,13 +189,18 @@ public final class CamexVpnService extends VpnService {
                 }
                 String why;
                 synchronized (lock) {
-                    if (stopped) return;
+                    tunAddress = "";
+                    if (stopped) {
+                        worker = null;
+                        return;
+                    }
                     if (gen != generation) {
                         backoff = BACKOFF_MIN_MS;   // new values: at once
                         continue;
                     }
                     if (consentLost) {
                         stopped = true;
+                        worker = null;
                         post(State.NEEDS_CONSENT, "", "VPN consent needed");
                         return;
                     }
@@ -274,6 +305,7 @@ public final class CamexVpnService extends VpnService {
             }
             synchronized (lock) {
                 upThisRun = true;
+                tunAddress = localIp;
             }
             post(State.CONNECTED, localIp, "");
             return pfd.detachFd();
@@ -282,6 +314,27 @@ public final class CamexVpnService extends VpnService {
             post(State.CONNECTING, "", "VPN setup failed: " + e.getClass().getSimpleName());
             return -1;
         }
+    }
+
+    /**
+     * While the TUN is up camex may lose its server and reconnect by itself (the TUN stays):
+     * CONNECTING then, CONNECTED again once its session is back.
+     */
+    private void pollSession() {
+        String addr;
+        synchronized (lock) {
+            addr = stopped ? "" : tunAddress;
+        }
+        if (!addr.isEmpty()) {
+            boolean up = nativeEstablished();
+            State st = CamexTunnel.state();
+            if (st == State.CONNECTED && !up) {
+                post(State.CONNECTING, "", "no answer from the server, reconnecting");
+            } else if (st == State.CONNECTING && up) {
+                post(State.CONNECTED, addr, "");
+            }
+        }
+        main.postDelayed(sessionPoll, SESSION_POLL_MS);
     }
 
     // A network that comes up cuts the back-off short (camex itself reconnects while it runs)
@@ -390,6 +443,7 @@ public final class CamexVpnService extends VpnService {
 
     @Override
     public void onDestroy() {
+        main.removeCallbacks(sessionPoll);
         requestStop(false);
         if (networkCallback != null) {
             try {

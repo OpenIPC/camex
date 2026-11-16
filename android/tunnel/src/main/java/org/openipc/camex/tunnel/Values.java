@@ -124,12 +124,12 @@ final class Values {
     }
 
     /**
-     * As camex takes --psk: one line, no blank at its ends (it trims them), below 128 bytes;
-     * a key in camex's forms (hex: 64 digits, base64: 32 bytes) neither all zero.
+     * As camex takes --psk: one line below 128 bytes, taken as it is (a passphrase may begin or
+     * end with a blank); a key in camex's forms (hex: 64 digits, base64: 32 bytes) neither all
+     * zero.
      */
     static boolean isPsk(String s) {
-        if (s.isEmpty() || !s.equals(s.trim())
-                || s.getBytes(StandardCharsets.UTF_8).length >= 128 || !plain(s)) {
+        if (s.isEmpty() || s.getBytes(StandardCharsets.UTF_8).length >= 128 || !plain(s)) {
             return false;
         }
         if (s.startsWith("hex:")) {

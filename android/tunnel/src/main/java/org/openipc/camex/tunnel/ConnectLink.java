@@ -19,7 +19,8 @@ import java.util.Map;
  * {@code n} client name, {@code m} MTU, {@code a} keepalive, {@code r} route all traffic.
  *
  * <p>{@link #values} holds what came through, under the keys of {@link CamexTunnel#fields()}:
- * {@code h} and {@code p} make {@code server} (a host without a port takes camex's 5800), the
+ * {@code h} and {@code p} make {@code server} (a host without a port takes camex's 5800; a
+ * malformed port leaves {@code server} out), the
  * transport is {@code UDP} or {@code TCP}. A malformed field is left out of the values and named
  * in {@link #errors}; unknown fields are ignored (a later version's). {@code r} is read and
  * ignored: the library never routes all traffic. The app puts the values over its own
@@ -84,7 +85,8 @@ public final class ConnectLink {
         Map<String, String> values = new LinkedHashMap<>();
         String host = got.get("h");
         String port = got.get("p");
-        if (host != null) {
+        if (host != null && !errors.containsKey("p")) {
+            // a malformed port leaves the server out, not the default port in
             values.put(Values.SERVER, host + ":" + (port != null
                     ? Integer.parseInt(port) : Values.DEFAULT_PORT));
         } else if (port != null && !errors.containsKey("h")) {

@@ -67,6 +67,20 @@ public class ConnectLinkTest {
     }
 
     @Test
+    public void badPortKeepsNoServer() {
+        ConnectLink c = ConnectLink.parse("camex://connect?h=vpn.example.org&p=99999");
+        assertNull(c.values.get(CamexTunnel.SERVER));
+        assertTrue(c.errors.containsKey("p"));
+    }
+
+    @Test
+    public void paddedPassphrase() {
+        ConnectLink c = ConnectLink.parse("camex://connect?s=%20pass%20");
+        assertEquals(" pass ", c.values.get(CamexTunnel.PSK));
+        assertTrue(c.errors.isEmpty());
+    }
+
+    @Test
     public void decoding() {
         assertEquals("a+b c", ConnectLink.decode("a+b%20c"));
         assertEquals("ключ", ConnectLink.decode("%D0%BA%D0%BB%D1%8E%D1%87"));

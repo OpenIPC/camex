@@ -60,12 +60,18 @@ public class TunnelE2eTest {
 
     /** Waits for the state; fails with the last one after the timeout. */
     private void await(CamexTunnel.State want, int seconds) throws InterruptedException {
+        await(want, null, seconds);
+    }
+
+    /** Waits for the state with an address other than notAddress (null: any). */
+    private void await(CamexTunnel.State want, String notAddress, int seconds)
+            throws InterruptedException {
         CountDownLatch done = new CountDownLatch(1);
         AtomicReference<String> last = new AtomicReference<>("");
         CamexTunnel.Listener l = (s, address, error) -> {
             last.set(s + " " + address + " " + error);
             Log.i(TAG, "state " + last.get());
-            if (s == want) done.countDown();
+            if (s == want && (notAddress == null || !notAddress.equals(address))) done.countDown();
         };
         CamexTunnel.addListener(l);
         try {
@@ -121,7 +127,9 @@ public class TunnelE2eTest {
     /**
      * step=run: CONNECTED with an address of the server's pool (or the one named); the VPN has the tunnel subnet and the
      * server's routes but no default route; the peer is reached over TCP through the tunnel;
-     * the peer reaches this app's listening socket (0.0.0.0:port) through it; stop() ends it.
+     * the peer reaches this app's listening socket (0.0.0.0:port) through it; new values restart
+ * it; a lost server gives CONNECTING and CONNECTED again when it is back; stop() ends it, a
+ * start after it works, and a stop right after a start wins.
      */
     @Test
     public void run() throws Exception {
@@ -169,20 +177,7 @@ public class TunnelE2eTest {
         }
 
         // out: the peer through the tunnel
-        String hp[] = peer.split(":");
-        String reply = null;
-        for (int i = 0; i < 15 && reply == null; i++) {
-            try (Socket s = new Socket()) {
-                s.connect(new InetSocketAddress(hp[0], Integer.parseInt(hp[1])), 3000);
-                s.setSoTimeout(5000);
-                reply = new BufferedReader(new InputStreamReader(s.getInputStream(),
-                        StandardCharsets.US_ASCII)).readLine();
-            } catch (Exception e) {
-                Log.i(TAG, "peer not yet: " + e);
-                Thread.sleep(1000);
-            }
-        }
-        assertEquals("peer-ok", reply);
+        assertEquals("peer-ok", askPeer(peer));
         Log.i(TAG, "outgoing OK");
 
         // in: the host script makes the peer connect to this address and port
@@ -192,13 +187,60 @@ public class TunnelE2eTest {
         Log.i(TAG, "incoming OK from " + from.get());
         server.close();
 
+        // new values while it runs: camex again in the same process (its options read anew),
+        // a new name gets a new address from the pool
+        Map<String, String> v2 = values();
+        v2.put(CamexTunnel.NAME, "app2");
+        assertTrue(CamexTunnel.start(context, v2));
+        await(CamexTunnel.State.CONNECTED, me, 90);
+        assertEquals("peer-ok", askPeer(peer));
+        Log.i(TAG, "restart OK " + CamexTunnel.address());
+
+        // the server goes away (the script stops it): CONNECTING, the VPN stays; back: CONNECTED
+        Log.i(TAG, "server-loss ready");
+        await(CamexTunnel.State.CONNECTING, 120);
+        Log.i(TAG, "lost OK: " + CamexTunnel.lastError());
+        await(CamexTunnel.State.CONNECTED, 180);
+        assertEquals("peer-ok", askPeer(peer));
+        Log.i(TAG, "back OK " + CamexTunnel.address());
+
         CamexTunnel.stop();
         await(CamexTunnel.State.STOPPED, 15);
         assertFalse(CamexTunnel.running());
+
+        // a start after a stop, then a stop at once: the stop wins over the start not yet run
+        assertTrue(CamexTunnel.start(context, values()));
+        await(CamexTunnel.State.CONNECTED, 90);
+        assertEquals("peer-ok", askPeer(peer));
+        Log.i(TAG, "start after stop OK");
+        CamexTunnel.stop();
+        await(CamexTunnel.State.STOPPED, 15);
+        assertTrue(CamexTunnel.start(context, values()));
+        CamexTunnel.stop();
+        Thread.sleep(5000);
+        assertEquals(CamexTunnel.State.STOPPED, CamexTunnel.state());
+        Log.i(TAG, "quick stop OK");
         // the VPN is gone
         for (int i = 0; i < 20 && !vpnRoutes().isEmpty(); i++) Thread.sleep(500);
         assertTrue("the VPN is still up", vpnRoutes().isEmpty());
         Log.i(TAG, "stop OK");
+    }
+
+    // "peer-ok" from the peer's TCP server, through the tunnel; null when it never answers
+    private static String askPeer(String peer) throws InterruptedException {
+        String[] hp = peer.split(":");
+        for (int i = 0; i < 20; i++) {
+            try (Socket s = new Socket()) {
+                s.connect(new InetSocketAddress(hp[0], Integer.parseInt(hp[1])), 3000);
+                s.setSoTimeout(5000);
+                return new BufferedReader(new InputStreamReader(s.getInputStream(),
+                        StandardCharsets.US_ASCII)).readLine();
+            } catch (Exception e) {
+                Log.i(TAG, "peer not yet: " + e);
+                Thread.sleep(1000);
+            }
+        }
+        return null;
     }
 
     // The routes of the VPN network (empty when there is none)
