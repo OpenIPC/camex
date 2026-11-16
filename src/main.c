@@ -123,6 +123,11 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
     int option_index = 0;
 
     opterr = 0;
+    /* A full getopt reset: camex_main() runs more than once in one process
+     * (the Android app and library restart it in-process), and getopt keeps
+     * its position from the previous run (glibc, musl, bionic and the BSDs
+     * all reinitialise on optind 0) */
+    optind = 0;
     while ((opt = getopt_long(argc, argv, "M:b:an:f:l:g:p:s:c:t:k:evhP:d:T:R:K:W:GS:Y:QJC:IF:D:U:E:",
                              long_options, &option_index)) != -1) {
         switch (opt) {

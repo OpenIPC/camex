@@ -704,6 +704,10 @@ else
         grep -qE '^[[:space:]]*auth_basic[[:space:]]+"' "$NGINX_CONF" ||
             say "WARNING: $NGINX_CONF has no auth_basic: the start page" \
                 "has no password (see auth_basic in examples/nginx-camex.conf)"
+        # nginx's default 1 MB stops a firmware upload through a device's page
+        grep -qE '^[[:space:]]*client_max_body_size[[:space:]]' "$NGINX_CONF" ||
+            say "WARNING: $NGINX_CONF has no client_max_body_size: uploads to" \
+                "the devices stop at 1 MB (see examples/nginx-camex.conf)"
     else
         fetch "$CAMEX_SRC/examples/nginx-camex.conf" "$TMP/nginx.conf"
         sed -i "s/openipc\.click/$DOMAIN/g" "$TMP/nginx.conf"

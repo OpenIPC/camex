@@ -1,0 +1,8 @@
+#
+# Copyright (c) OpenIPC  https://openipc.org  MIT License
+#
+
+# Gradle and the NDK build (CMake) of the app and the tunnel library
+.gradle/
+.cxx/
+local.properties

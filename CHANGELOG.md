@@ -6,6 +6,29 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.18.0 — 2026-11-16
+
+- Android library `android/tunnel` (#170): camex as a VPN client inside another app (Decoder,
+  microsnander), taken through a submodule of this repository. The app stays inside its own
+  VPN (camex's sockets are protected from it), only the tunnel subnet and the server's routes
+  go through it, never a default route; the app's listening sockets are reached through the
+  tunnel. A static API without Activity or stored settings: `fields()`, `check()`,
+  `consentIntent()`, `start()`/`stop()`, the state (`STOPPED`, `CONNECTING`, `CONNECTED`,
+  `NEEDS_CONSENT`, `FAILED`) with the address and the last error, a listener; reconnects
+  until stopped; the notification can be the app's own; `ConnectLink` reads camex links into
+  the values. Unit tests in CI, `tests/android/tunnel-e2e.sh` on the emulator
+  ([docs/android-library.md](docs/android-library.md)).
+- camex resets getopt at the start of each run, so a second `camex_main()` in one process
+  (the Android app or library restarting camex in-process) reads its options again; it used
+  to read none and exit with `The client needs a key: --psk`.
+- nginx (`examples/nginx-camex.conf`, installed by `install.sh --nginx`): `client_max_body_size 0`
+  in the clients' server block, so an upload through a device's web UI (a camera's firmware, a
+  flash image written through microsnander's page) is no longer stopped at nginx's 1 MB (413).
+  `install.sh` keeps an existing file as before and now warns when it has no
+  `client_max_body_size`.
+- Android: the app and the library take the camex sources from one list,
+  `android/camex-sources.cmake`.
+
 ## 3.17.2 — 2026-11-15
 
 - Android: `-PcamexAbis` must be a non-empty list of known ABIs (arm64-v8a, armeabi-v7a, x86_64,

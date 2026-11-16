@@ -47,6 +47,9 @@ void client_state_init(client_state_t *state)
         return;
     }
     memset(state, 0, sizeof(*state));
+    /* A new run (camex_main again in one process, the Android library)
+     * starts with the shortest reconnect delay */
+    reconnect_backoff = 0;
 }
 
 void client_wipe(void)
@@ -194,7 +197,8 @@ static int client_handle_resp(const uint8_t *buffer, size_t len)
     crypto_wipe(c2, sizeof(c2));
 
     client_state.last_recv = g_now;
-    client_state.established = 1U;
+    /* atomic: the Android library reads it from another thread */
+    __atomic_store_n(&client_state.established, 1U, __ATOMIC_RELEASE);
     client_state.confirm_pending = 1U;
     reconnect_backoff = 0;
     /* The server sends on a new session only after the first packet on
@@ -485,7 +489,7 @@ void client_reconnect(void)
     net_close();
     memset(&client_recv_state, 0, sizeof(client_recv_state));
     client_wipe();
-    client_state.established = 0U;
+    __atomic_store_n(&client_state.established, 0U, __ATOMIC_RELEASE);
 
     log_message(LOG_INFO, "Reconnecting to server %s:%d...",
                 current_config.server_host, current_config.port);
