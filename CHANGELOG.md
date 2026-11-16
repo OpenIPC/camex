@@ -6,6 +6,13 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.17.2 — 2026-11-15
+
+- Android: `-PcamexAbis` must be a non-empty list of known ABIs (arm64-v8a, armeabi-v7a, x86_64,
+  x86), otherwise the build stops with that list (#168); an empty entry (`arm64-v8a,,x86_64`) is
+  an error too. An empty value used to build every ABI of the NDK, x86 and x86_64 too; the
+  default `arm64-v8a,armeabi-v7a` is unchanged.
+
 ## 3.17.1 — 2026-11-14
 
 - The device page (`camex --status --format nginx-index`, #166): the tab icon lamp has a
