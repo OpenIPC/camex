@@ -26,6 +26,8 @@ final class Values {
     static final String PSK = "psk";
     static final String MTU = "mtu";
     static final String KEEPALIVE = "keepalive";
+    static final String SERVER_TIMEOUT = "server_timeout";
+    static final String WEB_PORT = "web_port";
 
     /** camex's default server port (install.sh, the README). */
     static final int DEFAULT_PORT = 5800;
@@ -37,7 +39,10 @@ final class Values {
             Field.text(PUBKEY, "Server public key", "", true),
             Field.secret(PSK, "Pre-shared key"),
             Field.text(MTU, "MTU (576 to 9000, empty: the server's)", "", false),
-            Field.text(KEEPALIVE, "Keepalive, seconds (0 to 3600, empty: 10)", "", false)));
+            Field.text(KEEPALIVE, "Keepalive, seconds (0 to 3600, empty: 10)", "", false),
+            Field.text(SERVER_TIMEOUT, "Server timeout, seconds (5 to 3600, empty: 20)", "", false),
+            Field.text(WEB_PORT, "Web port for nginx on the server (1 to 65535, empty: none)",
+                    "", false)));
 
     // A host name or an IPv4 address (camex resolves IPv4 only), in its server_host[64]
     private static final String HOST =
@@ -81,6 +86,14 @@ final class Values {
         if (!keepalive.isEmpty() && range(keepalive, 0, 3600) == null) {
             return new String[]{KEEPALIVE, "0 to 3600 seconds, or empty"};
         }
+        String timeout = get(v, SERVER_TIMEOUT).trim();
+        if (!timeout.isEmpty() && range(timeout, 5, 3600) == null) {
+            return new String[]{SERVER_TIMEOUT, "5 to 3600 seconds, or empty"};
+        }
+        String web = get(v, WEB_PORT).trim();
+        if (!web.isEmpty() && range(web, 1, 65535) == null) {
+            return new String[]{WEB_PORT, "1 to 65535, or empty"};
+        }
         return null;
     }
 
@@ -89,6 +102,7 @@ final class Values {
         String server = get(v, SERVER).trim();
         int colon = server.lastIndexOf(':');
         String keepalive = get(v, KEEPALIVE).trim();
+        String timeout = get(v, SERVER_TIMEOUT).trim();
         List<String> a = new ArrayList<>(Arrays.asList(
                 "camex", "--mode", "client", "--auto",
                 "--name", get(v, NAME),
@@ -96,13 +110,21 @@ final class Values {
                 "--port", String.valueOf(Integer.parseInt(server.substring(colon + 1))),
                 "--transport", transport(get(v, TRANSPORT)),
                 "--keepalive", keepalive.isEmpty() ? "10" : keepalive,
-                "--server-timeout", "20",
+                "--server-timeout", timeout.isEmpty() ? "20"
+                        : String.valueOf(Integer.parseInt(timeout)),
                 "--server-pubkey", get(v, PUBKEY).trim(),
                 "--psk", get(v, PSK)));
         String mtu = get(v, MTU).trim();
         if (!mtu.isEmpty()) {
             a.add("--mtu");
             a.add(String.valueOf(Integer.parseInt(mtu)));
+        }
+        // nginx's port on this client (#174): a server before 3.19.0 refuses it, so only
+        // when given
+        String web = get(v, WEB_PORT).trim();
+        if (!web.isEmpty()) {
+            a.add("--web-port");
+            a.add(String.valueOf(Integer.parseInt(web)));
         }
         return a.toArray(new String[0]);
     }
@@ -169,7 +191,7 @@ final class Values {
 
     // java.util.Base64 needs API 26, android.util.Base64 is a stub on the JVM; like camex's
     // own decoder, the unused low bits of the last character are not checked
-    private static byte[] base64(String s) {
+    static byte[] base64(String s) {
         final String abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         int bits = 0, n = 0;
@@ -182,6 +204,18 @@ final class Values {
             }
         }
         return out.toByteArray();
+    }
+
+    /** The widest route the tunnel takes from the server (#175): a /8. */
+    static final int ROUTE_PREFIX_MIN = 8;
+
+    /**
+     * Whether a route from the server goes into the VPN: never a default route, nor routes
+     * wide enough to take all the app's traffic together (0.0.0.0/1 and 128.0.0.0/1); camex
+     * on Android only reaches the server's network and the clients behind it (#175).
+     */
+    static boolean routeAllowed(int prefixLen) {
+        return prefixLen >= ROUTE_PREFIX_MIN && prefixLen <= 32;
     }
 
     /** Network address of ip/prefixLen, e.g. 10.200.0.5/24 -> 10.200.0.0. */
