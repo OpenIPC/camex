@@ -6,29 +6,8 @@
 cmake_minimum_required(VERSION 3.22)
 project("camex" C)
 
-# Collect all camex sources (relative to android/app/src/main/jni/)
-# 5 levels up = repo root/src
-set(CAMEX_SRCS
-    ../../../../../src/main.c
-    ../../../../../src/camex.c
-    ../../../../../src/monocypher.c
-    ../../../../../src/util.c
-    ../../../../../src/log.c
-    ../../../../../src/crypto.c
-    ../../../../../src/noise.c
-    ../../../../../src/keys.c
-    ../../../../../src/session.c
-    ../../../../../src/slotidx.c
-    ../../../../../src/tun.c
-    ../../../../../src/packet.c
-    ../../../../../src/net.c
-    ../../../../../src/proto.c
-    ../../../../../src/config.c
-    ../../../../../src/client.c
-    ../../../../../src/server.c
-    ../../../../../src/control.c
-    ../../../../../src/nginxmap.c
-)
+# The camex sources, shared with the tunnel library (#170)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../../../../camex-sources.cmake)
 
 # Build the shared library
 add_library(camex SHARED
@@ -41,8 +20,6 @@ target_compile_definitions(camex PRIVATE
     -D_POSIX_C_SOURCE=200809L
 )
 
-target_include_directories(camex PRIVATE
-    ../../../../../src   # camex headers (5 levels up = repo root/src)
-)
+target_include_directories(camex PRIVATE ${CAMEX_SRC_DIR})
 
 target_link_libraries(camex log)

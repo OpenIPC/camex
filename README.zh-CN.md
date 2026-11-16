@@ -118,17 +118,18 @@ curl -fL -O $URL/camex-arm
 
 `docs/` 中的文档为英文。
 
-| 文档                                | 内容                                                     |
-|-------------------------------------|----------------------------------------------------------|
-| [安装](docs/install.md)             | `install.sh`、手动安装、服务器上的文件、全新重装前的清理 |
-| [使用](docs/usage.md)               | 命令行：密钥、模式、全部选项、TUN 驱动                   |
-| [服务器配置](docs/server.md)        | `camex.conf`、`camex --status`、自动地址池与客户端数量   |
-| [客户端前面的 nginx](docs/nginx.md) | 按名称访问每台设备的 Web 界面、起始页、防火墙、DNS、TLS  |
-| [安全模型](docs/security.md)        | 协议、其局限、推荐部署                                   |
-| [Android 应用](docs/android.md)     | 设置、VPN 与路由                                         |
-| [内核模块](docs/kernel-module.md)   | `camex.ko`：设计、构建（含 OpenWrt）、API、限制          |
-| [构建](docs/build.md)               | 系统要求、构建、交叉编译、二进制大小                     |
-| [版本与发布](docs/releases.md)      | 版本、`latest` 发布、CI                                  |
+| 文档                                  | 内容                                                     |
+|---------------------------------------|----------------------------------------------------------|
+| [安装](docs/install.md)               | `install.sh`、手动安装、服务器上的文件、全新重装前的清理 |
+| [使用](docs/usage.md)                 | 命令行：密钥、模式、全部选项、TUN 驱动                   |
+| [服务器配置](docs/server.md)          | `camex.conf`、`camex --status`、自动地址池与客户端数量   |
+| [客户端前面的 nginx](docs/nginx.md)   | 按名称访问每台设备的 Web 界面、起始页、防火墙、DNS、TLS  |
+| [安全模型](docs/security.md)          | 协议、其局限、推荐部署                                   |
+| [Android 应用](docs/android.md)       | 设置、VPN 与路由                                         |
+| [Android 库](docs/android-library.md) | 在其他应用中内置 camex：VPN 客户端、授权、状态、链接解析 |
+| [内核模块](docs/kernel-module.md)     | `camex.ko`：设计、构建（含 OpenWrt）、API、限制          |
+| [构建](docs/build.md)                 | 系统要求、构建、交叉编译、二进制大小                     |
+| [版本与发布](docs/releases.md)        | 版本、`latest` 发布、CI                                  |
 
 ## 许可证
 

@@ -3,8 +3,8 @@
 #
 
 # Build artifacts
-camex
-camex.exe
+/camex
+/camex.exe
 build/
 src/camex
 *.o

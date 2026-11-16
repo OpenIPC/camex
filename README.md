@@ -130,6 +130,7 @@ The change history is in [CHANGELOG.md](CHANGELOG.md).
 | [nginx in front of the clients](docs/nginx.md) | each device's web UI by name, the start page, firewall, DNS, TLS           |
 | [Security model](docs/security.md)             | the protocol, its limits, recommended deployment                           |
 | [Android app](docs/android.md)                 | settings, VPN and routes                                                   |
+| [Android library](docs/android-library.md)     | camex inside another app: VPN client, consent, states, link parser         |
 | [Kernel module](docs/kernel-module.md)         | `camex.ko`: design, building (OpenWrt too), API, limitations               |
 | [Building](docs/build.md)                      | requirements, building, cross-compiling, binary sizes                      |
 | [Versions and releases](docs/releases.md)      | versions, the `latest` release, CI                                         |

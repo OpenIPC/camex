@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Copyright (c) OpenIPC  https://openipc.org  MIT License
+
+    The tunnel's notification icon: three nodes joined in a ring
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M12,2a3,3 0,1 1,0 6a3,3 0,1 1,0 -6zM5,15a3,3 0,1 1,0 6a3,3 0,1 1,0 -6zM19,15a3,3 0,1 1,0 6a3,3 0,1 1,0 -6zM11,7.5h2v3h-2zM6.2,13.6l3.6,-3.4l1.4,1.4l-3.6,3.4zM16.2,15l-3.6,-3.4l1.4,-1.4l3.6,3.4zM8,17h8v2h-8z"/>
+</vector>
