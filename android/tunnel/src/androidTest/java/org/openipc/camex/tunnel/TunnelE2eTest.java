@@ -220,9 +220,19 @@ public class TunnelE2eTest {
             assertEquals("peer-ok", askPeer(peer));
             Log.i(TAG, "start after stop OK");
         } else {
-            // Android 5.0 sends the app's sockets with eth0's source address for a while after
-            // a VPN is made again in one process (OpenIPC/camex#173)
-            Log.i(TAG, "start after stop CONNECTED, peer skipped on Android 5.0 (#173)");
+            // Android 5.0 sometimes routes the app's own sockets outside a VPN made again in
+            // one process (OpenIPC/camex#173): in seconds, or not at all. Recorded, not failed
+            long t0 = android.os.SystemClock.elapsedRealtime();
+            String r = null;
+            while (r == null && android.os.SystemClock.elapsedRealtime() - t0 < 60000) {
+                r = askPeer(peer);
+            }
+            long s = (android.os.SystemClock.elapsedRealtime() - t0) / 1000;
+            if ("peer-ok".equals(r)) {
+                Log.i(TAG, "start after stop OK (after " + s + " s on Android 5.0)");
+            } else {
+                Log.i(TAG, "start after stop: peer not reached in " + s + " s on Android 5.0 (#173)");
+            }
         }
         CamexTunnel.stop();
         await(CamexTunnel.State.STOPPED, 15);
