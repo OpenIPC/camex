@@ -6,6 +6,29 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 3.19.0 — 2026-11-16
+
+- A client's own web port for nginx (#174): `web_port=` in `[defaults]` or a `[client ID]`
+  block, and `--web-port <port>` for an auto client, which announces it in its handshake (only
+  when given: a server before 3.19.0 refuses a client that sends it). The order: the client's
+  block, the announced port, `[defaults]`, `--upstream-port`. `camex --status --format
+  nginx-map` asks the new `CLIENTS WEB` (an older server: `CLIENTS`) and writes
+  `<address>:<port>` per client; `--status` shows the port after the address, `--json` as
+  `web_port`; a changed port wakes `camex-nginx-sync --follow`. The Android library takes it as
+  `web_port` (`CamexTunnel.WEB_PORT`), and `server_timeout` too.
+- The Android app is built on the tunnel library (#172): one JNI, one VPN service, one link
+  parser in the repository. The app now stays inside its own VPN (camex's sockets protected),
+  reconnects by itself until Stop (when camex exits: after 1 s, doubling to 60 s; camex itself
+  reconnects to its server with its own back-off) and shows the state (connecting, connected with the address,
+  VPN permission needed, why it did not start). The **Route all traffic through the tunnel**
+  setting is gone: camex on Android is for reaching the cameras, not a VPN for all traffic;
+  `r` in a link is read and ignored. The foreground service type is now `specialUse`.
+- The Android library (and so the app) refuses server routes wider than a `/8`, as it refused
+  `0.0.0.0/0`: two halves, `0.0.0.0/1` and `128.0.0.0/1`, would take all traffic too (#175).
+- `tests/android/tunnel-e2e.sh` on Android 5.0 waits up to 60 s for the other client after
+  `stop()` and `start()` in one process and reports `KNOWN (#173)` when Android routes the app
+  outside its new VPN (half of the runs: reached in 4 s, or not in 3 minutes); still open.
+
 ## 3.18.0 — 2026-11-16
 
 - Android library `android/tunnel` (#170): camex as a VPN client inside another app (Decoder,
