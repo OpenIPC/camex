@@ -35,9 +35,10 @@ android {
         versionName = camexVersion
         // 64-bit phones and 32-bit devices (TV boxes, older phones).
         // Override with -PcamexAbis=arm64-v8a for a smaller APK.
-        // An empty list would leave abiFilters unset, i.e. every ABI of the NDK (#168)
+        // An empty list would leave abiFilters unset, i.e. every ABI of the NDK; an empty
+        // entry ("a,,b", "a,") is an error too (#168)
         val abis = ((project.findProperty("camexAbis") as String?) ?: "arm64-v8a,armeabi-v7a")
-            .split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            .split(",").map { it.trim() }
         val knownAbis = setOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
         require(abis.isNotEmpty() && abis.all { it in knownAbis }) {
             "-PcamexAbis=${abis.joinToString(",")}: one or more of ${knownAbis.joinToString(",")}"
