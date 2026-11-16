@@ -171,8 +171,9 @@ public final class CamexTunnel {
             if (token != 0 && TOKEN.get() != token) return;   // a newer start stands
             TOKEN.incrementAndGet();
             post(s, "", error);
+            // in the lock: a start after this one is not stopped by it
+            CamexVpnService.stopTunnel();
         }
-        CamexVpnService.stopTunnel();
     }
 
     /** The number of the latest start: a start with another number is stale. */

@@ -482,8 +482,9 @@ map $host $camex_upstream {
   answer, nothing is printed and the exit code is 1, and the sync script keeps
   the old map (a socket left behind by a server that is gone is skipped).
 - `examples/nginx-camex.conf` is the server block: `proxy_pass` to the map's
-  target, WebSocket, no buffering, a short connect timeout and an "offline" page
-  for names with no live client. `examples/camex-nginx-sync.sh` (POSIX sh) runs
+  target, WebSocket, no buffering, no limit on the upload size (a firmware image
+  through a device's web UI; nginx's default is 1 MB), a short connect timeout
+  and an "offline" page for names with no live client. `examples/camex-nginx-sync.sh` (POSIX sh) runs
   once, with `--loop <seconds>`, or with `--follow`, as `camex-nginx-sync.service`
   runs it: at every change (see [Sync script](#sync-script)). Addresses are
   stable (#81), so the map changes only when clients come and go.

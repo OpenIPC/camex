@@ -75,6 +75,8 @@ public final class CamexVpnService extends VpnService {
     private String tunAddress = "";     // the address of this run's TUN, "" before it is up
     private long runGeneration = -1;    // the start whose values camex runs with now
     private int lastStartId;            // the latest start command delivered
+    private long runToken;              // CamexTunnel's token of the values camex runs with
+    private boolean ownNotification;    // the notification shown is the app's own
     private Thread worker;
 
     private ConnectivityManager.NetworkCallback networkCallback;
@@ -104,7 +106,7 @@ public final class CamexVpnService extends VpnService {
                 if (!s.stopped) return;   // a newer start runs: its state follows
             }
             // the app's own notification shows the final state before it is let go
-            if (s.foreground && CamexTunnel.notificationFactory != null) s.notifyState();
+            if (s.foreground && s.ownNotification) s.notifyState();
             s.leaveForeground();
             s.stopSelf(s.lastStartId);
         }
@@ -148,6 +150,7 @@ public final class CamexVpnService extends VpnService {
         }
         synchronized (lock) {
             argv = a;
+            runToken = intent.getLongExtra(EXTRA_TOKEN, -1);
             generation++;
             stopped = false;
             tunAddress = "";   // the running TUN is the old values' one
@@ -246,10 +249,19 @@ public final class CamexVpnService extends VpnService {
         }
     }
 
-    // No VPN consent while camex runs: it stops, the state is NEEDS_CONSENT
+    // No VPN consent while camex runs: it stops, the state is NEEDS_CONSENT; in one lock and
+    // only for the current run and start, so a newer start keeps its own state
     private void lostConsent() {
-        requestStop(true);
-        post(State.NEEDS_CONSENT, "", "VPN consent needed");
+        synchronized (lock) {
+            if (stopped || runGeneration != generation || runToken != CamexTunnel.token()) {
+                return;
+            }
+            stopped = true;
+            consentLost = true;
+            if (acquired) nativeStop();
+            lock.notifyAll();
+            if (instance == this) CamexTunnel.post(State.NEEDS_CONSENT, "", "VPN consent needed");
+        }
     }
 
     /** Stops camex and the reconnects; consentLost: the state is NEEDS_CONSENT. */
@@ -283,6 +295,8 @@ public final class CamexVpnService extends VpnService {
             synchronized (lock) {
                 // a run that was stopped or replaced makes no VPN
                 if (stopped || runGeneration != generation) return -1;
+                // the old TUN goes now; until this one is up there is no address to report
+                tunAddress = "";
             }
             if (prefixLen <= 0 || prefixLen > 32) {
                 // a /0 tunnel subnet would be a default route
@@ -404,7 +418,7 @@ public final class CamexVpnService extends VpnService {
     private void leaveForeground() {
         if (!foreground) return;
         foreground = false;
-        boolean own = CamexTunnel.notificationFactory != null;
+        boolean own = ownNotification;
         if (Build.VERSION.SDK_INT >= 24) {
             // the app's own notification (maybe its own service's) stays
             stopForeground(own ? Service.STOP_FOREGROUND_DETACH : Service.STOP_FOREGROUND_REMOVE);
@@ -429,8 +443,12 @@ public final class CamexVpnService extends VpnService {
         CamexTunnel.NotificationFactory f = CamexTunnel.notificationFactory;
         if (f != null) {
             Notification n = f.create(this, s, addr, CamexTunnel.lastError());
-            if (n != null) return n;
+            if (n != null) {
+                ownNotification = true;
+                return n;
+            }
         }
+        ownNotification = false;
         CharSequence title = CamexTunnel.notificationTitle;
         Notification.Builder b;
         if (Build.VERSION.SDK_INT >= 26) {
