@@ -4,7 +4,10 @@
 
 `camex-android.apk` of the [`latest`](../README.md#permanent-links) release,
 Android 5.0 and later. The app connects in auto mode: the server sends the
-address, routes and MTU.
+address, routes and MTU. It is built on the [Android library](android-library.md)
+(since 3.19.0, #172): after **Start** it reconnects by itself until **Stop**, and the
+main screen shows the state (connecting, connected with the address, VPN
+permission needed, or why it did not start).
 
 | Main screen                             | Settings                                 |
 |-----------------------------------------|------------------------------------------|
@@ -17,8 +20,6 @@ address, routes and MTU.
 - **Transport** — UDP or TCP, as on the server.
 - **Server public key** and **Pre-shared key** — `--server-pubkey --psk`; the
   key must match the client's `psk=` (or the global key).
-- **Route all traffic through the tunnel** — off: only the tunnel network and
-  the server's routes go through the tunnel.
 - **Advanced** — MTU, keepalive and server timeout.
 
 ![Advanced settings](images/android-settings-advanced.png)
@@ -26,7 +27,9 @@ address, routes and MTU.
 ## VPN and routes
 
 The app uses `VpnService`, so Android shows the VPN key icon while the tunnel
-is up. What goes through the tunnel and what does not:
+is up. Only the tunnel network and the server's routes go through it: camex on
+Android is for reaching the cameras, not a VPN for all traffic, so there is no
+"route all traffic" setting since 3.19.0 (#172). More:
 [security.md](security.md#android-app).
 
 ## A link with the settings
@@ -50,17 +53,17 @@ Pages nor a log. The link has the psk, so it is a password: send it only to
 the device's owner. A per-device `psk=` in the device's `[client ID]` block
 (see [server.md](server.md)) makes a leaked link revocable.
 
-| Field | Meaning                      | Values                                                                                                                                       |
-|-------|------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
-| `h`   | server host                  | a host name or an IPv4 address, up to 63 characters                                                                                          |
-| `p`   | server port                  | 1–65535                                                                                                                                      |
-| `t`   | transport                    | `udp` or `tcp`                                                                                                                               |
-| `k`   | server public key            | 44 characters (`camex --genkey`), not all zero                                                                                               |
-| `s`   | pre-shared key               | as camex takes it (`hex:`, `base64:` or a passphrase), below 128 bytes, `%XX`-encoded as UTF-8; no control characters, nothing beyond U+FFFF |
-| `n`   | client name (optional)       | up to 31 bytes of UTF-8, no control characters                                                                                               |
-| `m`   | MTU (optional)               | 576–9000                                                                                                                                     |
-| `a`   | keepalive, s (optional)      | 0–3600                                                                                                                                       |
-| `r`   | route all traffic (optional) | `1` or `0`                                                                                                                                   |
+| Field | Meaning                                        | Values                                                                                                                                       |
+|-------|------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
+| `h`   | server host                                    | a host name or an IPv4 address, up to 63 characters                                                                                          |
+| `p`   | server port                                    | 1–65535                                                                                                                                      |
+| `t`   | transport                                      | `udp` or `tcp`                                                                                                                               |
+| `k`   | server public key                              | 44 characters (`camex --genkey`), not all zero                                                                                               |
+| `s`   | pre-shared key                                 | as camex takes it (`hex:`, `base64:` or a passphrase), below 128 bytes, `%XX`-encoded as UTF-8; no control characters, nothing beyond U+FFFF |
+| `n`   | client name (optional)                         | up to 31 bytes of UTF-8, no control characters                                                                                               |
+| `m`   | MTU (optional)                                 | 576–9000                                                                                                                                     |
+| `a`   | keepalive, s (optional)                        | 0–3600                                                                                                                                       |
+| `r`   | route all traffic (ignored since 3.19.0, #172) | `1` or `0`                                                                                                                                   |
 
 When the link opens in a browser instead of the app, the page has a button
 **Open in Camex** with the same settings, the APK for a phone without the app,

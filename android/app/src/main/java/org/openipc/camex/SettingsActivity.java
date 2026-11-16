@@ -20,28 +20,33 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.RadioGroup;
-import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.openipc.camex.tunnel.CamexTunnel;
+import org.openipc.camex.tunnel.ConnectLink;
+
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
- * Editable connection settings persisted to the "camex" SharedPreferences, read
- * back by {@link TunnelService} when building the camex argv. Also opened by a
- * camex link ({@link ConnectLink}, #146): its values are filled in and marked,
- * nothing is saved or connected until the user taps Save.
+ * Editable connection settings persisted to the "camex" SharedPreferences, handed to the
+ * tunnel library at Start ({@link MainActivity#values}). Also opened by a camex link
+ * (the library's {@link ConnectLink}, #146): its values are filled in and marked, nothing
+ * is saved or connected until the user taps Save. The tunnel takes only the server's
+ * network, never all traffic (#172).
  */
 public class SettingsActivity extends Activity {
 
     private static final String PREFS = "camex";
-    private static final int DEFAULT_PORT = 5800;
-    private static final String DEFAULT_NAME = "android-client";
+    static final int DEFAULT_PORT = 5800;
+    static final String DEFAULT_NAME = "android-client";
     // camex defaults (see src/main.c)
-    private static final int DEFAULT_MTU = 1500;
-    private static final int DEFAULT_KEEPALIVE = 10;
-    private static final int DEFAULT_TIMEOUT = 20;
+    static final int DEFAULT_MTU = 1500;
+    static final int DEFAULT_KEEPALIVE = 10;
+    static final int DEFAULT_TIMEOUT = 20;
     // The overlay of a field a link changed (green, light)
     private static final int LINK_MARK = 0x332E7D32;
     // Before API 23: a marked field that had no background of its own
@@ -54,7 +59,6 @@ public class SettingsActivity extends Activity {
     private EditText hostInput, portInput, nameInput, pskInput;
     private EditText pubkeyInput;
     private EditText mtuInput, keepaliveInput, timeoutInput;
-    private Switch fullTunnelSwitch;
     private RadioGroup transportGroup;
 
     @Override
@@ -68,7 +72,6 @@ public class SettingsActivity extends Activity {
         nameInput = findViewById(R.id.input_name);
         pskInput = findViewById(R.id.input_psk);
         pubkeyInput = findViewById(R.id.input_server_pubkey);
-        fullTunnelSwitch = findViewById(R.id.switch_full_tunnel);
         transportGroup = findViewById(R.id.group_transport);
         mtuInput = findViewById(R.id.input_mtu);
         keepaliveInput = findViewById(R.id.input_keepalive);
@@ -109,7 +112,6 @@ public class SettingsActivity extends Activity {
         nameInput.setText(prefs.getString("name", DEFAULT_NAME));
         pskInput.setText(prefs.getString("psk", ""));
         pubkeyInput.setText(prefs.getString("server_pubkey", ""));
-        fullTunnelSwitch.setChecked(prefs.getBoolean("full_tunnel", false));
 
         // Transport: default UDP unless "tcp" was saved.
         boolean tcp = "tcp".equals(prefs.getString("transport", "udp"));
@@ -132,7 +134,7 @@ public class SettingsActivity extends Activity {
         if (data == null) return;
         // A link with nothing usable leaves what is on the screen as it is
         ConnectLink c = ConnectLink.parse(data.toString());
-        if (c == null || c.isEmpty()) {
+        if (c == null || c.values.isEmpty()) {
             fromLink(data.toString());   // only its note
             if (!marked.isEmpty()) {
                 // The marks on the screen are an earlier link's, not this one's
@@ -167,36 +169,36 @@ public class SettingsActivity extends Activity {
             return;
         }
         List<String> changed = new ArrayList<>();
-        set(hostInput, c.host, R.string.server_host, changed);
-        set(portInput, c.port == null ? null : String.valueOf(c.port), R.string.server_port, changed);
-        set(nameInput, c.name, R.string.client_name, changed);
-        set(pubkeyInput, c.pubkey, R.string.server_pubkey, changed);
-        set(pskInput, c.psk, R.string.psk, changed);
-        set(mtuInput, c.mtu == null ? null : String.valueOf(c.mtu), R.string.mtu, changed);
-        set(keepaliveInput, c.keepalive == null ? null : String.valueOf(c.keepalive),
-            R.string.keepalive, changed);
-        if (c.transport != null) {
-            int id = "tcp".equals(c.transport) ? R.id.btn_tcp : R.id.btn_udp;
+        Map<String, String> v = c.values;
+        String server = v.get(CamexTunnel.SERVER);
+        if (server != null) {
+            int colon = server.lastIndexOf(':');
+            set(hostInput, server.substring(0, colon), R.string.server_host, changed);
+            set(portInput, server.substring(colon + 1), R.string.server_port, changed);
+        }
+        set(nameInput, v.get(CamexTunnel.NAME), R.string.client_name, changed);
+        set(pubkeyInput, v.get(CamexTunnel.PUBKEY), R.string.server_pubkey, changed);
+        set(pskInput, v.get(CamexTunnel.PSK), R.string.psk, changed);
+        set(mtuInput, v.get(CamexTunnel.MTU), R.string.mtu, changed);
+        set(keepaliveInput, v.get(CamexTunnel.KEEPALIVE), R.string.keepalive, changed);
+        String transport = v.get(CamexTunnel.TRANSPORT);
+        if (transport != null) {
+            int id = "TCP".equals(transport) ? R.id.btn_tcp : R.id.btn_udp;
             if (transportGroup.getCheckedRadioButtonId() != id) {
                 transportGroup.check(id);
                 mark(findViewById(id));
                 changed.add(getString(R.string.transport));
             }
         }
-        if (c.fullTunnel != null && fullTunnelSwitch.isChecked() != c.fullTunnel) {
-            fullTunnelSwitch.setChecked(c.fullTunnel);
-            mark(fullTunnelSwitch);
-            changed.add(getString(R.string.full_tunnel));
-        }
         StringBuilder note = new StringBuilder();
         // Nothing came through (a cut link, every field malformed): not
         // "the settings saved already"
-        note.append(c.isEmpty() ? getString(R.string.link_unknown)
+        note.append(v.isEmpty() ? getString(R.string.link_unknown)
             : changed.isEmpty() ? getString(R.string.link_same)
             : getString(R.string.link_changed, TextUtils.join(", ", changed)));
-        if (!c.rejected.isEmpty()) {
+        if (!c.errors.isEmpty()) {
             List<String> bad = new ArrayList<>();
-            for (String key : c.rejected) bad.add(label(key));
+            for (String key : c.errors.keySet()) bad.add(label(key));
             note.append('\n').append(getString(R.string.link_rejected,
                 TextUtils.join(", ", bad)));
         }
@@ -220,7 +222,6 @@ public class SettingsActivity extends Activity {
             case "n": return getString(R.string.client_name);
             case "m": return getString(R.string.mtu);
             case "a": return getString(R.string.keepalive);
-            case "r": return getString(R.string.full_tunnel);
             default: return key;
         }
     }
@@ -302,15 +303,23 @@ public class SettingsActivity extends Activity {
             return;
         }
 
-        // Protocol v2 is always encrypted: both keys are required
+        // Protocol v2 is always encrypted: both keys are required; the library checks them
+        // as camex takes them
         String pubkey = text(pubkeyInput).trim();
-        if (!isServerPubkey(pubkey)) {
-            pubkeyInput.setError(getString(R.string.err_server_pubkey));
-            return;
-        }
-        String psk = text(pskInput);
-        if (TextUtils.isEmpty(psk)) {
-            pskInput.setError(getString(R.string.err_psk));
+        String psk = pskInput.getText() == null ? "" : pskInput.getText().toString();
+        Map<String, String> v = new HashMap<>();
+        v.put(CamexTunnel.SERVER, host + ":" + port);
+        v.put(CamexTunnel.NAME, name);
+        v.put(CamexTunnel.TRANSPORT, "UDP");
+        v.put(CamexTunnel.PUBKEY, pubkey);
+        v.put(CamexTunnel.PSK, psk);
+        String[] bad = CamexTunnel.check(v);
+        if (bad != null) {
+            EditText field = CamexTunnel.SERVER.equals(bad[0]) ? hostInput
+                : CamexTunnel.NAME.equals(bad[0]) ? nameInput
+                : CamexTunnel.PUBKEY.equals(bad[0]) ? pubkeyInput : pskInput;
+            field.setError(CamexTunnel.PUBKEY.equals(bad[0]) ? getString(R.string.err_server_pubkey)
+                : CamexTunnel.PSK.equals(bad[0]) ? getString(R.string.err_psk) : bad[1]);
             return;
         }
 
@@ -322,7 +331,7 @@ public class SettingsActivity extends Activity {
             .putInt("server_port", port)
             .putString("name", name)
             .putString("transport", transport)
-            .putBoolean("full_tunnel", fullTunnelSwitch.isChecked())
+            .remove("full_tunnel")   // no full tunnel any more (#172)
             .putString("server_pubkey", pubkey)
             .putString("psk", psk)
             .putInt("mtu", mtu)
@@ -331,7 +340,7 @@ public class SettingsActivity extends Activity {
             .apply();
 
         // From a link the screen opened by itself, even with the tunnel up
-        // (TunnelService reads the settings when it starts)
+        // (the settings go to the tunnel at Start)
         Toast.makeText(this, getIntent().getData() != null ? R.string.saved_next_start
             : R.string.save, Toast.LENGTH_LONG).show();
         finish();
@@ -349,10 +358,5 @@ public class SettingsActivity extends Activity {
         } catch (NumberFormatException ignored) {
             return fallback;
         }
-    }
-
-    /** A server public key: base64 of exactly 32 bytes (camex --genkey). */
-    static boolean isServerPubkey(String key) {
-        return ConnectLink.isServerPubkey(key);
     }
 }

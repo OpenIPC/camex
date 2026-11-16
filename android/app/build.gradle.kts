@@ -47,9 +47,6 @@ android {
         // The app's own strings are English only; keep the libraries' translations
         // just for the README languages (#55)
         resourceConfigurations += listOf("en", "ru", "zh-rCN")
-        externalNativeBuild {
-            cmake { arguments("-DANDROID_STL=c++_static") }
-        }
     }
     signingConfigs {
         // Release signing is driven by environment variables so the same build
@@ -75,15 +72,10 @@ android {
             }
         }
     }
-    externalNativeBuild {
-        cmake { path("src/main/jni/CMakeLists.txt") }
-    }
 }
 
 dependencies {
     // Platform classes only (#55): no AppCompat, Material or AndroidX core.
-    // @Keep for the method native code calls; R8's default rules honour it.
-    implementation("androidx.annotation:annotation:1.7.1")
-    // The link parser on the JVM (#146)
-    testImplementation("junit:junit:4.13.2")
+    // camex itself, its VPN service and the link parser: the tunnel library (#172)
+    implementation(project(":tunnel"))
 }
