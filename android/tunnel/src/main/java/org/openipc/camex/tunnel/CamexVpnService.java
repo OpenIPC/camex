@@ -73,6 +73,8 @@ public final class CamexVpnService extends VpnService {
     private boolean consentLost;
     private boolean upThisRun;
     private String tunAddress = "";     // the address of this run's TUN, "" before it is up
+    private long runGeneration = -1;    // the start whose values camex runs with now
+    private int lastStartId;            // the latest start command delivered
     private Thread worker;
 
     private ConnectivityManager.NetworkCallback networkCallback;
@@ -85,7 +87,8 @@ public final class CamexVpnService extends VpnService {
         CamexVpnService s = instance;
         if (s != null) {
             s.requestStop(false);
-            s.stopSelf();
+            // not when a newer start is queued already: it comes and runs
+            s.stopSelf(s.lastStartId);
         }
     }
 
@@ -103,7 +106,7 @@ public final class CamexVpnService extends VpnService {
             // the app's own notification shows the final state before it is let go
             if (s.foreground && CamexTunnel.notificationFactory != null) s.notifyState();
             s.leaveForeground();
-            s.stopSelf();
+            s.stopSelf(s.lastStartId);
         }
     }
 
@@ -118,6 +121,7 @@ public final class CamexVpnService extends VpnService {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         instance = this;
+        lastStartId = startId;
         // startForegroundService() needs startForeground() every time
         goForeground();
         String[] a = intent != null && ACTION_START.equals(intent.getAction())
@@ -129,7 +133,7 @@ public final class CamexVpnService extends VpnService {
                 if (!stopped) return START_NOT_STICKY;
             }
             leaveForeground();
-            stopSelf();
+            stopSelf(startId);   // a later start already queued still runs
             return START_NOT_STICKY;
         }
         if (a == null) {
@@ -139,7 +143,7 @@ public final class CamexVpnService extends VpnService {
                 if (!stopped) return START_NOT_STICKY;   // a run is under way: keep it
             }
             CamexTunnel.post(State.FAILED, "", "started without values (the app starts the tunnel)");
-            stopSelf();
+            stopSelf(startId);
             return START_NOT_STICKY;
         }
         synchronized (lock) {
@@ -174,6 +178,7 @@ public final class CamexVpnService extends VpnService {
                     }
                     a = argv;
                     gen = generation;
+                    runGeneration = gen;
                     upThisRun = false;
                     tunAddress = "";
                 }
@@ -269,6 +274,16 @@ public final class CamexVpnService extends VpnService {
      */
     private int establishTun(String localIp, int prefixLen, int mtu, String[] routes) {
         try {
+            synchronized (lock) {
+                // a run that was stopped or replaced makes no VPN
+                if (stopped || runGeneration != generation) return -1;
+            }
+            if (prefixLen <= 0 || prefixLen > 32) {
+                // a /0 tunnel subnet would be a default route
+                Log.w(TAG, "refusing the tunnel subnet /" + prefixLen);
+                post(State.CONNECTING, "", "the server gave the tunnel subnet /" + prefixLen);
+                return -1;
+            }
             if (VpnService.prepare(this) != null) {
                 synchronized (lock) {
                     consentLost = true;
@@ -304,6 +319,15 @@ public final class CamexVpnService extends VpnService {
                 return -1;
             }
             synchronized (lock) {
+                if (stopped || runGeneration != generation) {
+                    // stopped or replaced meanwhile: this VPN goes at once
+                    try {
+                        pfd.close();
+                    } catch (java.io.IOException ignored) {
+                        // closed anyway
+                    }
+                    return -1;
+                }
                 upThisRun = true;
                 tunAddress = localIp;
             }
@@ -438,13 +462,21 @@ public final class CamexVpnService extends VpnService {
         // the user turned the VPN off, or another VPN app took over: no consent any more
         requestStop(true);
         post(State.NEEDS_CONSENT, "", "VPN consent revoked or taken by another VPN");
-        stopSelf();
+        stopSelf(lastStartId);
     }
 
     @Override
     public void onDestroy() {
         main.removeCallbacks(sessionPoll);
+        boolean running;
+        synchronized (lock) {
+            running = !stopped;
+        }
         requestStop(false);
+        // the system ended the service with no stop(): the state says so
+        if (running && instance == this) {
+            CamexTunnel.post(State.STOPPED, "", "the system stopped the tunnel service");
+        }
         if (networkCallback != null) {
             try {
                 ((ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE))

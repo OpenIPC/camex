@@ -157,6 +157,14 @@ nothing throws, nothing retries by itself. The app shows it (screen,
 notification, web page) and calls `start()` again later, as the consent may be
 given over adb meanwhile.
 
+### Android 5.0
+
+After `stop()` and a new `start()` in the same process, Android 5.0 sends the
+app's new sockets into the tunnel with the source address of its own network
+for a while; the server drops them until it passes
+([#173](https://github.com/OpenIPC/camex/issues/173)). The first start, new
+values while running and a server that comes back are not affected.
+
 ### Starting without a screen
 
 `start()` works from a `BOOT_COMPLETED` receiver and from the app's own

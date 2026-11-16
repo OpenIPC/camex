@@ -78,7 +78,8 @@ public final class CamexTunnel {
     // seen yet is dropped when it arrives
     private static final AtomicLong TOKEN = new AtomicLong();
 
-    // Read anywhere, written on the main thread only
+    // Read anywhere; written in post(), under STATE_LOCK
+    private static final Object STATE_LOCK = new Object();
     private static volatile State state = State.STOPPED;
     private static volatile String address = "";
     private static volatile String lastError = "";
@@ -145,10 +146,14 @@ public final class CamexTunnel {
             if (Build.VERSION.SDK_INT >= 26) app.startForegroundService(i);
             else app.startService(i);
         } catch (RuntimeException e) {
-            // e.g. a start from the background the system does not allow
+            // e.g. a start from the background the system does not allow; a running tunnel
+            // with the old values stops as well
+            TOKEN.incrementAndGet();
+            CamexVpnService.stopTunnel();
             post(State.FAILED, "", "cannot start the service: " + e.getClass().getSimpleName());
             return false;
         }
+        post(State.CONNECTING, "", "");
         return true;
     }
 
@@ -159,11 +164,12 @@ public final class CamexTunnel {
         post(State.STOPPED, "", "");
     }
 
-    /** True from {@link #start} to {@link #stop}, while the tunnel connects or is up. */
+    /** The number of the latest start: a start with another number is stale. */
     static long token() {
         return TOKEN.get();
     }
 
+    /** True from {@link #start} to {@link #stop}, while the tunnel connects or is up. */
     public static boolean running() {
         State s = state;
         return s == State.CONNECTING || s == State.CONNECTED;
@@ -214,14 +220,22 @@ public final class CamexTunnel {
         notificationFactory = factory;
     }
 
-    /** A new state for the listeners and the notification, on the main thread. */
+    /**
+     * A new state: the getters have it at once; the listeners and the notification get it on
+     * the main thread, in the order of the posts.
+     */
     static void post(State s, String addr, String error) {
-        MAIN.post(() -> {
+        synchronized (STATE_LOCK) {
             state = s;
             address = addr == null ? "" : addr;
             if (error != null) lastError = error;
-            CamexVpnService.onState();
-            for (Listener l : LISTENERS) l.onState(state, address, lastError);
-        });
+            final State st = state;
+            final String a = address;
+            final String e = lastError;
+            MAIN.post(() -> {
+                CamexVpnService.onState();
+                for (Listener l : LISTENERS) l.onState(st, a, e);
+            });
+        }
     }
 }
