@@ -52,7 +52,7 @@ APK gets the app's ABIs. To build the native code only for those, set
 `camexTunnelAbis` in the root project, e.g. from the app's own ABI list:
 
 ```groovy
-ext.camexTunnelAbis = ['arm64-v8a', 'armeabi-v7a']   // an empty or unknown ABI is a build error
+ext.camexTunnelAbis = ['arm64-v8a', 'armeabi-v7a']   // or 'arm64-v8a,armeabi-v7a'; an empty or unknown ABI is a build error
 ```
 
 Keep `ndkVersion` in the app module, so `libcamex.so` is stripped when the

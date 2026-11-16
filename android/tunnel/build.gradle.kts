@@ -33,13 +33,18 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "CAMEX_VERSION", "\"$camexVersion\"")
         // No abiFilters: the app's ABIs are the APK's. An app that sets
-        // camexTunnelAbis (a list of ABI names) in its root project's extra properties
+        // camexTunnelAbis (a list of ABI names, or a comma-separated string) in its root project's extra properties
         // has the native code built only for those.
         val abis = rootProject.extensions.extraProperties.let {
             if (it.has("camexTunnelAbis")) it.get("camexTunnelAbis") else null
         }
         if (abis != null) {
-            val list = (abis as Iterable<*>).map { it.toString().trim() }
+            // a list, or a comma-separated string (a Groovy ext string, a -P property)
+            val list = when (abis) {
+                is String -> abis.split(",").map { it.trim() }
+                is Iterable<*> -> abis.map { it.toString().trim() }
+                else -> throw GradleException("camexTunnelAbis: a list of ABI names or a comma-separated string")
+            }
             val known = setOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
             require(list.isNotEmpty() && list.all { it in known }) {
                 "camexTunnelAbis=${list.joinToString(",")}: one or more of ${known.joinToString(",")}"

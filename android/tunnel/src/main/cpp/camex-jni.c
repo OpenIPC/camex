@@ -213,13 +213,13 @@ out:
 }
 
 /* Whether camex has a session with its server now: cleared when it starts to
- * reconnect, set when the handshake is done (a byte read across threads). */
+ * reconnect, set when the handshake is done; camex stores it atomically. */
 JNIEXPORT jboolean JNICALL
 Java_org_openipc_camex_tunnel_CamexVpnService_nativeEstablished(JNIEnv *env, jclass cls)
 {
     (void)env;
     (void)cls;
-    return client_state.established ? JNI_TRUE : JNI_FALSE;
+    return __atomic_load_n(&client_state.established, __ATOMIC_ACQUIRE) ? JNI_TRUE : JNI_FALSE;
 }
 
 /* Ask camex to stop; nativeRun() returns within about a second. */

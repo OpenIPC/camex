@@ -169,7 +169,12 @@ public class TunnelE2eTest {
 
         // the VPN's routes: the subnet and the server's, the one with host bits as its network,
         // never a default route
+        // the system registers the VPN network a moment after establish()
         List<String> routes = vpnRoutes();
+        for (int i = 0; i < 20 && routes.isEmpty(); i++) {
+            Thread.sleep(500);
+            routes = vpnRoutes();
+        }
         Log.i(TAG, "routes " + routes);
         for (String r : routes) assertFalse("default route " + r, r.endsWith("/0"));
         for (String want : args.getString("routes", "").split(",")) {
