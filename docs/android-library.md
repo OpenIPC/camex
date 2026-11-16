@@ -204,9 +204,12 @@ the app's notification stays.
 `https://openipc.github.io/camex/connect/#h=&p=&t=&k=&s=` or
 `camex://connect?...`. It returns null for any other link, otherwise
 `values` (by the keys above: `h` and `p` make `server`, a host without a port
-takes 5800) and `errors` (the link's malformed fields by their letter, with a
-short reason). `r` (route all traffic) is read and ignored. The app puts the
-values over its own settings, checks them with `check()` and saves them.
+takes 5800, a port without a host gives no `server`), `host` and `port` each on
+its own (null when the link has none: an app that keeps them apart puts only
+what the link has over its settings, as the camex app does) and `errors` (the
+link's malformed fields by their letter, with a short reason). `r` (route all
+traffic) is read and ignored. The app puts the values over its own settings,
+checks them with `check()` and saves them.
 
 ## Tests
 

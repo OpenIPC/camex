@@ -134,7 +134,7 @@ public class SettingsActivity extends Activity {
         if (data == null) return;
         // A link with nothing usable leaves what is on the screen as it is
         ConnectLink c = ConnectLink.parse(data.toString());
-        if (c == null || c.values.isEmpty()) {
+        if (c == null || (c.values.isEmpty() && c.port == null)) {
             fromLink(data.toString());   // only its note
             if (!marked.isEmpty()) {
                 // The marks on the screen are an earlier link's, not this one's
@@ -170,12 +170,9 @@ public class SettingsActivity extends Activity {
         }
         List<String> changed = new ArrayList<>();
         Map<String, String> v = c.values;
-        String server = v.get(CamexTunnel.SERVER);
-        if (server != null) {
-            int colon = server.lastIndexOf(':');
-            set(hostInput, server.substring(0, colon), R.string.server_host, changed);
-            set(portInput, server.substring(colon + 1), R.string.server_port, changed);
-        }
+        // Host and port each only when the link has it: the saved other one stays
+        set(hostInput, c.host, R.string.server_host, changed);
+        set(portInput, c.port == null ? null : String.valueOf(c.port), R.string.server_port, changed);
         set(nameInput, v.get(CamexTunnel.NAME), R.string.client_name, changed);
         set(pubkeyInput, v.get(CamexTunnel.PUBKEY), R.string.server_pubkey, changed);
         set(pskInput, v.get(CamexTunnel.PSK), R.string.psk, changed);
@@ -193,7 +190,7 @@ public class SettingsActivity extends Activity {
         StringBuilder note = new StringBuilder();
         // Nothing came through (a cut link, every field malformed): not
         // "the settings saved already"
-        note.append(v.isEmpty() ? getString(R.string.link_unknown)
+        note.append(v.isEmpty() && c.port == null ? getString(R.string.link_unknown)
             : changed.isEmpty() ? getString(R.string.link_same)
             : getString(R.string.link_changed, TextUtils.join(", ", changed)));
         if (!c.errors.isEmpty()) {

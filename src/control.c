@@ -928,8 +928,10 @@ static int control_gather(const char *path, const char *cmd,
                 buf = NULL;
                 len = 0U;
                 rc = control_ask(paths[i], fallback, &buf, &len);
-            } else if (rc != 0) {
-                /* again, to say why */
+            } else if (rc == -2) {
+                /* no server there: quiet mode hid the connect error, so
+                 * ask again to say it (a timeout or a cut answer was said
+                 * already, and is not waited for twice) */
                 free(buf);
                 buf = NULL;
                 len = 0U;
