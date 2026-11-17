@@ -90,6 +90,10 @@ int net_tcp_send_frame(int fd, const uint8_t *data, size_t len);
 int net_tcp_send_frame_ex(int fd, const uint8_t *data, size_t len,
                           int *accepted);
 
+/* 4 MB send and receive buffers for a tunnel's TCP socket: the client's
+ * connection and the server's accepted ones alike (#180) */
+void net_tcp_tune_socket(int fd);
+
 /*
  * Persistent partial-read state for TCP frame reception.
  * BUGFIX (10.09): net_tcp_recv_frame() previously used a purely local
@@ -105,7 +109,8 @@ int net_tcp_send_frame_ex(int fd, const uint8_t *data, size_t len,
  * passed to every net_tcp_recv_frame() call for that connection so partial
  * progress survives across EAGAIN. Zero-initialize on connection accept
  * or client (re)connect — never reuse across a different connection's
- * bytes.
+ * bytes. The bytes of a body read so far are kept by net.c per fd (#180):
+ * the caller may pass a different buffer on every call.
  */
 typedef struct {
     uint8_t header[2];
