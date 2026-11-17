@@ -12,11 +12,10 @@
 #                  kernels often lack FPU emulation, so hard-float code dies with SIGILL
 #         aarch64 | x86_64   Bootlin musl toolchains
 #
-# Produces <outdir>/camex-<target>: static, stripped, not packed. The same toolchains as
-# OpenIPC/vtesse ci/build-musl.sh. musl is used because a static glibc binary cannot
-# resolve host names (getaddrinfo) without the NSS libraries of the same glibc on the
-# device, and OpenIPC firmware has no glibc at all. With QEMU=1 the unit tests and
-# `camex --version` are run under qemu-user as well.
+# Produces <outdir>/camex-<target>: static, stripped, not packed. musl is used because
+# a static glibc binary cannot resolve host names (getaddrinfo) without the NSS libraries
+# of the same glibc on the device, and OpenIPC firmware has no glibc at all. With QEMU=1
+# the unit tests and `camex --version` are run under qemu-user as well.
 set -eu
 
 ARCH=$1
