@@ -171,16 +171,17 @@ char *server_status(int json, size_t *len);
 char *server_clients_list(int names, int web, size_t *len);
 
 /* The start page's records (#110), tab-separated, one a line:
- *   L:<udp|tcp> <ID> <address> <configured 0|1> <connected s>
- *     <last packet s|-> <last handshake s> <handshakes> <rx bytes>
- *     <tx bytes> <peer IP|-> <peer link port|-> [<name>]
+ *   L <ID> <address> <configured 0|1> <connected s> <last packet s|->
+ *     <last handshake s> <handshakes> <rx bytes> <tx bytes>
+ *     <peer IP|-> <peer link port|-> [<name>]
  * (the peer fields since #119: 12 or 13 fields, a server before it gives
- * 10 or 11; the transport since #178, a server before it writes L)
+ * 10 or 11); with via (CLIENTS INDEX VIA, #178) the first field is L:udp
+ * or L:tcp, the client's transport, which an older reader does not take
  * for each live client with an ID and an address, and
  *   O <ID> <configured address|-> [<name>]
  * for each [client ID] block with no live client. malloc'd, NULL without
  * memory */
-char *server_clients_index(size_t *len);
+char *server_clients_index(int via, size_t *len);
 
 /* A fingerprint of what the nginx map and the start page are made of
  * (#130): the live clients' IDs, addresses, peers and names, the

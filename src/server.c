@@ -2993,7 +2993,7 @@ static int record_id_ok(const char *id)
     return 1;
 }
 
-char *server_clients_index(size_t *len)
+char *server_clients_index(int via, size_t *len)
 {
     status_buf_t b = { NULL, 0U, 0U, 0 };
     size_t i;
@@ -3016,9 +3016,10 @@ char *server_clients_index(size_t *len)
         /* Ages from the wall clock: a step back must not make them
          * negative (the record would not be read) */
         last = c->last_data != 0 ? age_s(c->last_data) : -1.0;
-        /* L:udp or L:tcp, the transport of its link (#178) */
-        sb_printf(&b, "L:%s\t%s\t%s\t%d\t%.0f\t",
-                  c->tcp_fd >= 0 ? "tcp" : "udp", c->client_id, ip,
+        /* With via, L:udp or L:tcp, the transport of its link (#178) */
+        sb_printf(&b, "L%s\t%s\t%s\t%d\t%.0f\t",
+                  !via ? "" : c->tcp_fd >= 0 ? ":tcp" : ":udp",
+                  c->client_id, ip,
                   config_db_find_client(c->client_id) != NULL ? 1 : 0,
                   c->session_since != 0 ? age_s(c->session_since) : 0.0);
         if (last < 0.0) {

@@ -147,6 +147,19 @@ grep -q '<th class="via">Transport</th>' "$BUILD_CTX/page.html" &&
     grep -q '<td class="via">UDP</td>' "$BUILD_CTX/page.html" &&
     grep -q '<td class="via">TCP</td>' "$BUILD_CTX/page.html"
 check $? "the start page has the transport column with UDP and TCP"
+ctl() {  # ctl <command>: the server's raw answer on its control socket
+    docker exec "$P-srv" python3 -c "import socket,sys
+s=socket.socket(socket.AF_UNIX); s.connect('/run/camex/camex-both-5800.sock')
+s.sendall(sys.argv[1].encode()+b'\\n'); d=b''
+while not d.endswith(b'\\n.\\n'):
+    c=s.recv(65536)
+    if not c: break
+    d+=c
+print(d.decode(), end='')" "$1"
+}
+ctl "CLIENTS INDEX" | grep -q "^L	CAM-T	" && ! ctl "CLIENTS INDEX" | grep -q "^L:" &&
+    ctl "CLIENTS INDEX VIA" | grep -q "^L:tcp	CAM-T	" && ctl "CLIENTS INDEX VIA" | grep -q "^L:udp	CAM-U	"
+check $? "CLIENTS INDEX keeps its old records for older readers, CLIENTS INDEX VIA has the transport"
 
 echo "== 3. a client that changes transport keeps its address"
 client S1 CAM-S udp
