@@ -1145,17 +1145,6 @@ static void drain_tcp_server_accept(void)
                     oldest = c;
                 }
             }
-            /* --transport both: the slots outnumber what select() can
-             * watch (#178) */
-            if (tcp_conn_cap != 0U && tcp_conns >= tcp_conn_cap) {
-                net_tcp_close(client_fd);
-                net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
-                log_peer(LOG_WARNING,
-                         "Refused TCP connection from %s: %u TCP "
-                         "connections, the most this server can watch",
-                         peer_str, (unsigned)tcp_conns);
-                continue;
-            }
             if (pending_ip >= CAMEX_TCP_PREAUTH_PER_IP) {
                 net_tcp_close(client_fd);
                 net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
@@ -1164,6 +1153,31 @@ static void drain_tcp_server_accept(void)
                          "unregistered connections from this address",
                          peer_str);
                 continue;
+            }
+            /* --transport both: the slots outnumber what select() can
+             * watch (#178). At that limit the oldest pre-auth connection
+             * past the grace period makes room, as below: idle ones must
+             * not keep a returning client out */
+            if (tcp_conn_cap != 0U && tcp_conns >= tcp_conn_cap) {
+                if (oldest == NULL) {
+                    net_tcp_close(client_fd);
+                    net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
+                    log_peer(LOG_WARNING,
+                             "Refused TCP connection from %s: %u TCP "
+                             "connections, the most this server can watch",
+                             peer_str, (unsigned)tcp_conns);
+                    continue;
+                }
+                net_sockaddr_to_string(&oldest->addr, peer_str,
+                                       sizeof(peer_str));
+                log_peer(LOG_WARNING,
+                         "Closed unregistered TCP connection from %s: "
+                         "the most TCP connections this server can watch",
+                         peer_str);
+                net_tcp_close(oldest->tcp_fd);
+                memset(oldest, 0, sizeof(*oldest));
+                oldest = NULL;
+                --pending;
             }
             /* With few slots, at most half of them may be pre-auth, so
              * unregistered connections can never fill the table (#75) */

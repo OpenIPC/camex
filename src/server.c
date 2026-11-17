@@ -1701,6 +1701,9 @@ static server_client_t *server_entry_for(const uint8_t *key,
         }
         entry = server_find_by_client_id(client_id);
         if (entry != NULL) {
+            /* Adopted first: it keeps what the entry had for a failed
+             * handshake to put back (#178) */
+            server_adopt_tcp(entry, fd);
             if (!net_sockaddr_equal(&entry->addr, from)) {
                 char old_peer[64];
 
@@ -1710,7 +1713,6 @@ static server_client_t *server_entry_for(const uint8_t *key,
                 log_message(LOG_INFO, "Client %s reconnected: %s -> %s",
                             client_id, old_peer, peer);
             }
-            server_adopt_tcp(entry, fd);
             return entry;
         }
         /* TCP clients already have a slot allocated at accept() */
@@ -1783,6 +1785,9 @@ static server_client_t *server_entry_for(const uint8_t *key,
                               (by_addr->tcp_fd >= 0 && !by_addr->registered))) {
             /* The client's own entry, also when it came back on a new TCP
              * connection (whose pre-auth slot by_addr is then freed) */
+            /* Adopted first: it keeps what the entry had for a failed
+             * handshake to put back (#178) */
+            server_adopt_tcp(by_ip, fd);
             if (!net_sockaddr_equal(&by_ip->addr, from)) {
                 char old_peer[64];
 
@@ -1792,7 +1797,6 @@ static server_client_t *server_entry_for(const uint8_t *key,
                 log_message(LOG_INFO, "Client %s reconnected: %s -> %s",
                             local_ip, old_peer, peer);
             }
-            server_adopt_tcp(by_ip, fd);
             entry = by_ip;
         } else if (by_addr != NULL && (fd >= 0 || !by_addr->cur.valid)) {
             /* The same connection or address, without a working session:
