@@ -6,6 +6,54 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 4.0.0 — 2026-11-17
+
+- **A server now listens on UDP and TCP at once** (#178): `--transport both`, the new default,
+  takes clients over UDP and over TCP on the same port, with one client table and one address
+  pool, so a camera keeps its address whichever transport it comes over. A client that comes
+  back over the other one with the same ID and key moves its entry: over TCP at once, over UDP
+  on its first packet on the session of that UDP handshake (not of a rekey over TCP, and not
+  before the handshake's reply went out); the server closes its old TCP connection and logs the
+  move. A move that fails leaves the client where it was, and a move starts its connection age
+  (`connected_s`, the start page's Connected) again. `--transport udp` or `--transport tcp` keeps a server on one.
+- **Upgrade note**: a server started without `--transport` (`install.sh` writes none for UDP)
+  was UDP only and now listens on TCP on its port as well; open TCP in the firewall if clients
+  are to use it. If either port cannot be had, a server in `both` does not start and says which
+  one and what to do (another server on that port: run one server in `both`, or give it
+  `--transport udp` or `tcp`); its UDP socket is bound without `SO_REUSEADDR`, so a UDP server
+  already on the port is found too instead of the two splitting the clients' packets. On Windows
+  the TCP listener of any server no longer sets `SO_REUSEADDR` either: there it let a second
+  socket take a port another one listens on. Two servers that served UDP and TCP on one port with separate
+  pools become one in `both`.
+- Clients do not change: UDP unless set to TCP (`--transport tcp`, `t=tcp` in the connect link,
+  the switch in the Android app), never moving to TCP by themselves; `--transport both` is
+  refused for a client. The connect link and the command `install.sh` prints stay UDP.
+- `camex --status`: the header says `udp+tcp`, a new `VIA` column the transport of each client;
+  `--json` has `"transport":"both"` for the server (each client's `transport` stays `udp` or
+  `tcp`). The control socket of a server in `both` is `camex-both-<port>.sock`.
+- The start page has a **Transport** column, UDP or TCP per device (a dash from an older
+  server): the page asks the new `CLIENTS INDEX VIA`, whose records start with `L:udp` or
+  `L:tcp` (an older server: `CLIENTS INDEX`, unchanged for older readers), and a change of transport wakes
+  `camex-nginx-sync --follow`.
+- A server in `both` keeps all its client slots: only TCP connections are held to what
+  `select()` can watch (`FD_SETSIZE` and the open files limit; fixed at startup, as the slot
+  table is), UDP clients take no descriptor. A quarter of those connections, at most 32, stays
+  for pre-auth ones, so a client whose old connection is still open can come back on a new one;
+  a new client over the limit is refused at its handshake, and at the limit the oldest idle
+  pre-auth connection makes room. A server reads at most 4096 datagrams a pass, so a
+  steady stream of UDP does not hold up TCP clients, the tunnel or the control socket.
+- `install.sh --transport udp|tcp|both` (`both` by default, nothing written to `CAMEX_ARGS`);
+  it says to open UDP and TCP for a server in `both`.
+- Tests: `docker/test-e2e-both.sh` (a UDP and a TCP client at once on one pool, the transport
+  in the status and on the start page, a client that switches transport keeps its address, also
+  from a live TCP entry cut off without its connection closing, one ID over both at once, a taken
+  TCP port and a UDP port held by another server, `both` refused for a client, the TCP limit
+  with a small open files limit); unit tests of
+  the start page's transport column. The status and nginx-map suites keep testing a UDP server
+  (`--transport udp`); the install suite checks the new default.
+  Docs: `docs/server.md`, `docs/usage.md`, `docs/install.md`, `docs/nginx.md`,
+  `docs/security.md`, `docs/android.md`, `docs/android-library.md`, the READMEs.
+
 ## 3.19.0 — 2026-11-16
 
 - A client's own web port for nginx (#174): `web_port=` in `[defaults]` or a `[client ID]`
