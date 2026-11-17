@@ -1825,6 +1825,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     uint32_t pending_before = 0U;
     uint32_t ip_before = 0U;
     session_t next_before;
+    uint8_t next_udp_before = 0U;
     int next_saved = 0;
     int cur_set = 0;
     uint8_t psk_before[32];
@@ -2023,15 +2024,6 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         return -1;
     }
     first = !entry->registered;   /* also restored by a failure */
-    /* --transport both (#178): a client that comes back over the other
-     * transport. Over TCP the new connection carries it at once (as a new
-     * TCP connection always did); over UDP a TCP client without a working
-     * session moves now, one with a session on its first packet on the
-     * new one (server_handle_data), so a replayed message 1 cannot cut its
-     * connection */
-    if (fd < 0 && entry->tcp_fd >= 0 && !entry->cur.valid) {
-        server_drop_tcp(entry);
-    }
     memcpy(psk_before, entry->psk_key, sizeof(psk_before));
     pending_before = entry->pending_ip_be;
     ip_before = entry->ip_be;
@@ -2115,9 +2107,11 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     if (entry->cur.valid) {
         /* Kept until the reply is sent: a failed send puts it back (#77) */
         next_before = entry->next;
+        next_udp_before = entry->next_udp;
         next_saved = 1;
         memset(&entry->next, 0, sizeof(entry->next));
         session_init(&entry->next, server_index, client_index, c2, c1, g_now);
+        entry->next_udp = fd < 0 ? 1U : 0U;
     } else {
         session_init(&entry->cur, server_index, client_index, c2, c1, g_now);
         cur_set = 1;
@@ -2141,6 +2135,15 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     } else if (net_send_payload(net_fd, from, resp,
                                 V2_RESP_HDR + resp_len) < 0) {
         goto fail;
+    }
+    /* --transport both (#178): a client that comes back over the other
+     * transport. Over TCP the new connection carries it at once (as a new
+     * TCP connection always did); over UDP a TCP client without a working
+     * session moves once its reply is out (a failed handshake keeps the
+     * connection), one with a session on its first packet on the new one
+     * (server_handle_data), so a replayed message 1 cannot cut it */
+    if (fd < 0 && entry->tcp_fd >= 0 && cur_set) {
+        server_drop_tcp(entry);
     }
     /* The client has its address: no lease is kept for its ID, nor for
      * its addresses under another ID (#81) */
@@ -2187,6 +2190,7 @@ fail:
         if (next_saved) {
             session_wipe(&entry->next);
             entry->next = next_before;
+            entry->next_udp = next_udp_before;
         }
         if (cur_set) {
             /* The client never got the keys of that session */
@@ -2239,11 +2243,12 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
     }
     net_sockaddr_to_string(from, peer, sizeof(peer));
     /* A TCP session belongs to its connection. Over UDP a client on TCP
-     * moves only with the session of a handshake it made over UDP (#178):
-     * a delayed UDP packet of an older session must not cut the TCP
-     * connection it came back on. */
+     * moves only with the session of a handshake it made over UDP (#178,
+     * next_udp): a delayed UDP packet of an older session, or a copy of a
+     * TCP frame of a rekey over TCP, must not cut its TCP connection. */
     if (s == NULL || (fd >= 0 && entry->tcp_fd != fd) ||
-        (fd < 0 && entry->tcp_fd >= 0 && s != &entry->next) ||
+        (fd < 0 && entry->tcp_fd >= 0 &&
+         (s != &entry->next || !entry->next_udp)) ||
         session_open(s, buffer, len, plain, sizeof(plain), &plain_len) != 0) {
         log_peer(LOG_WARNING, "Dropped packet from %s: unknown session or "
                  "failed to authenticate (len=%u)", peer, (unsigned)len);
@@ -2438,7 +2443,11 @@ static int server_udp_socket(const char *bind_ip, int port)
         return -1;
     }
 
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
+    /* A server on both takes the UDP port only when no one else has it
+     * (#178): with SO_REUSEADDR on both sockets Linux and Windows let a
+     * second one bind it, and the two would split the clients' packets */
+    if (current_config.transport != CAMEX_TRANSPORT_BOTH &&
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
                    (const char *)&reuse, sizeof(reuse)) < 0) {
         print_errno_message(LOG_WARNING, "setsockopt(SO_REUSEADDR)");
     }

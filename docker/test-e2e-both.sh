@@ -16,7 +16,8 @@
 #    server moves the live entry and closes the old connection).
 # 4. Two clients with one ID over UDP and TCP at once: one entry, the
 #    server keeps serving.
-# 5. A server in both whose TCP port is taken does not start and says why;
+# 5. A server in both whose TCP or UDP port is taken (also by a UDP server
+#    that binds with SO_REUSEADDR) does not start and says why;
 #    --transport both is refused for a client.
 #
 # Usage: ./test-e2e-both.sh
@@ -198,6 +199,18 @@ rc=$?
 check $? "a server in both does not start on a taken TCP port (rc $rc): $(grep -m1 'TCP port' "$BUILD_CTX/taken.txt")"
 ! docker exec "$P-srv" test -e /run/camex/camex-both-5900.sock
 check $? "and leaves no socket behind"
+# A UDP server holds the port (it binds with SO_REUSEADDR): a server in
+# both must not share it
+docker exec -d "$P-srv" camex --mode server --transport udp --port 5901 \
+    --local-cidr 10.212.0.1/24 $SERVER_KEY_ARGS --psk "$PSK"
+sleep 1
+docker exec "$P-srv" timeout 10 camex --mode server --port 5901 \
+    --local-cidr 10.213.0.1/24 $SERVER_KEY_ARGS --psk "$PSK" > "$BUILD_CTX/utaken.txt" 2>&1
+rc=$?
+[ "$rc" != 0 ] && [ "$rc" != 124 ] &&
+    grep -q "UDP port 5901 is not available" "$BUILD_CTX/utaken.txt" &&
+    grep -q -- "--transport tcp" "$BUILD_CTX/utaken.txt"
+check $? "a server in both does not start on a UDP port another server holds (rc $rc): $(grep -m1 'UDP port' "$BUILD_CTX/utaken.txt")"
 docker run --rm --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD "$IMAGE" \
     --mode client --auto --name CAM-X --server-host "$P-srv" --port 5800 \
     --transport both --server-pubkey "$SERVER_PUBKEY" --psk "$PSK" > "$BUILD_CTX/cboth.txt" 2>&1

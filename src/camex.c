@@ -605,7 +605,8 @@ static size_t camex_tcp_slot_cap(void)
 }
 
 /* With --transport both (#178): TCP connections at most, so the slots of
- * UDP clients are not cut to what select() can watch; 0 = no such limit */
+ * UDP clients are not cut to what select() can watch; 0 = no such limit.
+ * Fixed at startup, as the slot table is */
 static size_t tcp_conn_cap = 0U;
 
 /* Slots the configuration asks for: max_clients=, else the pool's size;
@@ -616,22 +617,22 @@ static size_t camex_wanted_slots(int quiet)
     size_t slots = g->max_clients != 0U ? (size_t)g->max_clients
                                         : server_default_max_clients();
 
-    tcp_conn_cap = 0U;
-    if (current_config.transport == CAMEX_TRANSPORT_BOTH) {
+    /* Set at startup only: the table keeps its size until a restart, a
+     * reload asks quietly */
+    if (current_config.transport == CAMEX_TRANSPORT_BOTH && !quiet) {
         size_t cap = camex_tcp_slot_cap();
 
 #ifdef _WIN32
         /* The UDP socket takes a place in the read set too */
         cap = cap > 1U ? cap - 1U : 0U;
 #endif
+        /* Harmless with fewer slots: there can be no more connections */
+        tcp_conn_cap = cap;
         if (slots > cap) {
-            tcp_conn_cap = cap;
-            if (!quiet) {
-                log_message(LOG_INFO, "TCP: at most %u of the %u clients "
-                            "over TCP (FD_SETSIZE and the open files limit); "
-                            "UDP clients are not limited by it",
-                            (unsigned)cap, (unsigned)slots);
-            }
+            log_message(LOG_INFO, "TCP: at most %u of the %u clients over "
+                        "TCP (FD_SETSIZE and the open files limit); UDP "
+                        "clients are not limited by it",
+                        (unsigned)cap, (unsigned)slots);
         }
     } else if (current_config.transport == CAMEX_TRANSPORT_TCP) {
         size_t cap = camex_tcp_slot_cap();
@@ -955,6 +956,12 @@ int camex_init(camex_config_t *config)
     return 0;
 }
 
+/* Datagrams a server reads in one pass: the rest wait for the next one, so
+ * a steady stream of UDP cannot hold up TCP clients, the tunnel and the
+ * control socket (#178). Large: a pass also walks the slot table, and a
+ * small batch let a flood crowd out a live client (test-e2e-fair-budget) */
+#define SERVER_UDP_BATCH 4096
+
 static void drain_udp_packets(void)
 {
     uint8_t buffer[TUN_PACKET_MAX + V2_OVERHEAD];
@@ -962,7 +969,9 @@ static void drain_udp_packets(void)
     ssize_t len;
 
     if (server_mode) {
-        while (1) {
+        int batch;
+
+        for (batch = 0; batch < SERVER_UDP_BATCH; ++batch) {
             socklen_t fromlen = sizeof(from);
 
             len = recvfrom(net_fd, RECV_BUF_CAST buffer, sizeof(buffer), 0,

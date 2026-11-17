@@ -83,6 +83,8 @@ typedef struct {
                            * it (so a rekey loses nothing in flight) */
     session_t prev;       /* previous session, receives until prev_until */
     time_t prev_until;
+    uint8_t next_udp;     /* next came from a handshake over UDP: only its
+                           * packets may move a TCP client to UDP (#178) */
     tcp_recv_state_t recv_state;  /* per-connection partial-read tracker —
                                     * zero on accept/reuse, see net.h */
 } server_client_t;
