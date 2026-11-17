@@ -629,9 +629,17 @@ int net_tcp_listen(const char *bind_ip, int port)
     }
 #endif
 
+#ifdef _WIN32
+    /* On Windows SO_REUSEADDR lets a second socket take a port another one
+     * listens on: without it a port held by another server fails the bind
+     * (#178). Connections left in TIME_WAIT do not stop a new listener
+     * there, so a restart does not need it. */
+    (void)reuse;
+#else
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, OPTVAL_CAST &reuse, sizeof(reuse)) < 0) {
         print_errno_message(LOG_WARNING, "setsockopt(SO_REUSEADDR)");
     }
+#endif
 
 #if defined(__APPLE__)
     {

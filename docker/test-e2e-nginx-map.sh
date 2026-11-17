@@ -164,7 +164,7 @@ wait_registered() {  # wait_registered <id>...
 
 echo "== 1. two clients behind nginx"
 docker run -d --name "$P-srv" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
-    -e CAMEX_CLIENT_TIMEOUT=5 "$IMAGE" --mode server --port 5800 \
+    -e CAMEX_CLIENT_TIMEOUT=5 "$IMAGE" --mode server --port 5800 --transport udp \
     --local-cidr 10.200.0.1/24 $SERVER_KEY_ARGS --psk "$PSK" \
     --config /etc/camex/camex.conf >/dev/null
 sleep 1
@@ -227,12 +227,12 @@ code2=$(docker exec "$P-srv" curl -s -o /dev/null -w '%{http_code}' -m 10 -u cam
 check $? "the start page asks for the password ($code, a wrong one $code2); the cameras do not"
 ip_a=$(ip_of "$P-CAM-A")
 ip_b=$(ip_of "$P-CAM-B")
-echo "$home" | grep -qF '<th class="addr">Address</th><th class="addr">Peer</th><th class="conn">'
+echo "$home" | grep -qF '<th class="addr">Address</th><th class="addr">Peer</th><th class="via">Transport</th><th class="conn">'
 check $? "the Peer column right after Address"
 echo "$home" | grep -F "//cam-a.$DOMAIN/" | grep -qF "<td class=\"addr\"><a class=\"peer\" href=\"http://$ip_a/\" target=\"_blank\" rel=\"noopener\">$ip_a</a></td>" &&
     echo "$home" | grep -F "//cam-b.$DOMAIN/" | grep -qF "<td class=\"addr\"><a class=\"peer\" href=\"http://$ip_b:8080/\" target=\"_blank\" rel=\"noopener\">$ip_b</a></td>"
 check $? "the peers: CAM-A $ip_a (peer_port=80, no port), CAM-B $ip_b:8080 (the default)"
-echo "$home" | grep -F '<span class="nm">Gate</span>' | grep -qF '<td class="addr">&mdash;</td><td class="conn">offline'
+echo "$home" | grep -F '<span class="nm">Gate</span>' | grep -qF '<td class="addr">&mdash;</td><td class="via">&mdash;</td><td class="conn">offline'
 check $? "CAM-Z, offline, has no peer"
 [ "$(docker exec "$P-srv" curl -s -m 10 "http://$ip_a/")" = "I am CAM-A" ]
 check $? "CAM-A's peer link reaches it"
@@ -280,11 +280,11 @@ docker kill -s HUP "$P-srv" >/dev/null
 sleep 1
 sync >/dev/null
 home=$(get "$DOMAIN")
-echo "$home" | grep -F "//cam-b.$DOMAIN/" | grep -qF "<td class=\"addr\">$ip_b</td><td class=\"conn\">" &&
+echo "$home" | grep -F "//cam-b.$DOMAIN/" | grep -qF "<td class=\"addr\">$ip_b</td><td class=\"via\">UDP</td><td class=\"conn\">" &&
     echo "$home" | grep -F "//cam-a.$DOMAIN/" | grep -qF "href=\"http://$ip_a/\""
 check $? "peer_port=none in [defaults]: CAM-B's IP is plain text, CAM-A keeps its link"
 docker exec "$P-srv" sh -c 'printf "[defaults]\npeer_port=0\n" > /tmp/bad-port.conf'
-out=$(docker exec "$P-srv" timeout 5 camex --mode server --port 5897 \
+out=$(docker exec "$P-srv" timeout 5 camex --mode server --port 5897 --transport udp \
     --local-cidr 10.203.0.1/24 $SERVER_KEY_ARGS --psk "$PSK" \
     --config /tmp/bad-port.conf 2>&1)
 rc=$?
@@ -328,7 +328,7 @@ check $? "the other one still works (${a:-no answer})"
 
 echo "== 5. a socket left behind by a server that is gone"
 # A second server killed hard leaves its socket in /run/camex
-docker exec -d "$P-srv" camex --mode server --port 5899 --local-cidr 10.201.0.1/24 \
+docker exec -d "$P-srv" camex --mode server --port 5899 --transport udp --local-cidr 10.201.0.1/24 \
     $SERVER_KEY_ARGS --psk "$PSK"
 sleep 1
 docker exec "$P-srv" sh -c 'pkill -9 -f "^camex --mode server --port 5899"; sleep 1; test -S /run/camex/camex-udp-5899.sock'
@@ -383,7 +383,7 @@ err=$(docker exec "$P-srv" camex --status --format nginx-map --domain other.test
 echo "$err" | grep -q -- "--domain other.test differs from the server's domain= $DOMAIN: other.test used"
 check $? "--domain that differs from domain= is used, with a warning"
 docker exec "$P-srv" sh -c 'echo "[server]" > /tmp/bad.conf; echo "domain=bad_domain" >> /tmp/bad.conf'
-out=$(docker exec "$P-srv" timeout 5 camex --mode server --port 5898 \
+out=$(docker exec "$P-srv" timeout 5 camex --mode server --port 5898 --transport udp \
     --local-cidr 10.202.0.1/24 $SERVER_KEY_ARGS --psk "$PSK" \
     --config /tmp/bad.conf 2>&1)
 rc=$?
@@ -454,7 +454,7 @@ t1=$(date +%s)
 check $? "a socket left behind: no state (none), and a wait on it takes its time ($((t1 - t0)) s)"
 # A server that starts during the wait wakes it (#138), not its timeout
 TOKEN=$(docker exec "$P-srv" camex --status --wait - 2>/dev/null)
-docker exec -d "$P-srv" sh -c 'sleep 2; exec camex-run --mode server --port 5802 \
+docker exec -d "$P-srv" sh -c 'sleep 2; exec camex-run --mode server --port 5802 --transport udp \
     --local-cidr 10.202.0.1/24 '"$SERVER_KEY_ARGS"' --psk "'"$PSK"'" > /tmp/srv5802.log 2>&1'
 t0=$(date +%s)
 out=$(docker exec "$P-srv" camex --status --wait "$TOKEN" --wait-timeout 30 2>&1)
@@ -469,7 +469,7 @@ sleep 1
 # The same where a server left its socket behind (section 5): a server
 # started at that path is a new one too
 TOKEN=$(docker exec "$P-srv" camex --status --wait - 2>/dev/null)
-docker exec -d "$P-srv" sh -c 'sleep 2; exec camex-run --mode server --port 5899 \
+docker exec -d "$P-srv" sh -c 'sleep 2; exec camex-run --mode server --port 5899 --transport udp \
     --local-cidr 10.204.0.1/24 '"$SERVER_KEY_ARGS"' --psk "'"$PSK"'" > /tmp/srv5899b.log 2>&1'
 t0=$(date +%s)
 docker exec "$P-srv" camex --status --wait "$TOKEN" --wait-timeout 30 >/dev/null 2>&1
@@ -513,7 +513,7 @@ check $? "a client that is gone leaves the map as soon as the server drops it"
 # A server that starts while --follow waits: its client in the map at once
 # (#138); its own pool, so that the two tunnels do not overlap
 docker exec "$P-srv" sh -c 'printf "[server]\nauto_pool=10.203.0.0/24\n" > /tmp/c5803.conf'
-docker exec -d "$P-srv" sh -c 'exec camex-run --mode server --port 5803 \
+docker exec -d "$P-srv" sh -c 'exec camex-run --mode server --port 5803 --transport udp \
     --local-cidr 10.203.0.1/24 --config /tmp/c5803.conf '"$SERVER_KEY_ARGS"' \
     --psk "'"$PSK"'" > /tmp/srv5803.log 2>&1'
 client CAM-H 5803

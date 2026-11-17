@@ -23,7 +23,7 @@ device's web UI by name, with a start page of all of them.
 
 ## Features
 
-- **Client/server architecture** over UDP or TCP
+- **Client/server architecture** over UDP or TCP: the server listens on both on one port, with one address pool
 - **Auto-config mode** — client fetches tunnel parameters from the server
 - **Protocol v2** — Noise handshake (`NKpsk0`, X25519, ChaCha20-Poly1305,
   BLAKE2b), fresh keys per session and direction, always encrypted

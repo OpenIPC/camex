@@ -84,7 +84,7 @@ json_get() {  # json_get <python expression on d>: from --status --json
 
 echo "== 1. a UDP server with two clients"
 docker run -d --name "$P-srv" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
-    -e CAMEX_CLIENT_TIMEOUT=5 "$IMAGE" --mode server --port 5800 \
+    -e CAMEX_CLIENT_TIMEOUT=5 "$IMAGE" --mode server --port 5800 --transport udp \
     --local-cidr 10.200.0.1/24 $SERVER_KEY_ARGS --psk "$PSK" >/dev/null
 sleep 1
 client CAM-A 5800
@@ -153,7 +153,7 @@ check $? "the table shows it under the kept addresses"
 echo "== 5. control_socket=none"
 printf '[server]\ncontrol_socket=none\n' > "$BUILD_CTX/none.conf"
 docker cp "$BUILD_CTX/none.conf" "$P-srv:/etc/none.conf" >/dev/null
-docker exec -d "$P-srv" camex --mode server --port 5802 --local-cidr 10.202.0.1/24 \
+docker exec -d "$P-srv" camex --mode server --port 5802 --transport udp --local-cidr 10.202.0.1/24 \
     $SERVER_KEY_ARGS --psk "$PSK" --config /etc/none.conf
 sleep 1
 ! docker exec "$P-srv" test -e /run/camex/camex-udp-5802.sock
@@ -162,7 +162,7 @@ check $? "no socket for that server"
 echo "== 6. a reload moves the socket"
 printf '[server]\n' > "$BUILD_CTX/mv.conf"
 docker cp "$BUILD_CTX/mv.conf" "$P-srv:/etc/mv.conf" >/dev/null
-docker exec -d "$P-srv" camex --mode server --port 5803 --local-cidr 10.203.0.1/24 \
+docker exec -d "$P-srv" camex --mode server --port 5803 --transport udp --local-cidr 10.203.0.1/24 \
     $SERVER_KEY_ARGS --psk "$PSK" --config /etc/mv.conf --pid-file /run/mv.pid
 sleep 1
 docker exec "$P-srv" test -S /run/camex/camex-udp-5803.sock

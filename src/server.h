@@ -83,9 +83,15 @@ typedef struct {
                            * it (so a rekey loses nothing in flight) */
     session_t prev;       /* previous session, receives until prev_until */
     time_t prev_until;
+    uint8_t next_udp;     /* next came from a handshake over UDP: only its
+                           * packets may move a TCP client to UDP (#178) */
     tcp_recv_state_t recv_state;  /* per-connection partial-read tracker —
                                     * zero on accept/reuse, see net.h */
 } server_client_t;
+
+/* TCP clients that may be registered at once with --transport both (0 =
+ * no limit), set at startup (#178) */
+extern size_t server_tcp_reg_cap;
 
 /* Live client slots, allocated at startup (#75) */
 extern server_client_t *server_clients;
@@ -114,7 +120,8 @@ void server_set_addr(server_client_t *entry, const struct sockaddr_in *addr);
 /* Find clients */
 server_client_t *server_find_by_ip(uint32_t ip_be);
 server_client_t *server_find_by_client_id(const char *client_id);
-server_client_t *server_find_by_addr(const struct sockaddr_in *addr);
+/* The live client at addr over TCP (tcp != 0) or UDP */
+server_client_t *server_find_by_addr(const struct sockaddr_in *addr, int tcp);
 server_client_t *server_alloc_client(void);
 
 /* Close the entry's TCP connection (if any), wipe its keys, free it */
@@ -168,12 +175,13 @@ char *server_clients_list(int names, int web, size_t *len);
  *     <last handshake s> <handshakes> <rx bytes> <tx bytes>
  *     <peer IP|-> <peer link port|-> [<name>]
  * (the peer fields since #119: 12 or 13 fields, a server before it gives
- * 10 or 11)
+ * 10 or 11); with via (CLIENTS INDEX VIA, #178) the first field is L:udp
+ * or L:tcp, the client's transport, which an older reader does not take
  * for each live client with an ID and an address, and
  *   O <ID> <configured address|-> [<name>]
  * for each [client ID] block with no live client. malloc'd, NULL without
  * memory */
-char *server_clients_index(size_t *len);
+char *server_clients_index(int via, size_t *len);
 
 /* A fingerprint of what the nginx map and the start page are made of
  * (#130): the live clients' IDs, addresses, peers and names, the

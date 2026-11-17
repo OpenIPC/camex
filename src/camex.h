@@ -54,7 +54,7 @@ typedef struct {
     char client_id[CAMEX_CLIENT_ID_LEN];
     char config_path[CAMEX_CONFIG_PATH_LEN];
     uint8_t auto_config;
-    uint8_t transport;  /* 0=UDP, 1=TCP — matches camex_transport_t */
+    uint8_t transport;  /* camex_transport_t: 0 UDP, 1 TCP, 2 both (server) */
     camex_mode_t mode;
     char pid_file[256];
     char bind_dev[IFNAMSIZ];

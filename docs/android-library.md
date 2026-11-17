@@ -104,7 +104,7 @@ The values (`fields()`):
 |------------------|-----------|----------------------------------------------------------------------------------------------------------------------|
 | `server`         | host:port | the camex server: a host name or an IPv4 address and its port                                                        |
 | `name`           | text      | the client ID on the server (`[client ID]`), 1 to 31 bytes                                                           |
-| `transport`      | choice    | `UDP` or `TCP`, as on the server                                                                                     |
+| `transport`      | choice    | `UDP` or `TCP`; a server on both (4.0.0+) takes either                                                               |
 | `pubkey`         | text      | the server's public key, 44 characters (`camex --genkey`)                                                            |
 | `psk`            | secret    | the pre-shared key: `hex:`, `base64:` or a passphrase, below 128 bytes                                               |
 | `mtu`            | text      | optional, 576 to 9000; empty: the server's                                                                           |

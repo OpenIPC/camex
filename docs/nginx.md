@@ -314,7 +314,8 @@ HTML page of the cameras in two lists, switched with the tabs at the top:
 Each row has the camera's name linked to `//<camera ID>.openipc.click/` (no
 scheme, so the link works over HTTP and HTTPS alike), its ID and tunnel
 address, its **Peer**: the external IP it connects from, as the server sees it
-(after NAT), linked to `http://<IP>:<peer_port>/` in a new tab; and as in
+(after NAT), linked to `http://<IP>:<peer_port>/` in a new tab; its
+**Transport**, UDP or TCP (#178; a dash from a server before 4.0.0); and as in
 `camex --status`: **Connected** (how long it has been on
 this connection), **Last packet**, **Handshake** (how long ago, and how many
 it has had) and **RX / TX** in KiB. The page opens Configured when there are

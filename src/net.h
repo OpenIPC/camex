@@ -22,8 +22,17 @@
 /* Transport type */
 typedef enum {
     CAMEX_TRANSPORT_UDP = 0,
-    CAMEX_TRANSPORT_TCP = 1
+    CAMEX_TRANSPORT_TCP = 1,
+    /* A server on both, on the same port, with one client table (#178) */
+    CAMEX_TRANSPORT_BOTH = 2,
+    /* Not given: a server takes both, a client UDP (validate_config()) */
+    CAMEX_TRANSPORT_UNSET = 255
 } camex_transport_t;
+
+/* What a server with this transport listens on */
+#define CAMEX_TRANSPORT_HAS_UDP(t) ((t) != CAMEX_TRANSPORT_TCP)
+#define CAMEX_TRANSPORT_HAS_TCP(t) ((t) == CAMEX_TRANSPORT_TCP || \
+                                    (t) == CAMEX_TRANSPORT_BOTH)
 
 /* Network FD (global) */
 extern int net_fd;       /* client-side connected / server-side data */

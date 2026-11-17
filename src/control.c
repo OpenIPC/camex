@@ -46,7 +46,9 @@
 
 void control_default_path(char *buf, size_t size, int transport, int port)
 {
-    const char *proto = transport == CAMEX_TRANSPORT_TCP ? "tcp" : "udp";
+    const char *proto = transport == CAMEX_TRANSPORT_TCP    ? "tcp"
+                      : transport == CAMEX_TRANSPORT_BOTH ? "both"
+                                                          : "udp";
     const char *ip = current_config.bind_ip;
     const char *dev = current_config.bind_dev;
 
@@ -349,7 +351,7 @@ static void control_bad_command(control_conn_t *c, size_t *len)
     static const char err[] = "ERROR unknown command (STATUS, "
                               "STATUS JSON, CLIENTS, CLIENTS WEB, "
                               "CLIENTS NAMES, "
-                              "CLIENTS INDEX, DOMAIN, "
+                              "CLIENTS INDEX, CLIENTS INDEX VIA, DOMAIN, "
                               "WAIT <hash|-> <seconds>)\n";
 
     c->out = malloc(sizeof(err));
@@ -479,7 +481,11 @@ static void control_answer(control_conn_t *c)
     } else if (strcmp(c->cmd, "CLIENTS NAMES") == 0) {
         c->out = server_clients_list(1, 0, &len);
     } else if (strcmp(c->cmd, "CLIENTS INDEX") == 0) {
-        c->out = server_clients_index(&len);
+        c->out = server_clients_index(0, &len);
+    } else if (strcmp(c->cmd, "CLIENTS INDEX VIA") == 0) {
+        /* With each client's transport (#178): L:udp / L:tcp records,
+         * which an older camex does not read */
+        c->out = server_clients_index(1, &len);
     } else if (strcmp(c->cmd, "DOMAIN") == 0) {
         /* domain= of [server] (#106), an empty line without one; in lower
          * case, as the map writes it (and never "ERROR...") */
@@ -1102,7 +1108,8 @@ int control_nginx_index(const char *path, const char *domain, int http_port)
     char dom[254];
 
     if (control_domain(path, domain, dom, sizeof(dom)) != 0 ||
-        control_gather(path, "CLIENTS INDEX\n", NULL, &all) != 0) {
+        control_gather(path, "CLIENTS INDEX VIA\n", "CLIENTS INDEX\n",
+                       &all) != 0) {
         return 1;
     }
     page = nginx_index_format(all, dom, http_port, stderr, &count);

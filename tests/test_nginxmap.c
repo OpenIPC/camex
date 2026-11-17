@@ -158,7 +158,7 @@ static void test_index(void)
               ROW "<a href=\"//cam-a.openipc.click/\">Back &lt;yard&gt; "
               "&amp; &quot;shed&quot;</a></td><td class=\"id\">cam-a</td>"
               "<td class=\"addr\">10.200.0.2</td><td class=\"addr\">&mdash;"
-              "</td><td class=\"conn\">1m05s"
+              "</td><td class=\"via\">&mdash;</td><td class=\"conn\">1m05s"
               "</td><td>2s ago</td><td class=\"hs\">30s ago &middot; 3</td>"
               "<td class=\"tr\">2.0 / 1.0</td></tr>\n") != NULL,
           "a live row with its values");
@@ -377,7 +377,8 @@ static void test_index(void)
              sizeof(warn));
     CHECK(m != NULL && n == 5U &&
               strstr(m, "<th class=\"addr\">Address</th><th class=\"addr\">"
-                     "Peer</th><th class=\"conn\">") != NULL &&
+                     "Peer</th><th class=\"via\">Transport</th><th "
+                     "class=\"conn\">") != NULL &&
               strstr(m, ">Gate</a></td><td class=\"id\">cam1</td><td "
                      "class=\"addr\">10.0.0.1</td><td class=\"addr\"><a "
                      "class=\"peer\" href=\"http://203.0.113.7:8080/\" "
@@ -393,8 +394,31 @@ static void test_index(void)
                      "class=\"addr\">10.0.0.5</td><td class=\"addr\">&mdash;"
                      "</td>") != NULL &&
               strstr(m, "<td class=\"addr\">10.0.0.6</td><td class=\"addr\">"
-                     "&mdash;</td><td class=\"conn\">offline") != NULL,
+                     "&mdash;</td><td class=\"via\">&mdash;</td><td "
+                     "class=\"conn\">offline") != NULL,
           "the peer column");
+    free(m);
+
+    /* The transport (#178): L:udp and L:tcp from a server that says it,
+     * a dash for L from an older one; another word is not a record */
+    m = page("L:udp\tcam1\t10.0.0.1\t1\t65\t2\t30\t3\t2048\t1024\t"
+             "203.0.113.7\t-\n"
+             "L:tcp\tcam2\t10.0.0.2\t1\t65\t2\t30\t3\t2048\t1024\t"
+             "198.51.100.2\t-\tYard\n"
+             "L\tcam3\t10.0.0.3\t1\t65\t2\t30\t3\t2048\t1024\t"
+             "192.0.2.9\t-\n"
+             "L:sctp\tcam4\t10.0.0.4\t1\t65\t2\t30\t3\t2048\t1024\t"
+             "192.0.2.10\t-\n", "openipc.click", &n, warn, sizeof(warn));
+    CHECK(m != NULL && n == 3U &&
+              strstr(m, ">203.0.113.7</td><td class=\"via\">UDP</td>")
+                  != NULL &&
+              strstr(m, ">Yard</a></td>") != NULL &&
+              strstr(m, ">198.51.100.2</td><td class=\"via\">TCP</td>")
+                  != NULL &&
+              strstr(m, ">192.0.2.9</td><td class=\"via\">&mdash;</td>")
+                  != NULL &&
+              strstr(m, "cam4") == NULL,
+          "the transport column");
     free(m);
 
     /* A bad peer or port: the record is not used */

@@ -230,11 +230,20 @@ static int match_id(uint32_t slot, const void *key)
                       (const char *)key) == 0;
 }
 
+/* A peer address and its transport: with --transport both a UDP client
+ * and a TCP connection may come from the same address and port (#178) */
+typedef struct {
+    const struct sockaddr_in *addr;
+    int tcp;
+} addr_key_t;
+
 static int match_addr(uint32_t slot, const void *key)
 {
+    const addr_key_t *k = (const addr_key_t *)key;
+
     return slot < server_max_clients && server_clients[slot].active &&
-           net_sockaddr_equal(&server_clients[slot].addr,
-                              (const struct sockaddr_in *)key);
+           (server_clients[slot].tcp_fd >= 0) == (k->tcp != 0) &&
+           net_sockaddr_equal(&server_clients[slot].addr, k->addr);
 }
 
 static uint32_t hash_addr(const struct sockaddr_in *addr)
@@ -689,21 +698,23 @@ server_client_t *server_find_by_client_id(const char *client_id)
     return NULL;
 }
 
-server_client_t *server_find_by_addr(const struct sockaddr_in *addr)
+server_client_t *server_find_by_addr(const struct sockaddr_in *addr, int tcp)
 {
     size_t i;
+    addr_key_t key;
 
     if (addr == NULL) {
         return NULL;
     }
+    key.addr = addr;
+    key.tcp = tcp;
     if (idx_ok && addr_is_set(addr)) {
-        long k = slotidx_find(&idx_addr, hash_addr(addr), match_addr, addr);
+        long k = slotidx_find(&idx_addr, hash_addr(addr), match_addr, &key);
 
         return k >= 0 ? &server_clients[k] : NULL;
     }
     for (i = 0; i < server_max_clients; ++i) {
-        if (server_clients[i].active &&
-            net_sockaddr_equal(&server_clients[i].addr, addr)) {
+        if (match_addr((uint32_t)i, &key)) {
             return &server_clients[i];
         }
     }
@@ -1434,9 +1445,10 @@ static server_share_t *server_share_of(uint32_t key, uint8_t is_net)
 }
 
 /* The live client at from, or NULL: its handshakes are rekeys */
-static server_client_t *server_known_source(const struct sockaddr_in *from)
+static server_client_t *server_known_source(const struct sockaddr_in *from,
+                                            int tcp)
 {
-    server_client_t *c = server_find_by_addr(from);
+    server_client_t *c = server_find_by_addr(from, tcp);
 
     if (c == NULL || !c->registered || !c->cur.valid ||
         c->last_data == 0 || g_now - c->last_data > server_client_timeout()) {
@@ -1454,7 +1466,7 @@ static server_client_t *server_known_source(const struct sockaddr_in *from)
     return c;
 }
 
-static void server_source_for(const struct sockaddr_in *from,
+static void server_source_for(const struct sockaddr_in *from, int tcp,
                               server_source_t *src)
 {
     server_budget_window();
@@ -1462,7 +1474,7 @@ static void server_source_for(const struct sockaddr_in *from,
     src->looked_up = 0;
     src->addr = NULL;
     src->net = NULL;
-    src->known = server_known_source(from);
+    src->known = server_known_source(from, tcp);
 }
 
 /* The source's share entries, looked up only once the whole budgets
@@ -1599,6 +1611,21 @@ static uint32_t server_new_index(const server_client_t *entry)
     return 0U;
 }
 
+/* What the last server_adopt_tcp() of a handshake took over (#178): a
+ * failed handshake puts a UDP client back, and a client that already had
+ * a TCP connection is not a new one for the TCP limit */
+static struct {
+    server_client_t *entry;
+    int had_tcp;                 /* it replaced a TCP connection */
+    int from_udp;                /* a registered UDP client moved to TCP */
+    struct sockaddr_in addr;     /* its UDP address before */
+    time_t since;                /* its session_since before */
+} adopt_rec;
+
+/* TCP clients that may be registered at once with --transport both, 0 =
+ * no limit; set by camex.c at startup (#178) */
+size_t server_tcp_reg_cap = 0U;
+
 /* A client that came back on a new TCP connection: the entry takes the new
  * fd, the slot that connection got at accept() is freed, the old
  * connection is closed */
@@ -1608,6 +1635,14 @@ static void server_adopt_tcp(server_client_t *entry, int fd)
 
     if (fd < 0 || entry->tcp_fd == fd) {
         return;
+    }
+    adopt_rec.entry = entry;
+    adopt_rec.had_tcp = entry->tcp_fd >= 0;
+    adopt_rec.from_udp = entry->tcp_fd < 0 && entry->registered;
+    adopt_rec.addr = entry->addr;
+    adopt_rec.since = entry->session_since;
+    if (adopt_rec.from_udp) {
+        entry->session_since = 0;   /* a new connection on TCP (#82) */
     }
     for (j = 0; j < server_max_clients; ++j) {
         if (server_clients[j].active && server_clients[j].tcp_fd == fd &&
@@ -1621,6 +1656,22 @@ static void server_adopt_tcp(server_client_t *entry, int fd)
     }
     entry->tcp_fd = fd;
     memset(&entry->recv_state, 0, sizeof(entry->recv_state));
+}
+
+/* A TCP client that moved to UDP (#178): its connection is closed, the
+ * entry, its sessions and its address stay */
+static void server_drop_tcp(server_client_t *entry)
+{
+    char peer[64];
+
+    net_sockaddr_to_string(&entry->addr, peer, sizeof(peer));
+    log_message(LOG_INFO, "Client %s moved from TCP (%s) to UDP",
+                entry->client_id[0] != '\0' ? entry->client_id : "(manual)",
+                peer);
+    net_tcp_close(entry->tcp_fd);
+    entry->tcp_fd = -1;
+    memset(&entry->recv_state, 0, sizeof(entry->recv_state));
+    entry->session_since = g_now;   /* its connection is a new one (#82) */
 }
 
 /* The client entry a handshake belongs to (created or reused), or NULL if
@@ -1650,6 +1701,9 @@ static server_client_t *server_entry_for(const uint8_t *key,
         }
         entry = server_find_by_client_id(client_id);
         if (entry != NULL) {
+            /* Adopted first: it keeps what the entry had for a failed
+             * handshake to put back (#178) */
+            server_adopt_tcp(entry, fd);
             if (!net_sockaddr_equal(&entry->addr, from)) {
                 char old_peer[64];
 
@@ -1659,11 +1713,10 @@ static server_client_t *server_entry_for(const uint8_t *key,
                 log_message(LOG_INFO, "Client %s reconnected: %s -> %s",
                             client_id, old_peer, peer);
             }
-            server_adopt_tcp(entry, fd);
             return entry;
         }
         /* TCP clients already have a slot allocated at accept() */
-        entry = server_find_by_addr(from);
+        entry = server_find_by_addr(from, fd >= 0);
         if (entry != NULL && entry->tcp_fd >= 0) {
             return entry;
         }
@@ -1676,7 +1729,7 @@ static server_client_t *server_entry_for(const uint8_t *key,
 
     {
         struct in_addr addr;
-        server_client_t *by_addr = server_find_by_addr(from);
+        server_client_t *by_addr = server_find_by_addr(from, fd >= 0);
         server_client_t *by_ip;
 
         if (inet_pton(AF_INET, local_ip, &addr) != 1) {
@@ -1732,6 +1785,9 @@ static server_client_t *server_entry_for(const uint8_t *key,
                               (by_addr->tcp_fd >= 0 && !by_addr->registered))) {
             /* The client's own entry, also when it came back on a new TCP
              * connection (whose pre-auth slot by_addr is then freed) */
+            /* Adopted first: it keeps what the entry had for a failed
+             * handshake to put back (#178) */
+            server_adopt_tcp(by_ip, fd);
             if (!net_sockaddr_equal(&by_ip->addr, from)) {
                 char old_peer[64];
 
@@ -1741,7 +1797,6 @@ static server_client_t *server_entry_for(const uint8_t *key,
                 log_message(LOG_INFO, "Client %s reconnected: %s -> %s",
                             local_ip, old_peer, peer);
             }
-            server_adopt_tcp(by_ip, fd);
             entry = by_ip;
         } else if (by_addr != NULL && (fd >= 0 || !by_addr->cur.valid)) {
             /* The same connection or address, without a working session:
@@ -1798,6 +1853,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     uint32_t pending_before = 0U;
     uint32_t ip_before = 0U;
     session_t next_before;
+    uint8_t next_udp_before = 0U;
     int next_saved = 0;
     int cur_set = 0;
     uint8_t psk_before[32];
@@ -1820,7 +1876,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
             return -1;
         }
     }
-    server_source_for(from, &src);
+    server_source_for(from, fd >= 0, &src);
     budget = server_handshake_budget(&src);
     if (budget == -1) {
         log_peer(LOG_WARNING, "Dropped handshake from %s: more than %u "
@@ -1989,6 +2045,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         }
     }
 
+    memset(&adopt_rec, 0, sizeof(adopt_rec));
     entry = server_entry_for(used_key, client_id, local_ip, auto_request,
                              from, fd, &fresh);
     if (entry == NULL) {
@@ -1999,6 +2056,29 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     memcpy(psk_before, entry->psk_key, sizeof(psk_before));
     pending_before = entry->pending_ip_be;
     ip_before = entry->ip_be;
+    /* --transport both (#178): a client new on TCP (not one that replaces
+     * its TCP connection, nor a rekey on it) counts against the limit of
+     * registered TCP clients; the rest of the connections is kept free for
+     * pre-auth ones, so a client can always come back on a new one */
+    if (fd >= 0 && server_tcp_reg_cap != 0U &&
+        (adopt_rec.entry == entry ? !adopt_rec.had_tcp : first)) {
+        size_t k, reg = 0U;
+
+        for (k = 0; k < server_max_clients; ++k) {
+            const server_client_t *c = &server_clients[k];
+
+            if (c != entry && c->active && c->registered && c->tcp_fd >= 0) {
+                ++reg;
+            }
+        }
+        if (reg >= server_tcp_reg_cap) {
+            log_peer(LOG_WARNING, "Rejected handshake from %s: %u clients "
+                     "on TCP, the most this server can watch", peer,
+                     (unsigned)reg);
+            noise_wipe(&hs);
+            goto fail;
+        }
+    }
     /* A UDP entry with a working session keeps its address until the first
      * packet on the new one (server_handle_data), so a replayed message 1
      * cannot redirect its traffic; over TCP the connection carries it */
@@ -2079,9 +2159,11 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     if (entry->cur.valid) {
         /* Kept until the reply is sent: a failed send puts it back (#77) */
         next_before = entry->next;
+        next_udp_before = entry->next_udp;
         next_saved = 1;
         memset(&entry->next, 0, sizeof(entry->next));
         session_init(&entry->next, server_index, client_index, c2, c1, g_now);
+        entry->next_udp = fd < 0 ? 1U : 0U;
     } else {
         session_init(&entry->cur, server_index, client_index, c2, c1, g_now);
         cur_set = 1;
@@ -2094,15 +2176,26 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     /* Every handshake says it again: one without it means none (#174) */
     entry->web_port = web_port;
 
-    /* The reply goes where message 1 came from */
-    if (entry->tcp_fd >= 0) {
-        if (net_tcp_send_frame(entry->tcp_fd, resp,
+    /* The reply goes where message 1 came from: over UDP also to a client
+     * still on TCP (it is moving to UDP, #178) */
+    if (fd >= 0) {
+        if (entry->tcp_fd != fd ||
+            net_tcp_send_frame(entry->tcp_fd, resp,
                                V2_RESP_HDR + resp_len) < 0) {
             goto fail;
         }
     } else if (net_send_payload(net_fd, from, resp,
                                 V2_RESP_HDR + resp_len) < 0) {
         goto fail;
+    }
+    /* --transport both (#178): a client that comes back over the other
+     * transport. Over TCP the new connection carries it at once (as a new
+     * TCP connection always did); over UDP a TCP client without a working
+     * session moves once its reply is out (a failed handshake keeps the
+     * connection), one with a session on its first packet on the new one
+     * (server_handle_data), so a replayed message 1 cannot cut it */
+    if (fd < 0 && entry->tcp_fd >= 0 && cur_set) {
+        server_drop_tcp(entry);
     }
     /* The client has its address: no lease is kept for its ID, nor for
      * its addresses under another ID (#81) */
@@ -2149,10 +2242,21 @@ fail:
         if (next_saved) {
             session_wipe(&entry->next);
             entry->next = next_before;
+            entry->next_udp = next_udp_before;
         }
         if (cur_set) {
             /* The client never got the keys of that session */
             session_wipe(&entry->cur);
+        }
+        /* A UDP client whose move to TCP failed stays on UDP (#178): the
+         * new connection is closed, the client tries again */
+        if (adopt_rec.entry == entry && adopt_rec.from_udp &&
+            fd >= 0 && entry->tcp_fd == fd) {
+            net_tcp_close(fd);
+            entry->tcp_fd = -1;
+            memset(&entry->recv_state, 0, sizeof(entry->recv_state));
+            server_set_addr(entry, &adopt_rec.addr);
+            entry->session_since = adopt_rec.since;
         }
         /* A pre-auth TCP slot stays pre-auth (its timeout, its log); the
          * key stays the one its sessions were made with (reloads check
@@ -2200,8 +2304,13 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
         }
     }
     net_sockaddr_to_string(from, peer, sizeof(peer));
-    /* A TCP session belongs to its connection */
+    /* A TCP session belongs to its connection. Over UDP a client on TCP
+     * moves only with the session of a handshake it made over UDP (#178,
+     * next_udp): a delayed UDP packet of an older session, or a copy of a
+     * TCP frame of a rekey over TCP, must not cut its TCP connection. */
     if (s == NULL || (fd >= 0 && entry->tcp_fd != fd) ||
+        (fd < 0 && entry->tcp_fd >= 0 &&
+         (s != &entry->next || !entry->next_udp)) ||
         session_open(s, buffer, len, plain, sizeof(plain), &plain_len) != 0) {
         log_peer(LOG_WARNING, "Dropped packet from %s: unknown session or "
                  "failed to authenticate (len=%u)", peer, (unsigned)len);
@@ -2231,9 +2340,15 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
         }
     }
 
-    /* Authenticated: the client may have moved (NAT rebinding, roaming) */
-    if (fd < 0 && !net_sockaddr_equal(&entry->addr, from)) {
-        server_set_addr(entry, from);
+    /* Authenticated: the client may have moved (NAT rebinding, roaming),
+     * also from TCP to UDP with --transport both (#178) */
+    if (fd < 0) {
+        if (entry->tcp_fd >= 0) {
+            server_drop_tcp(entry);
+        }
+        if (!net_sockaddr_equal(&entry->addr, from)) {
+            server_set_addr(entry, from);
+        }
     }
     entry->last_seen = g_now;
     entry->last_data = g_now;
@@ -2365,25 +2480,22 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
     }
 }
 
-int server_socket_create(const char *bind_ip, int port,
-                         const char *bind_dev)
+static int server_tcp_socket(const char *bind_ip, int port)
 {
-    (void)bind_dev;  /* bind_dev applied via current_config.bind_dev in net_configure_socket */
-
-    if (current_config.transport == CAMEX_TRANSPORT_TCP) {
-        listen_fd = net_tcp_listen(bind_ip, port);
-        if (listen_fd < 0) {
-            return -1;
-        }
-        if (set_fd_nonblocking(listen_fd) != 0) {
-            close(listen_fd);
-            listen_fd = -1;
-            return -1;
-        }
-        return 0;
+    listen_fd = net_tcp_listen(bind_ip, port);
+    if (listen_fd < 0) {
+        return -1;
     }
+    if (set_fd_nonblocking(listen_fd) != 0) {
+        close(listen_fd);
+        listen_fd = -1;
+        return -1;
+    }
+    return 0;
+}
 
-    /* UDP path */
+static int server_udp_socket(const char *bind_ip, int port)
+{
     struct sockaddr_in addr;
     int reuse = 1;
     int fd;
@@ -2393,10 +2505,15 @@ int server_socket_create(const char *bind_ip, int port,
         return -1;
     }
 
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
+    /* A server on both takes the UDP port only when no one else has it
+     * (#178): with SO_REUSEADDR on both sockets Linux and Windows let a
+     * second one bind it, and the two would split the clients' packets */
+    if (current_config.transport != CAMEX_TRANSPORT_BOTH &&
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
                    (const char *)&reuse, sizeof(reuse)) < 0) {
         print_errno_message(LOG_WARNING, "setsockopt(SO_REUSEADDR)");
     }
+
 
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
@@ -2417,6 +2534,37 @@ int server_socket_create(const char *bind_ip, int port,
     }
 
     net_fd = fd;
+    return 0;
+}
+
+int server_socket_create(const char *bind_ip, int port,
+                         const char *bind_dev)
+{
+    (void)bind_dev;  /* bind_dev applied via current_config.bind_dev in net_configure_socket */
+
+    if (current_config.transport == CAMEX_TRANSPORT_TCP) {
+        return server_tcp_socket(bind_ip, port);
+    }
+    if (server_udp_socket(bind_ip, port) != 0) {
+        if (current_config.transport == CAMEX_TRANSPORT_BOTH) {
+            log_message(LOG_ERR, "UDP port %d is not available: with "
+                        "--transport both a server needs UDP and TCP on it. "
+                        "Another camex server there? Run one server in both, "
+                        "or give this one --transport tcp", port);
+        }
+        return -1;
+    }
+    if (current_config.transport == CAMEX_TRANSPORT_BOTH &&
+        server_tcp_socket(bind_ip, port) != 0) {
+        /* Never half a server: one that silently lost TCP would cut off
+         * every client set to TCP (#178) */
+        log_message(LOG_ERR, "TCP port %d is not available: with "
+                    "--transport both a server needs UDP and TCP on it. "
+                    "Another camex server there? Run one server in both, "
+                    "or give this one --transport udp", port);
+        net_close();
+        return -1;
+    }
     return 0;
 }
 
@@ -2580,8 +2728,11 @@ char *server_status(int json, size_t *len)
     char pool[24], ip[16], peer[64];
     size_t i, used = 0U, slots_used = 0U, leased = 0U;
     double up = server_started != 0 ? difftime(g_now, server_started) : 0.0;
+    /* "both" in JSON, "udp+tcp" in the table (#178) */
     const char *transport = current_config.transport == CAMEX_TRANSPORT_TCP
-                                ? "tcp" : "udp";
+                                ? "tcp"
+                            : current_config.transport == CAMEX_TRANSPORT_BOTH
+                                ? "both" : "udp";
     int id_w = 2, addr_w = 7, peer_w = 4;
     int any_name = 0;   /* the table gets a NAME column (#105) */
     long pid;
@@ -2638,7 +2789,8 @@ char *server_status(int json, size_t *len)
         status_dur(d, sizeof(d), up);
         sb_printf(&b, "camex %s server, %s port %d, tunnel %s, pool %s, up "
                   "%s, clients %u, slots %u of %u\n", CAMEX_VERSION,
-                  transport, current_config.port,
+                  current_config.transport == CAMEX_TRANSPORT_BOTH
+                      ? "udp+tcp" : transport, current_config.port,
                   current_config.local_cidr[0] != '\0'
                       ? current_config.local_cidr : "-",
                   pool, d, (unsigned)used, (unsigned)slots_used,
@@ -2649,9 +2801,9 @@ char *server_status(int json, size_t *len)
                       (unsigned long long)server_isolation_drops);
         }
         if (used > 0U) {
-            sb_printf(&b, "\n%-*s  %-6s  %-6s  %-*s  %-*s  %-9s  %-9s  "
-                      "%-9s  %5s  %10s  %8s  %10s  %8s%s\n", id_w, "ID",
-                      "MODE", "KEY", addr_w, "ADDRESS", peer_w, "PEER",
+            sb_printf(&b, "\n%-*s  %-6s  %-6s  %-*s  %-*s  %-3s  %-9s  "
+                      "%-9s  %-9s  %5s  %10s  %8s  %10s  %8s%s\n", id_w, "ID",
+                      "MODE", "KEY", addr_w, "ADDRESS", peer_w, "PEER", "VIA",
                       "CONNECTED", "LAST", "HANDSHAKE", "HS", "RX", "RX PKTS",
                       "TX", "TX PKTS", any_name ? "  NAME" : "");
         }
@@ -2762,11 +2914,13 @@ char *server_status(int json, size_t *len)
             status_dur(d3, sizeof(d3), hs);
             status_bytes(rx, sizeof(rx), c->rx_bytes);
             status_bytes(tx, sizeof(tx), c->tx_bytes);
-            sb_printf(&b, "%-*s  %-6s  %-6s  %-*s  %-*s  %-9s  %-9s  %-9s  "
-                      "%5u  %10s  %8llu  %10s  %8llu%s%s\n", id_w,
+            /* VIA: its transport (#178) */
+            sb_printf(&b, "%-*s  %-6s  %-6s  %-*s  %-*s  %-3s  %-9s  %-9s  "
+                      "%-9s  %5u  %10s  %8llu  %10s  %8llu%s%s\n", id_w,
                       status_id(idbuf, sizeof(idbuf), c->client_id),
                       c->auto_client ? "auto" : "manual", status_key(c),
-                      addr_w, addr, peer_w, peer, d1, d2, d3,
+                      addr_w, addr, peer_w, peer,
+                      c->tcp_fd >= 0 ? "tcp" : "udp", d1, d2, d3,
                       (unsigned)c->handshakes, rx,
                       (unsigned long long)c->rx_packets, tx,
                       (unsigned long long)c->tx_packets,
@@ -2843,7 +2997,7 @@ static int record_id_ok(const char *id)
     return 1;
 }
 
-char *server_clients_index(size_t *len)
+char *server_clients_index(int via, size_t *len)
 {
     status_buf_t b = { NULL, 0U, 0U, 0 };
     size_t i;
@@ -2866,7 +3020,10 @@ char *server_clients_index(size_t *len)
         /* Ages from the wall clock: a step back must not make them
          * negative (the record would not be read) */
         last = c->last_data != 0 ? age_s(c->last_data) : -1.0;
-        sb_printf(&b, "L\t%s\t%s\t%d\t%.0f\t", c->client_id, ip,
+        /* With via, L:udp or L:tcp, the transport of its link (#178) */
+        sb_printf(&b, "L%s\t%s\t%s\t%d\t%.0f\t",
+                  !via ? "" : c->tcp_fd >= 0 ? ":tcp" : ":udp",
+                  c->client_id, ip,
                   config_db_find_client(c->client_id) != NULL ? 1 : 0,
                   c->session_since != 0 ? age_s(c->session_since) : 0.0);
         if (last < 0.0) {
@@ -2967,6 +3124,12 @@ uint64_t server_state_hash(void)
         h = state_mix(h, &c->addr.sin_addr.s_addr,
                       sizeof(c->addr.sin_addr.s_addr));
         h = state_mix(h, &port, sizeof(port));
+        {
+            /* the start page shows the transport (#178) */
+            uint8_t tcp = c->tcp_fd >= 0 ? 1U : 0U;
+
+            h = state_mix(h, &tcp, sizeof(tcp));
+        }
         h = state_mix(h, name != NULL ? name : "", name != NULL
                                                        ? strlen(name) : 0U);
     }

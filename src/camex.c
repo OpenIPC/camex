@@ -604,6 +604,11 @@ static size_t camex_tcp_slot_cap(void)
     return cap;
 }
 
+/* With --transport both (#178): TCP connections at most, so the slots of
+ * UDP clients are not cut to what select() can watch; 0 = no such limit.
+ * Fixed at startup, as the slot table is */
+static size_t tcp_conn_cap = 0U;
+
 /* Slots the configuration asks for: max_clients=, else the pool's size;
  * over TCP within camex_tcp_slot_cap() */
 static size_t camex_wanted_slots(int quiet)
@@ -612,7 +617,36 @@ static size_t camex_wanted_slots(int quiet)
     size_t slots = g->max_clients != 0U ? (size_t)g->max_clients
                                         : server_default_max_clients();
 
-    if (current_config.transport == CAMEX_TRANSPORT_TCP) {
+    /* Set at startup only: the table keeps its size until a restart, a
+     * reload asks quietly */
+    if (current_config.transport == CAMEX_TRANSPORT_BOTH && !quiet) {
+        size_t cap = camex_tcp_slot_cap();
+
+#ifdef _WIN32
+        /* The UDP socket takes a place in the read set too */
+        cap = cap > 1U ? cap - 1U : 0U;
+#endif
+        /* Harmless with fewer slots: there can be no more connections.
+         * Registered clients get all but a reserve, which stays for
+         * pre-auth connections: a client whose old connection is still
+         * open can always come back on a new one */
+        tcp_conn_cap = cap;
+        {
+            size_t reserve = cap / 4U < CAMEX_TCP_PREAUTH_MAX
+                                 ? cap / 4U : CAMEX_TCP_PREAUTH_MAX;
+
+            if (reserve == 0U) {
+                reserve = 1U;
+            }
+            server_tcp_reg_cap = cap > reserve ? cap - reserve : 1U;
+        }
+        if (slots > cap) {
+            log_message(LOG_INFO, "TCP: at most %u of the %u clients over "
+                        "TCP (FD_SETSIZE and the open files limit); UDP "
+                        "clients are not limited by it",
+                        (unsigned)cap, (unsigned)slots);
+        }
+    } else if (current_config.transport == CAMEX_TRANSPORT_TCP) {
         size_t cap = camex_tcp_slot_cap();
 
         if (slots > cap) {
@@ -927,11 +961,18 @@ int camex_init(camex_config_t *config)
     log_message(LOG_INFO, "  Protocol: v%u (%s)", (unsigned)CAMEX_PROTO_VER,
                 "Noise_NKpsk0_25519_ChaChaPoly_BLAKE2b");
     log_message(LOG_INFO, "  Transport: %s",
-                current_config.transport == CAMEX_TRANSPORT_TCP
-                    ? "TCP" : "UDP");
+                current_config.transport == CAMEX_TRANSPORT_TCP  ? "TCP"
+                : current_config.transport == CAMEX_TRANSPORT_BOTH ? "UDP and TCP"
+                                                                   : "UDP");
     g_now = time(NULL);
     return 0;
 }
+
+/* Datagrams a server reads in one pass: the rest wait for the next one, so
+ * a steady stream of UDP cannot hold up TCP clients, the tunnel and the
+ * control socket (#178). Large: a pass also walks the slot table, and a
+ * small batch let a flood crowd out a live client (test-e2e-fair-budget) */
+#define SERVER_UDP_BATCH 4096
 
 static void drain_udp_packets(void)
 {
@@ -940,7 +981,9 @@ static void drain_udp_packets(void)
     ssize_t len;
 
     if (server_mode) {
-        while (1) {
+        int batch;
+
+        for (batch = 0; batch < SERVER_UDP_BATCH; ++batch) {
             socklen_t fromlen = sizeof(from);
 
             len = recvfrom(net_fd, RECV_BUF_CAST buffer, sizeof(buffer), 0,
@@ -1079,12 +1122,16 @@ static void drain_tcp_server_accept(void)
         {
             size_t pending = 0U;
             size_t pending_ip = 0U;
+            size_t tcp_conns = 0U;
             size_t preauth_max;
             server_client_t *oldest = NULL;
 
             for (i = 0; i < server_max_clients; ++i) {
                 server_client_t *c = &server_clients[i];
 
+                if (c->active && c->tcp_fd >= 0) {
+                    ++tcp_conns;
+                }
                 if (!c->active || c->tcp_fd < 0 || c->registered) {
                     continue;
                 }
@@ -1106,6 +1153,31 @@ static void drain_tcp_server_accept(void)
                          "unregistered connections from this address",
                          peer_str);
                 continue;
+            }
+            /* --transport both: the slots outnumber what select() can
+             * watch (#178). At that limit the oldest pre-auth connection
+             * past the grace period makes room, as below: idle ones must
+             * not keep a returning client out */
+            if (tcp_conn_cap != 0U && tcp_conns >= tcp_conn_cap) {
+                if (oldest == NULL) {
+                    net_tcp_close(client_fd);
+                    net_sockaddr_to_string(&peer, peer_str, sizeof(peer_str));
+                    log_peer(LOG_WARNING,
+                             "Refused TCP connection from %s: %u TCP "
+                             "connections, the most this server can watch",
+                             peer_str, (unsigned)tcp_conns);
+                    continue;
+                }
+                net_sockaddr_to_string(&oldest->addr, peer_str,
+                                       sizeof(peer_str));
+                log_peer(LOG_WARNING,
+                         "Closed unregistered TCP connection from %s: "
+                         "the most TCP connections this server can watch",
+                         peer_str);
+                net_tcp_close(oldest->tcp_fd);
+                memset(oldest, 0, sizeof(*oldest));
+                oldest = NULL;
+                --pending;
             }
             /* With few slots, at most half of them may be pre-auth, so
              * unregistered connections can never fill the table (#75) */
@@ -1318,17 +1390,20 @@ void camex_run(void)
             FD_ZERO(&readset);
             FD_ZERO(&writeset);
 
-            if (current_config.transport == CAMEX_TRANSPORT_UDP) {
-                if (net_fd >= 0) {
-                    FD_SET(net_fd, &readset);
-                }
+            /* UDP, TCP or both on one port (#178) */
+            maxfd = -1;
+            if (net_fd >= 0) {
+                FD_SET(net_fd, &readset);
                 maxfd = net_fd;
-            } else {
+            }
+            if (CAMEX_TRANSPORT_HAS_TCP(current_config.transport)) {
                 /* TCP: monitor listen_fd + all active client fds */
                 if (listen_fd >= 0 && g_now >= accept_paused_until) {
                     FD_SET(listen_fd, &readset);
                 }
-                maxfd = listen_fd;
+                if (listen_fd > maxfd) {
+                    maxfd = listen_fd;
+                }
                 for (si = 0; si < server_max_clients; ++si) {
                     if (server_clients[si].active &&
                         server_clients[si].tcp_fd >= 0) {
@@ -1360,11 +1435,10 @@ void camex_run(void)
             if (ready > 0) {
                 /* Retry pending TCP sends when sockets become writable */
                 net_tcp_flush_writable(&writeset);
-                if (current_config.transport == CAMEX_TRANSPORT_UDP) {
-                    if (net_fd >= 0 && FD_ISSET(net_fd, &readset)) {
-                        drain_udp_packets();
-                    }
-                } else {
+                if (net_fd >= 0 && FD_ISSET(net_fd, &readset)) {
+                    drain_udp_packets();
+                }
+                if (CAMEX_TRANSPORT_HAS_TCP(current_config.transport)) {
                     /* TCP: accept new connections */
                     if (listen_fd >= 0 && FD_ISSET(listen_fd, &readset)) {
                         drain_tcp_server_accept();
