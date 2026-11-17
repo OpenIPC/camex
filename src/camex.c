@@ -1108,10 +1108,6 @@ static void drain_tcp_server_accept(void)
             continue;
         }
 #endif
-        /* The same buffers as a client's socket (net_tcp_connect()): a
-         * small one fills at once on a long link, and every frame that does
-         * not fit waits or is dropped (#180) */
-        net_tcp_tune_socket(client_fd);
         if (set_fd_nonblocking(client_fd) != 0) {
             net_tcp_close(client_fd);
             continue;

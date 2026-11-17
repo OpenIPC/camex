@@ -72,20 +72,28 @@ except Exception:
 print(n)
 PY
 cat > "$BUILD_CTX/source.py" <<'PY'
-# Send <kb> KiB to <host>:9000 within <timeout> s; print the time it took
+# Send <kb> KiB to <host>:9000 within <limit> s in all; print the time it
+# took, or "timeout" / "error" (the deadline covers the whole transfer)
 import socket, sys, time
 host, kb, limit = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
 t = time.time(); total = kb * 1024; buf = b"x" * 65536; n = 0
+def left():
+    r = limit - (time.time() - t)
+    if r <= 0:
+        raise TimeoutError
+    return r
 try:
-    s = socket.create_connection((host, 9000), timeout=limit)
-    s.settimeout(max(1.0, limit - (time.time() - t)))
+    s = socket.create_connection((host, 9000), timeout=left())
     while n < total:
-        s.sendall(buf[:min(65536, total - n)]); n += min(65536, total - n)
+        s.settimeout(left())
+        k = s.send(buf[:min(65536, total - n)]); n += k
     s.shutdown(socket.SHUT_WR)
-    s.settimeout(max(1.0, limit - (time.time() - t)))
+    s.settimeout(left())
     s.recv(1)
+except (TimeoutError, socket.timeout):
+    print("timeout"); sys.exit(1)
 except Exception:
-    pass
+    print("error"); sys.exit(1)
 print("%.2f" % (time.time() - t))
 PY
 cat > "$BUILD_CTX/Dockerfile" <<'DOCKERFILE'
@@ -133,9 +141,10 @@ transfer() {  # transfer <from container> <to container> <to address> <label>
     t=$(docker exec "$1" python3 /usr/local/bin/source.py "$3" "$SIZE_KB" "$limit")
     sleep 1
     got=$(docker exec "$2" cat /tmp/sink.out 2>/dev/null)
-    rate=$(awk -v g="${got:-0}" -v t="${t:-0}" 'BEGIN { if (t > 0) printf "%d", g / 1024 / t; else print 0 }')
-    [ "${got:-0}" = $((SIZE_KB * 1024)) ]
-    check $? "$4: $((${got:-0} / 1024)) of $SIZE_KB KiB in ${t:-?} s (~$rate KB/s)"
+    rate=$(awk -v g="${got:-0}" -v t="${t:-0}" 'BEGIN { if (t + 0 > 0) printf "%d", g / 1024 / t; else print 0 }')
+    # All of it, and at least MIN_KBPS: a complete but slow transfer fails
+    [ "${got:-0}" = $((SIZE_KB * 1024)) ] && [ "${rate:-0}" -ge "$MIN_KBPS" ]
+    check $? "$4: $((${got:-0} / 1024)) of $SIZE_KB KiB in ${t:-?} s (~$rate KB/s, at least $MIN_KBPS)"
 }
 for tr in udp tcp; do
     addr=$(tun_addr "$P-$tr")
