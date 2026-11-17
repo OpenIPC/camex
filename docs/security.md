@@ -57,8 +57,7 @@ protects before exposing it to an untrusted network.
   clients that know the pre-shared key: keep `server_key` secret.
 - **Metadata.** Packet sizes, timing, endpoints and the cleartext header (packet
   type, session index, counter) are visible.
-- There is **no unencrypted mode**; for an open tunnel without encryption see
-  OpenIPC VTesse.
+- There is **no unencrypted mode**.
 - **Inside the tunnel** traffic is not filtered: any client can reach the server
   and other clients on the tunnel network. A firewall on the server's tunnel
   interface (`tun0` or similar with `/dev/net/tun`, `camex` with the kernel
