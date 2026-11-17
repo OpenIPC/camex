@@ -129,6 +129,7 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
      * its position from the previous run (glibc, musl, bionic and the BSDs
      * all reinitialise on optind 0) */
     optind = 0;
+    config->transport = CAMEX_TRANSPORT_UNSET;
     while ((opt = getopt_long(argc, argv, "M:b:an:f:l:g:p:s:c:t:k:evhP:d:T:R:K:W:GS:Y:QJC:IF:D:U:E:",
                              long_options, &option_index)) != -1) {
         switch (opt) {
@@ -260,9 +261,11 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
                 config->transport = CAMEX_TRANSPORT_TCP;
             } else if (strcmp(optarg, "udp") == 0) {
                 config->transport = CAMEX_TRANSPORT_UDP;
+            } else if (strcmp(optarg, "both") == 0) {
+                config->transport = CAMEX_TRANSPORT_BOTH;
             } else {
-                log_message(LOG_ERR, "Invalid transport: %s (use tcp or udp)",
-                            optarg);
+                log_message(LOG_ERR, "Invalid transport: %s (use udp, tcp "
+                            "or, for a server, both)", optarg);
                 return -1;
             }
             break;
@@ -435,9 +438,22 @@ int validate_config(camex_config_t *config)
         return -1;
     }
 
+    /* A server listens on UDP and TCP unless told one; a client uses UDP
+     * unless told TCP, and never both (#178) */
+    if (config->transport == CAMEX_TRANSPORT_UNSET) {
+        config->transport = config->mode == CAMEX_MODE_SERVER
+                                ? CAMEX_TRANSPORT_BOTH : CAMEX_TRANSPORT_UDP;
+    }
+    if (config->transport == CAMEX_TRANSPORT_BOTH &&
+        config->mode != CAMEX_MODE_SERVER) {
+        log_message(LOG_ERR, "--transport both is for a server; a client "
+                    "uses udp or tcp");
+        return -1;
+    }
     if (config->transport != CAMEX_TRANSPORT_UDP &&
-        config->transport != CAMEX_TRANSPORT_TCP) {
-        log_message(LOG_ERR, "Transport must be 0 (udp) or 1 (tcp)");
+        config->transport != CAMEX_TRANSPORT_TCP &&
+        config->transport != CAMEX_TRANSPORT_BOTH) {
+        log_message(LOG_ERR, "Transport must be udp, tcp or both");
         return -1;
     }
 
@@ -644,7 +660,10 @@ void print_usage(const char *progname)
     printf("  -e, --encrypt        Accepted for compatibility: protocol v2 is"
            " always encrypted\n");
     printf("  -P, --pid-file <path> Write PID to file on startup\n");
-    printf("  -R, --transport <t>  Transport protocol: udp (default) or tcp\n");
+    printf("  -R, --transport <t>  Transport: udp or tcp; a server also both,"
+           " its default\n"
+           "                       (UDP and TCP on the same port), a client"
+           " udp by default\n");
     printf("  -K, --keepalive <s>  Keepalive interval in seconds (default:"
            " 10, at most 20); 0: one every 20 s,\n"
            "                       a lost link noticed after 20 s +"
@@ -662,12 +681,12 @@ void print_usage(const char *progname)
     printf("  # Server key pair (once): keep server_key secret, give\n"
            "  # public_key to the clients\n");
     printf("  (umask 077; %s --genkey > /etc/camex/server.key)\n\n", progname);
-    printf("  # Server (UDP)\n");
+    printf("  # Server (UDP and TCP on port 5800)\n");
     printf("  %s --mode server --port 5800"
            " --config /etc/camex/camex.conf"
            " --server-key-file /etc/camex/server.key --psk secret\n\n",
            progname);
-    printf("  # Server (TCP)\n");
+    printf("  # Server (TCP only)\n");
     printf("  %s --mode server --port 5800 --transport tcp"
            " --config /etc/camex/camex.conf"
            " --server-key-file /etc/camex/server.key --psk secret\n\n",

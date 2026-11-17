@@ -4,8 +4,9 @@
 #
 # test-e2e-status.sh — camex --status lists a server's clients (#82)
 #
-# 1. A UDP server with two auto clients: the table and the JSON list both
-#    with their IDs and addresses; traffic shows in the counters.
+# 1. A server (UDP and TCP, the default since #178) with two auto clients:
+#    the table and the JSON list both with their IDs and addresses; traffic
+#    shows in the counters.
 # 2. The socket is 0600: another user cannot ask.
 # 3. A TCP server in the same container: --status lists both servers,
 #    --json has both; --control asks one.
@@ -82,7 +83,7 @@ json_get() {  # json_get <python expression on d>: from --status --json
     status --json | python3 -c "import json,sys; d=json.load(sys.stdin); print($1)" 2>/dev/null
 }
 
-echo "== 1. a UDP server with two clients"
+echo "== 1. a server (UDP and TCP) with two clients"
 docker run -d --name "$P-srv" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
     -e CAMEX_CLIENT_TIMEOUT=5 "$IMAGE" --mode server --port 5800 \
     --local-cidr 10.200.0.1/24 $SERVER_KEY_ARGS --psk "$PSK" >/dev/null
@@ -93,7 +94,7 @@ sleep 4
 status > "$BUILD_CTX/s1.txt"
 check $? "camex --status answers"
 cat "$BUILD_CTX/s1.txt" | sed 's/^/      /'
-grep -q "udp port 5800, tunnel 10.200.0.1/24, pool 10.200.0.0/24" "$BUILD_CTX/s1.txt" &&
+grep -q "udp+tcp port 5800, tunnel 10.200.0.1/24, pool 10.200.0.0/24" "$BUILD_CTX/s1.txt" &&
     grep -q "clients 2, slots 2 of" "$BUILD_CTX/s1.txt"
 check $? "the header names the server and the client count"
 grep -q " HS " "$BUILD_CTX/s1.txt" && grep -q "RX PKTS" "$BUILD_CTX/s1.txt" &&
@@ -104,7 +105,7 @@ a_ip=$(json_get "[c['address'] for c in d['servers'][0]['clients'] if c['id']=='
 [ -n "$a_ip" ] && [ "$a_ip" = "$(docker exec "$P-CAM-A" ip -4 -o addr show | awk '$4 ~ /^10\.200\./ {sub("/.*","",$4); print $4}')" ]
 check $? "the JSON address of CAM-A is the one it has ($a_ip)"
 [ "$(json_get "len(d['servers'][0]['clients'])")" = 2 ] &&
-    [ "$(json_get "d['servers'][0]['transport']+' '+str(d['servers'][0]['port'])")" = "udp 5800" ]
+    [ "$(json_get "d['servers'][0]['transport']+' '+str(d['servers'][0]['port'])")" = "both 5800" ]
 check $? "the JSON has the server and two clients"
 before=$(json_get "[c['tx_packets'] for c in d['servers'][0]['clients'] if c['id']=='CAM-A'][0]")
 docker exec "$P-srv" ping -c 5 -W 2 "$a_ip" >/dev/null 2>&1
@@ -114,7 +115,7 @@ rx=$(json_get "[c['rx_packets'] for c in d['servers'][0]['clients'] if c['id']==
 check $? "the counters follow the traffic (tx $before -> $after, rx $rx)"
 
 echo "== 2. only the server's user can ask"
-docker exec "$P-srv" sh -c 'ls -l /run/camex/camex-udp-5800.sock' | grep -q '^srw-------'
+docker exec "$P-srv" sh -c 'ls -l /run/camex/camex-both-5800.sock' | grep -q '^srw-------'
 check $? "the socket is 0600"
 docker exec -u 65534 "$P-srv" camex --status >/dev/null 2>"$BUILD_CTX/denied.txt"
 [ $? != 0 ] && grep -q "Permission denied" "$BUILD_CTX/denied.txt"
@@ -130,10 +131,10 @@ docker run -d --name "$P-CAM-T" --network "$NET_NAME" --cap-add NET_ADMIN --cap-
 sleep 4
 status > "$BUILD_CTX/s3.txt"
 grep -q "^== /run/camex/camex-tcp-5801.sock" "$BUILD_CTX/s3.txt" &&
-    grep -q "^== /run/camex/camex-udp-5800.sock" "$BUILD_CTX/s3.txt" &&
+    grep -q "^== /run/camex/camex-both-5800.sock" "$BUILD_CTX/s3.txt" &&
     grep -Eq "^CAM-T +auto" "$BUILD_CTX/s3.txt"
 check $? "--status lists both servers"
-[ "$(json_get "' '.join(s['transport'] for s in d['servers'])")" = "tcp udp" ]
+[ "$(json_get "' '.join(s['transport'] for s in d['servers'])")" = "both tcp" ]
 check $? "--json has both servers"
 status --control /run/camex/camex-tcp-5801.sock > "$BUILD_CTX/s3t.txt"
 grep -Eq "^CAM-T " "$BUILD_CTX/s3t.txt" && ! grep -q "CAM-A" "$BUILD_CTX/s3t.txt"
@@ -143,11 +144,11 @@ echo "== 4. a client that is gone keeps its address"
 docker rm -f "$P-CAM-B" >/dev/null
 gone=1
 for _ in $(seq 1 20); do
-    [ "$(json_get "[l['id'] for l in d['servers'][1]['leases']]")" = "['CAM-B']" ] && { gone=0; break; }
+    [ "$(json_get "[l['id'] for l in d['servers'][0]['leases']]")" = "['CAM-B']" ] && { gone=0; break; }
     sleep 1
 done
 check $gone "CAM-B is listed as a kept address"
-status --control /run/camex/camex-udp-5800.sock | grep -Eq "^CAM-B +10\.200\.0\.[0-9]+ +gone"
+status --control /run/camex/camex-both-5800.sock | grep -Eq "^CAM-B +10\.200\.0\.[0-9]+ +gone"
 check $? "the table shows it under the kept addresses"
 
 echo "== 5. control_socket=none"
@@ -156,7 +157,7 @@ docker cp "$BUILD_CTX/none.conf" "$P-srv:/etc/none.conf" >/dev/null
 docker exec -d "$P-srv" camex --mode server --port 5802 --local-cidr 10.202.0.1/24 \
     $SERVER_KEY_ARGS --psk "$PSK" --config /etc/none.conf
 sleep 1
-! docker exec "$P-srv" test -e /run/camex/camex-udp-5802.sock
+! docker exec "$P-srv" test -e /run/camex/camex-both-5802.sock
 check $? "no socket for that server"
 
 echo "== 6. a reload moves the socket"
@@ -165,28 +166,28 @@ docker cp "$BUILD_CTX/mv.conf" "$P-srv:/etc/mv.conf" >/dev/null
 docker exec -d "$P-srv" camex --mode server --port 5803 --local-cidr 10.203.0.1/24 \
     $SERVER_KEY_ARGS --psk "$PSK" --config /etc/mv.conf --pid-file /run/mv.pid
 sleep 1
-docker exec "$P-srv" test -S /run/camex/camex-udp-5803.sock
+docker exec "$P-srv" test -S /run/camex/camex-both-5803.sock
 check $? "the server listens on its default socket"
 printf '[server]\ncontrol_socket=/run/camex/moved.sock\n' > "$BUILD_CTX/mv.conf"
 docker cp "$BUILD_CTX/mv.conf" "$P-srv:/etc/mv.conf" >/dev/null
 docker exec "$P-srv" sh -c 'kill -HUP $(cat /run/mv.pid)'
 sleep 2
 docker exec "$P-srv" test -S /run/camex/moved.sock &&
-    ! docker exec "$P-srv" test -e /run/camex/camex-udp-5803.sock &&
-    status --control /run/camex/moved.sock | grep -q "udp port 5803"
+    ! docker exec "$P-srv" test -e /run/camex/camex-both-5803.sock &&
+    status --control /run/camex/moved.sock | grep -q "udp+tcp port 5803"
 check $? "after the reload it answers on the new path only"
 # A path that cannot be had: the working socket stays, a later reload works
 printf '[server]\ncontrol_socket=/proc/camex/no.sock\n' > "$BUILD_CTX/mv.conf"
 docker cp "$BUILD_CTX/mv.conf" "$P-srv:/etc/mv.conf" >/dev/null
 docker exec "$P-srv" sh -c 'kill -HUP $(cat /run/mv.pid)'
 sleep 2
-status --control /run/camex/moved.sock | grep -q "udp port 5803"
+status --control /run/camex/moved.sock | grep -q "udp+tcp port 5803"
 check $? "a reload to a path that cannot be had keeps the working socket"
 printf '[server]\ncontrol_socket=/run/camex/again.sock\n' > "$BUILD_CTX/mv.conf"
 docker cp "$BUILD_CTX/mv.conf" "$P-srv:/etc/mv.conf" >/dev/null
 docker exec "$P-srv" sh -c 'kill -HUP $(cat /run/mv.pid)'
 sleep 2
-status --control /run/camex/again.sock | grep -q "udp port 5803" &&
+status --control /run/camex/again.sock | grep -q "udp+tcp port 5803" &&
     ! docker exec "$P-srv" test -e /run/camex/moved.sock
 check $? "the next reload moves it"
 

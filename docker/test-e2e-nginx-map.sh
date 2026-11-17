@@ -227,12 +227,12 @@ code2=$(docker exec "$P-srv" curl -s -o /dev/null -w '%{http_code}' -m 10 -u cam
 check $? "the start page asks for the password ($code, a wrong one $code2); the cameras do not"
 ip_a=$(ip_of "$P-CAM-A")
 ip_b=$(ip_of "$P-CAM-B")
-echo "$home" | grep -qF '<th class="addr">Address</th><th class="addr">Peer</th><th class="conn">'
+echo "$home" | grep -qF '<th class="addr">Address</th><th class="addr">Peer</th><th class="via">Transport</th><th class="conn">'
 check $? "the Peer column right after Address"
 echo "$home" | grep -F "//cam-a.$DOMAIN/" | grep -qF "<td class=\"addr\"><a class=\"peer\" href=\"http://$ip_a/\" target=\"_blank\" rel=\"noopener\">$ip_a</a></td>" &&
     echo "$home" | grep -F "//cam-b.$DOMAIN/" | grep -qF "<td class=\"addr\"><a class=\"peer\" href=\"http://$ip_b:8080/\" target=\"_blank\" rel=\"noopener\">$ip_b</a></td>"
 check $? "the peers: CAM-A $ip_a (peer_port=80, no port), CAM-B $ip_b:8080 (the default)"
-echo "$home" | grep -F '<span class="nm">Gate</span>' | grep -qF '<td class="addr">&mdash;</td><td class="conn">offline'
+echo "$home" | grep -F '<span class="nm">Gate</span>' | grep -qF '<td class="addr">&mdash;</td><td class="via">&mdash;</td><td class="conn">offline'
 check $? "CAM-Z, offline, has no peer"
 [ "$(docker exec "$P-srv" curl -s -m 10 "http://$ip_a/")" = "I am CAM-A" ]
 check $? "CAM-A's peer link reaches it"
@@ -280,7 +280,7 @@ docker kill -s HUP "$P-srv" >/dev/null
 sleep 1
 sync >/dev/null
 home=$(get "$DOMAIN")
-echo "$home" | grep -F "//cam-b.$DOMAIN/" | grep -qF "<td class=\"addr\">$ip_b</td><td class=\"conn\">" &&
+echo "$home" | grep -F "//cam-b.$DOMAIN/" | grep -qF "<td class=\"addr\">$ip_b</td><td class=\"via\">UDP</td><td class=\"conn\">" &&
     echo "$home" | grep -F "//cam-a.$DOMAIN/" | grep -qF "href=\"http://$ip_a/\""
 check $? "peer_port=none in [defaults]: CAM-B's IP is plain text, CAM-A keeps its link"
 docker exec "$P-srv" sh -c 'printf "[defaults]\npeer_port=0\n" > /tmp/bad-port.conf'
@@ -331,10 +331,10 @@ echo "== 5. a socket left behind by a server that is gone"
 docker exec -d "$P-srv" camex --mode server --port 5899 --local-cidr 10.201.0.1/24 \
     $SERVER_KEY_ARGS --psk "$PSK"
 sleep 1
-docker exec "$P-srv" sh -c 'pkill -9 -f "^camex --mode server --port 5899"; sleep 1; test -S /run/camex/camex-udp-5899.sock'
+docker exec "$P-srv" sh -c 'pkill -9 -f "^camex --mode server --port 5899"; sleep 1; test -S /run/camex/camex-both-5899.sock'
 check $? "the killed server's socket is still there"
 out=$(sync)
-echo "$out" | grep -q "camex-udp-5899.sock: no server listens there, skipped" &&
+echo "$out" | grep -q "camex-both-5899.sock: no server listens there, skipped" &&
     [ "$(get cam-a.$DOMAIN)" = "I am CAM-A" ]
 check $? "the sync skips it and the map still follows the live server"
 
@@ -431,7 +431,7 @@ check $? "--check fails on it and says why"
 echo "== 10. --follow: a sync at each change, none while nothing changes (#130)"
 out=$(docker exec "$P-srv" camex --status --wait - 2>&1)
 echo "      token: $out"
-echo "$out" | grep -Eq '^[0-9a-f]{16}:/run/camex/camex-udp-5800.sock$'
+echo "$out" | grep -Eq '^[0-9a-f]{16}:/run/camex/camex-both-5800.sock$'
 check $? "camex --status --wait - prints the state's token at once (the stale socket left out)"
 TOKEN=$out
 t0=$(date +%s)
@@ -440,15 +440,15 @@ t1=$(date +%s)
 [ "$out" = "$TOKEN" ] && [ $((t1 - t0)) -ge 2 ] && [ $((t1 - t0)) -le 4 ]
 check $? "with no change it waits for --wait-timeout and gives the same token ($((t1 - t0)) s)"
 # --control with a token of more servers: only that server counts
-out=$(docker exec "$P-srv" sh -c "t0=\$(date +%s); camex --status --control /run/camex/camex-udp-5800.sock \
+out=$(docker exec "$P-srv" sh -c "t0=\$(date +%s); camex --status --control /run/camex/camex-both-5800.sock \
     --wait '$TOKEN,0000000000000000:/run/camex/other.sock' --wait-timeout 2 >/dev/null; echo \$((\$(date +%s) - t0))")
 [ "$out" -ge 2 ] 2>/dev/null
 check $? "--control waits for its own server, whatever else the token names (${out} s)"
 # Only a socket left behind (section 5): "-" answers at once, "none"
 # waits instead of spinning
-out=$(docker exec "$P-srv" camex --status --control /run/camex/camex-udp-5899.sock --wait - 2>&1)
+out=$(docker exec "$P-srv" camex --status --control /run/camex/camex-both-5899.sock --wait - 2>&1)
 t0=$(date +%s)
-out2=$(docker exec "$P-srv" camex --status --control /run/camex/camex-udp-5899.sock --wait none --wait-timeout 2 2>&1)
+out2=$(docker exec "$P-srv" camex --status --control /run/camex/camex-both-5899.sock --wait none --wait-timeout 2 2>&1)
 t1=$(date +%s)
 [ "$out" = none ] && [ "$out2" = none ] && [ $((t1 - t0)) -ge 2 ]
 check $? "a socket left behind: no state (none), and a wait on it takes its time ($((t1 - t0)) s)"
@@ -462,7 +462,7 @@ t1=$(date +%s)
 [ $((t1 - t0)) -le 6 ] && [ "$out" = "$TOKEN" ]
 check $? "a server that starts during the wait ends it in $((t1 - t0)) s, not 30"
 out=$(docker exec "$P-srv" camex --status --wait "$TOKEN" --wait-timeout 30 2>&1)
-echo "$out" | grep -q "/run/camex/camex-udp-5802.sock"
+echo "$out" | grep -q "/run/camex/camex-both-5802.sock"
 check $? "the next wait has its state in the token"
 docker exec "$P-srv" sh -c 'pkill -f "camex --mode server --port 5802"; true'
 sleep 1

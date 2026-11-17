@@ -46,7 +46,9 @@
 
 void control_default_path(char *buf, size_t size, int transport, int port)
 {
-    const char *proto = transport == CAMEX_TRANSPORT_TCP ? "tcp" : "udp";
+    const char *proto = transport == CAMEX_TRANSPORT_TCP    ? "tcp"
+                      : transport == CAMEX_TRANSPORT_BOTH ? "both"
+                                                          : "udp";
     const char *ip = current_config.bind_ip;
     const char *dev = current_config.bind_dev;
 

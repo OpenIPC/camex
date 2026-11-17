@@ -12,6 +12,15 @@ sudo camex --mode server --config /etc/camex/camex.conf \
     --server-key-file /etc/camex/server.key
 ```
 
+The server listens on UDP and TCP on its port (5800 by default) at once
+(#178): a client comes over UDP, or over TCP when it is set to
+(`--transport tcp`, `t=tcp` in the link, the switch in the Android app), for
+networks that block UDP. Both share one client table and one pool, so a camera
+keeps its address whichever transport it comes over; one that switches drops
+its old connection on the server. `--transport udp` or `--transport tcp`
+makes a server listen on that one only. If either port cannot be had (another
+server holds it), a server in `both` does not start and says which one.
+
 Auto-mode clients get their addresses from the config file. A client whose ID
 has no `[client ID]` block gets `[defaults]`, or, when no address is configured,
 one from the auto pool, `10.200.0.2`–`10.200.0.254` by default (addresses in use
@@ -88,33 +97,34 @@ global one.
 ## Connected clients (`--status`)
 
 The server listens on a local control socket, by default
-`/run/camex/camex-<transport>-<port>.sock` (`udp` or `tcp`; `/var/run/camex` on
-macOS), mode `0600`: only the server's user, normally root, can use it. Several
-servers on one host (say UDP and TCP) each have their own; a server bound with
-`--bind-ip` or `--bind-dev` has the address or interface in the name as well
-(`camex-udp-192.0.2.1-5800.sock`). `control_socket=<path>` in `[server]` or
+`/run/camex/camex-<transport>-<port>.sock` (`both`, `udp` or `tcp`;
+`/var/run/camex` on macOS), mode `0600`: only the server's user, normally root,
+can use it. Several servers on one host (say on other ports) each have their
+own; a server bound with `--bind-ip` or `--bind-dev` has the address or
+interface in the name as well (`camex-both-192.0.2.1-5800.sock`). `control_socket=<path>` in `[server]` or
 `--control <path>` changes it, `none` turns it off; a reload applies a change,
 and keeps the old socket if the new path cannot be had. Not on Windows.
 
 ```sh
 sudo camex --status          # the clients of every server on this host
 sudo camex --status --json   # the same as JSON, for scripts and monitoring
-sudo camex --status --control /run/camex/camex-udp-5800.sock   # one server
+sudo camex --status --control /run/camex/camex-both-5800.sock   # one server
 ```
 
 ```
-camex 3.3.0 server, udp port 5800, tunnel 10.200.0.1/24, pool 10.200.0.0/24, up 2h05m, clients 2, slots 2 of 256
+camex 4.0.0 server, udp+tcp port 5800, tunnel 10.200.0.1/24, pool 10.200.0.0/24, up 2h05m, clients 2, slots 2 of 256
 
-ID     MODE    KEY     ADDRESS          PEER                CONNECTED  LAST       HANDSHAKE     HS          RX   RX PKTS          TX   TX PKTS  NAME
-CAM-A  auto    global  10.200.0.2       203.0.113.7:50997   2h04m      3s         4m10s         13     1.2 MiB      9120     8.4 MiB     12480  Warehouse, entrance
-CAM-B  auto    own     10.200.0.3       198.51.100.4:41022  12m03s     1s         2m02s          2   310.5 KiB      2210     2.0 MiB      3105
+ID     MODE    KEY     ADDRESS          PEER                VIA  CONNECTED  LAST       HANDSHAKE     HS          RX   RX PKTS          TX   TX PKTS  NAME
+CAM-A  auto    global  10.200.0.2       203.0.113.7:50997   udp  2h04m      3s         4m10s         13     1.2 MiB      9120     8.4 MiB     12480  Warehouse, entrance
+CAM-B  auto    own     10.200.0.3       198.51.100.4:41022  tcp  12m03s     1s         2m02s          2   310.5 KiB      2210     2.0 MiB      3105
 
 Addresses kept for clients that are gone (#81): 1
 CAM-C  10.200.0.4       gone 6m40s
 ```
 
 `ADDRESS` shows `old -> new` while a client has not confirmed a new address
-yet. `LAST` is the time since its last data packet (keepalives included; `-`
+yet. `VIA` is the transport the client is on, `udp` or `tcp`; the header says
+`udp+tcp` for a server on both. `LAST` is the time since its last data packet (keepalives included; `-`
 before the first), `HANDSHAKE` since its last key renewal, `HS` the number of
 handshakes; `RX` is the tunnel data received from it, `TX` the data sent to it,
 in bytes and packets. `NAME`, shown when a client has one, is `name=` of its
@@ -123,7 +133,7 @@ The kept addresses are those of clients that are gone; each gets its address
 back when it returns.
 
 `--json` prints `{"servers":[...]}`, one object per server: `version`, `pid`,
-`transport`, `port`, `tunnel`, `pool`, `started` (Unix time), `uptime`,
+`transport` (`both`, `udp` or `tcp`), `port`, `tunnel`, `pool`, `started` (Unix time), `uptime`,
 `client_isolation`, `isolation_drops` (#83),
 `slots` (`used`, TCP connections before their handshake included, and `max`),
 `clients` and `leases`. Each client has `id` (`null`
@@ -154,7 +164,9 @@ Two `[server]` keys size the server for its network:
   startup only; a reload that asks for another number says a restart is
   needed. Over TCP the server uses `select()` and keeps at most `FD_SETSIZE`
   − 32 slots (992 on Linux) and no more than the open files limit allows (it
-  raises its soft limit towards the hard one); the log says so.
+  raises its soft limit towards the hard one); the log says so. A server on
+  both keeps all its slots and limits only the TCP connections that way: UDP
+  clients do not take a descriptor.
 
 ```ini
 [server]

@@ -41,7 +41,8 @@ Usage: install.sh [--domain <domain>] [options]
 
   --domain <domain>       also install nginx in front of the clients
   --port <port>           the server's port (5800)
-  --transport udp|tcp     the server's transport (udp)
+  --transport udp|tcp|both  the server's transport (both: UDP and TCP on
+                          its port)
   --psk <key>             the clients' pre-shared key (a random one)
   --pool <network/prefix> the clients' pool, the server at its first
                           address (10.200.0.0/24)
@@ -207,7 +208,8 @@ read_args() {
     fi
     ARGS=$(printf '%s' "$ARGS" | sed "s/[\"']\$//")
     # camex reads /etc/camex/camex.conf without --config
-    USED_CONF=$CONF; USED_KEY=; ARG_PSK=; ARG_PORT=; PROTO=udp
+    # Without --transport camex listens on UDP and TCP (#178)
+    USED_CONF=$CONF; USED_KEY=; ARG_PSK=; ARG_PORT=; PROTO=both
     set -f
     # shellcheck disable=SC2086
     set -- $ARGS
@@ -363,9 +365,9 @@ case "$CLIENT_TIMEOUT" in
        # 060 is 60, as camex reads it
        CLIENT_TIMEOUT=$(printf '%s' "$CLIENT_TIMEOUT" | sed 's/^0*//') ;;
 esac
-case "${TRANSPORT:-udp}" in
-    udp|tcp) ;;
-    *) die "--transport: udp or tcp, not $TRANSPORT" ;;
+case "${TRANSPORT:-both}" in
+    udp|tcp|both) ;;
+    *) die "--transport: udp, tcp or both, not $TRANSPORT" ;;
 esac
 # As camex reads them: hex:<64 hex digits>, base64:<44 characters>, both
 # 32 bytes and not all zero, or a passphrase; one line, below 128
@@ -629,7 +631,10 @@ if [ ! -f "$DEFAULTS" ]; then
     case "$args" in
         ''|*SERVER_PUBLIC_KEY*)
             args="--mode server --config $CONF --server-key-file $KEY"
-            [ "$TRANSPORT" = tcp ] && args="$args --transport tcp" ;;
+            # both is camex's own default (#178)
+            case "$TRANSPORT" in
+                udp|tcp) args="$args --transport $TRANSPORT" ;;
+            esac ;;
     esac
     {
         echo "# The arguments of camex.service; systemctl restart camex after a change"
@@ -645,8 +650,8 @@ fi
 # Also when an older unit's arguments were moved there
 if [ -n "$TRANSPORT" ]; then
     read_args
-    have=udp
-    [ "$PROTO" = tcp ] && have=tcp
+    have=both
+    case "$PROTO" in udp|tcp) have=$PROTO ;; esac
     [ "$have" = "$TRANSPORT" ] ||
         say "kept the server's transport $have, not --transport $TRANSPORT:" \
             "edit CAMEX_ARGS in $DEFAULTS, then systemctl restart camex"
@@ -837,8 +842,13 @@ PSK_Q=$(printf '%s' "${PSK:-<psk= of $USED_CONF>}" | sed "s/'/'\\\\''/g")
 echo
 echo "camex server is running: systemctl status camex, camex --status"
 TOPT=
-[ "$PROTO" = tcp ] && TOPT=" --transport tcp" || PROTO=udp
-echo "Open $(echo $PROTO | tr a-z A-Z) port ${PORT_NOW:-5800} in the firewall${DOMAIN:+, and TCP ${WEB_PORT:-80} for nginx}."
+# A server on both gives its clients UDP; one set to TCP is told so (#178)
+case "$PROTO" in
+    tcp) TOPT=" --transport tcp"; OPEN=TCP ;;
+    udp) OPEN=UDP ;;
+    *)   PROTO=udp; OPEN="UDP and TCP" ;;
+esac
+echo "Open $OPEN port ${PORT_NOW:-5800} in the firewall${DOMAIN:+, and TCP ${WEB_PORT:-80} for nginx}."
 # Where the clients reach this server: --public-host, the domain of the
 # camex.conf the service reads (its DNS points here; a rerun keeps it), this
 # host's public address

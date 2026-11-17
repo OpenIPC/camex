@@ -47,6 +47,7 @@ typedef struct {
     char peer[16];         /* its external IP (#119), "" = not known */
     long peer_port;        /* the port of its link, 0 = no link */
     long web_port;         /* the map: nginx's port on it (#174), 0 = --upstream-port */
+    char transport[4];     /* "udp", "tcp"; "" = not known (an older server) */
 } map_entry_t;
 
 typedef struct {
@@ -352,7 +353,10 @@ static int parse_record(const char *p, size_t ll, const char *domain,
         char *f[13];
         int n = split_tabs(line, f, 13);
         unsigned long long v[8];
-        int live = strcmp(f[0], "L") == 0;
+        /* "L:udp" / "L:tcp" from a server that says its transport
+         * (#178), "L" from one before it */
+        int live = strcmp(f[0], "L") == 0 || strcmp(f[0], "L:udp") == 0 ||
+                   strcmp(f[0], "L:tcp") == 0;
         /* The peer and its port (#119) make 12 or 13 fields; a server
          * before them gives 10 or 11 */
         int peered = live && n >= 12;
@@ -371,6 +375,9 @@ static int parse_record(const char *p, size_t ll, const char *domain,
         }
         e->live = live ? 1U : 0U;
         e->conf = 1U;
+        if (live && f[0][1] == ':') {
+            snprintf(e->transport, sizeof(e->transport), "%s", f[0] + 2);
+        }
         if (live) {
             /* configured, connected, last packet, last handshake,
              * handshakes, rx, tx */
@@ -667,7 +674,8 @@ static void buf_list(map_buf_t *b, const char *cls, const map_entry_t *e,
     }
     buf_printf(b, "<div class=\"rack\">\n<table>\n<thead><tr><th></th>"
                "<th>Name</th><th class=\"id\">ID</th><th class=\"addr\">"
-               "Address</th><th class=\"addr\">Peer</th><th class=\"conn\">"
+               "Address</th><th class=\"addr\">Peer</th><th class=\"via\">"
+               "Transport</th><th class=\"conn\">"
                "Connected</th><th>Last "
                "packet</th><th class=\"hs\">Handshake</th><th>RX / TX KiB"
                "</th></tr></thead>\n<tbody>\n");
@@ -698,7 +706,11 @@ static void buf_list(map_buf_t *b, const char *cls, const map_entry_t *e,
                            "target=\"_blank\" rel=\"noopener\">%s</a>",
                            d->peer, d->peer_port, d->peer);
             }
-            buf_printf(b, "</td><td class=\"conn\">");
+            /* UDP or TCP (#178) */
+            buf_printf(b, "</td><td class=\"via\">%s</td><td class=\"conn\">",
+                       strcmp(d->transport, "tcp") == 0   ? "TCP"
+                       : strcmp(d->transport, "udp") == 0 ? "UDP"
+                                                          : "&mdash;");
             buf_dur(b, d->since);
             buf_printf(b, "</td><td>");
             if (d->last < 0L) {
@@ -721,7 +733,8 @@ static void buf_list(map_buf_t *b, const char *cls, const map_entry_t *e,
             buf_html(b, shown_name(d));
             buf_printf(b, "</span></td><td class=\"id\">%s</td><td "
                        "class=\"addr\">%s</td><td class=\"addr\">&mdash;"
-                       "</td><td class=\"conn\">offline"
+                       "</td><td class=\"via\">&mdash;</td>"
+                       "<td class=\"conn\">offline"
                        "</td><td>&mdash;</td><td class=\"hs\">&mdash;</td>"
                        "<td>&mdash;</td></tr>\n", d->label,
                        d->addr_text[0] != '\0' ? d->addr_text : "&mdash;");
@@ -913,7 +926,7 @@ char *nginx_index_format(const char *lines, const char *domain,
         ".stale-mark{display:none;color:var(--red)}\n"
         "body.stale .stale-mark{display:inline}\n"
         "body.stale .panel{opacity:.7}\n"
-        "@media (max-width:820px){.addr,.hs{display:none}}\n"
+        "@media (max-width:820px){.addr,.via,.hs{display:none}}\n"
         "@media (max-width:560px){.conn,.id{display:none}.panel{padding:26px "
         "14px 18px}td,th{padding:10px 6px}td.tr,th{white-space:normal}"
         ".tabs{gap:6px}.tabs label{padding:7px 9px;letter-spacing:.08em}}\n"

@@ -17,7 +17,9 @@ permission needed, or why it did not start).
 
 - **Server host / port** — the camex server.
 - **Client name** — the client ID, i.e. the `[client ID]` block on the server.
-- **Transport** — UDP or TCP, as on the server.
+- **Transport** — UDP (the default) or TCP, for networks that block UDP; a
+  server on both (the default since camex 4.0.0) takes either, an older one
+  only the one it was started with.
 - **Server public key** and **Pre-shared key** — `--server-pubkey --psk`; the
   key must match the client's `psk=` (or the global key).
 - **Advanced** — MTU, keepalive and server timeout.

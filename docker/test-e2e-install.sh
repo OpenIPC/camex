@@ -151,6 +151,10 @@ x 'grep -qE "^psk=hex:[0-9a-f]{64}$" /etc/camex/camex.conf && grep -qx "port=580
 check $? "camex.conf has a new psk, port 5800, client_timeout=60, no domain"
 x 'grep -qx "CAMEX_ARGS=\"--mode server --config /etc/camex/camex.conf --server-key-file /etc/camex/server.key\"" /etc/default/camex'
 check $? "/etc/default/camex holds the server's arguments"
+# Without --transport the server listens on UDP and TCP (#178)
+echo "$out" | grep -q "^Open UDP and TCP port 5800 in the firewall" &&
+    x 'camex --status | grep -q "udp+tcp port 5800"'
+check $? "the server is on UDP and TCP, and the installer says to open both"
 x 'dpkg -s curl ca-certificates >/dev/null 2>&1 && ! dpkg -s nginx >/dev/null 2>&1'
 check $? "curl installed, nginx not"
 PUBKEY=$(x "sed -n 's/^public_key=//p' /etc/camex/server.key")

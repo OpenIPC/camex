@@ -101,7 +101,7 @@ sudo ./camex \
 | `--server-timeout <s>`     | `-W`  | Client: seconds without an answer from the server before it reconnects, 5–3600 (default: 20)                                                                                                                                                                                |
 | `--status`                 |       | Print the connected clients of every server on this host and exit (as the server's user, normally root)                                                                                                                                                                     |
 | `--json`                   |       | With `--status`: the same as JSON, for scripts                                                                                                                                                                                                                              |
-| `--control <path>`         |       | Server: control socket for `--status` (default `/run/camex/camex-<transport>-<port>.sock`, `none` = off); with `--status`: ask only that server                                                                                                                             |
+| `--control <path>`         |       | Server: control socket for `--status` (default `/run/camex/camex-<transport>-<port>.sock`, `<transport>` is `both`, `udp` or `tcp`; `none` = off); with `--status`: ask only that server                                                                                    |
 | `--format <fmt>`           |       | With `--status`: `table` (default), `json` (same as `--json`), `nginx-map` or `nginx-index`, see [nginx in front of the clients](nginx.md#reference)                                                                                                                        |
 | `--domain <name>`          |       | With `--format nginx-map` or `nginx-index`: the domain after the client ID (default: `domain=` in `[server]` of the server)                                                                                                                                                 |
 | `--upstream-port <port>`   |       | With `--format nginx-map`: the clients' web port (default: 80)                                                                                                                                                                                                              |
@@ -111,7 +111,7 @@ sudo ./camex \
 | `--wait-timeout <s>`       |       | With `--wait`: the longest wait, 1–3600 seconds (default: 60); then the same token                                                                                                                                                                                          |
 | `--client-isolation`       |       | Server: drop packets from one client to another (or `client_isolation=yes` in `[server]`), see [Security Model](security.md)                                                                                                                                                |
 | `--bind-dev <iface>`       | `-d`  | Bind socket to a specific network interface (`SO_BINDTODEVICE`)                                                                                                                                                                                                             |
-| `--transport <proto>`      | `-R`  | Transport protocol: `udp` (default) or `tcp`                                                                                                                                                                                                                                |
+| `--transport <proto>`      | `-R`  | Transport: `udp` or `tcp`; a server also `both`, its default (UDP and TCP on the same port, one pool), a client `udp` by default                                                                                                                                            |
 | `--version`                | `-v`  | Print version and exit                                                                                                                                                                                                                                                      |
 | `--help`                   | `-h`  | Print usage and exit                                                                                                                                                                                                                                                        |
 
@@ -152,7 +152,10 @@ sudo ./camex --mode client ... --tun-dev /dev/camex
   keepalive still goes every 20 s, and a lost server is noticed after 20 s +
   `--server-timeout`.
 - `examples/camex.conf` shows the server-side parameter database format.
-- Protocol v2 works over both UDP and TCP transport; every session starts with
+- Protocol v2 works over both UDP and TCP transport; a server listens on both
+  on one port unless given `--transport udp` or `tcp` (#178), a client uses UDP
+  unless given `--transport tcp`, and never moves to TCP by itself. Every
+  session starts with
   a handshake (`--server-key-file` on the server, `--server-pubkey` and `--psk`
   on the client). camex 3.x does not talk to camex 2.x.
 - The server supports per-client PSKs: add `psk=<key>` inside a `[client ID]` block

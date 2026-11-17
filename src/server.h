@@ -114,7 +114,8 @@ void server_set_addr(server_client_t *entry, const struct sockaddr_in *addr);
 /* Find clients */
 server_client_t *server_find_by_ip(uint32_t ip_be);
 server_client_t *server_find_by_client_id(const char *client_id);
-server_client_t *server_find_by_addr(const struct sockaddr_in *addr);
+/* The live client at addr over TCP (tcp != 0) or UDP */
+server_client_t *server_find_by_addr(const struct sockaddr_in *addr, int tcp);
 server_client_t *server_alloc_client(void);
 
 /* Close the entry's TCP connection (if any), wipe its keys, free it */
@@ -164,11 +165,11 @@ char *server_status(int json, size_t *len);
 char *server_clients_list(int names, int web, size_t *len);
 
 /* The start page's records (#110), tab-separated, one a line:
- *   L <ID> <address> <configured 0|1> <connected s> <last packet s|->
- *     <last handshake s> <handshakes> <rx bytes> <tx bytes>
- *     <peer IP|-> <peer link port|-> [<name>]
+ *   L:<udp|tcp> <ID> <address> <configured 0|1> <connected s>
+ *     <last packet s|-> <last handshake s> <handshakes> <rx bytes>
+ *     <tx bytes> <peer IP|-> <peer link port|-> [<name>]
  * (the peer fields since #119: 12 or 13 fields, a server before it gives
- * 10 or 11)
+ * 10 or 11; the transport since #178, a server before it writes L)
  * for each live client with an ID and an address, and
  *   O <ID> <configured address|-> [<name>]
  * for each [client ID] block with no live client. malloc'd, NULL without
