@@ -44,7 +44,16 @@ public class ConnectLinkTest {
         assertEquals("10.0.0.1:5800", c.values.get(CamexTunnel.SERVER));
         assertEquals("UDP", c.values.get(CamexTunnel.TRANSPORT));
         assertNull(c.values.get(CamexTunnel.PSK));
-        assertTrue(ConnectLink.parse("camex://connect/#p=1").errors.containsKey("p"));
+        // a port without a host: no server, but the port on its own
+        ConnectLink p = ConnectLink.parse("camex://connect/#p=1");
+        assertTrue(p.errors.isEmpty());
+        assertNull(p.values.get(CamexTunnel.SERVER));
+        assertEquals(Integer.valueOf(1), p.port);
+        assertNull(p.host);
+        // a host without a port: server with 5800, the host on its own, no port
+        ConnectLink h = ConnectLink.parse("camex://connect?h=cam.example.org");
+        assertEquals("cam.example.org", h.host);
+        assertNull(h.port);
     }
 
     @Test

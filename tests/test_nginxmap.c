@@ -451,6 +451,22 @@ int main(void)
           "sorted, lower case, with domain and port");
     free(m);
 
+    /* A client's own web port (CLIENTS WEB, #174) over --upstream-port */
+    m = fmt("cam-a 10.200.0.2\nbox-1 10.200.0.5 8080\ncam-b 10.200.0.3 80\n",
+            "openipc.click", 81, NULL, &n, warn, sizeof(warn));
+    CHECK(m != NULL && n == 3U && strcmp(m + strlen(head),
+                              "    \"box-1.openipc.click\" 10.200.0.5:8080;\n"
+                              "    \"cam-a.openipc.click\" 10.200.0.2:81;\n"
+                              "    \"cam-b.openipc.click\" 10.200.0.3:80;\n"
+                              "}\n") == 0,
+          "a client's web port wins over --upstream-port");
+    free(m);
+    m = fmt("ok 10.0.0.1\nzero 10.0.0.2 0\nbig 10.0.0.3 65536\nword 10.0.0.4 http\n"
+            "four 10.0.0.5 80 x\n", "openipc.click", 80, NULL, &n, warn, sizeof(warn));
+    CHECK(m != NULL && n == 1U && strstr(m, "\"ok.openipc.click\" 10.0.0.1:80;") != NULL,
+          "a bad web port leaves its record out");
+    free(m);
+
     /* The same input in another order: an identical map */
     {
         char *a = fmt("x1 10.0.0.1\nx2 10.0.0.2\n", "openipc.click", 80, NULL, &n,

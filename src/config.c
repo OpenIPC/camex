@@ -71,6 +71,9 @@ void config_profile_merge(camex_profile_t *dst, const camex_profile_t *src)
     if (src->peer_port != 0) {
         dst->peer_port = src->peer_port;
     }
+    if (src->web_port != 0) {
+        dst->web_port = src->web_port;
+    }
     for (i = 0; i < src->route_count && dst->route_count < CAMEX_MAX_ROUTES;
          ++i) {
         snprintf(dst->route_cidrs[dst->route_count],
@@ -325,6 +328,24 @@ static int config_db_index_ips(void)
     return 0;
 }
 
+/* web_port= (#174): 1..65535, digits only */
+static int parse_web_port(const char *value, int *out)
+{
+    char *end = NULL;
+    long v;
+
+    errno = 0;
+    v = strtol(value, &end, 10);
+    if (strspn(value, "0123456789") != strlen(value) || strlen(value) > 5U ||
+        errno != 0 || end == value || *end != '\0' || v < 1L ||
+        v > 65535L) {
+        log_message(LOG_ERR, "Invalid web_port: %s (1 to 65535)", value);
+        return -1;
+    }
+    *out = (int)v;
+    return 0;
+}
+
 /* peer_port= (#119): 1..65535, digits only, or "none" (-1) */
 static int parse_peer_port(const char *value, int *out)
 {
@@ -372,6 +393,9 @@ int config_db_apply_kv(camex_profile_t *profile,
     if (strcmp(key, "psk") == 0) {
         return copy_option(profile->psk, sizeof(profile->psk),
                            value, "per-client PSK");
+    }
+    if (strcmp(key, "web_port") == 0) {
+        return parse_web_port(value, &profile->web_port);
     }
     if (strcmp(key, "peer_port") == 0) {
         return parse_peer_port(value, &profile->peer_port);
@@ -597,6 +621,11 @@ static int config_db_parse_file(const char *path, char *line,
                 log_message(LOG_ERR, "name= belongs in a [client ID] "
                             "block");
                 rc = -1;
+            } else if (strcmp(content, "web_port") == 0) {
+                /* nginx's port on a client (#174): per client */
+                log_message(LOG_ERR, "web_port= belongs in [defaults] or "
+                            "a [client ID] block");
+                rc = -1;
             } else if (strcmp(content, "peer_port") == 0) {
                 /* The start page's peer link (#119): per client */
                 log_message(LOG_ERR, "peer_port= belongs in [defaults] or "
@@ -694,6 +723,19 @@ int config_db_peer_port(const char *client_id)
         port = client->profile.peer_port;
     }
     return port != 0 ? port : CAMEX_PEER_PORT_DEFAULT;
+}
+
+int config_db_web_port(const char *client_id, int announced)
+{
+    const camex_server_profile_t *client = config_db_find_client(client_id);
+
+    if (client != NULL && client->profile.web_port > 0) {
+        return client->profile.web_port;
+    }
+    if (announced > 0 && announced <= 65535) {
+        return announced;
+    }
+    return server_db.defaults.web_port > 0 ? server_db.defaults.web_port : 0;
 }
 
 /* Key store lookups (#5): by key (32 bytes) and by owner (client ID) */

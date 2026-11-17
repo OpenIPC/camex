@@ -9,9 +9,10 @@
 # the debug APK, writes the settings with run-as, starts the VPN and checks:
 #   - the VPN interface gets the address, MTU and route from CONFIG (#19)
 #   - only the tunnel subnet and the CONFIG routes go through the VPN
-#     (full tunnel off: a 0.0.0.0/0 from CONFIG is skipped; a route with
-#     host bits set is installed as its network), and the app itself is
-#     excluded from it (#18)
+#     (a 0.0.0.0/0 from CONFIG is skipped, there is no full tunnel since
+#     #172; a route with host bits set is installed as its network); the
+#     app is on the tunnel library: inside its own VPN, camex's server
+#     connection protected from it
 #   - the server reaches the device through the tunnel (ping)
 #   - a changed profile moves the VPN to the new address, MTU and route
 #     without restarting the app (#49)
@@ -133,8 +134,8 @@ fi
 $ADB shell pm list packages "$PKG" | grep -q "package:$PKG" || { echo "not installed: $PKG"; exit 1; }
 $ADB shell am force-stop "$PKG"
 
-# Settings: server through adb reverse, TCP, server key, full tunnel OFF so
-# the rest of the device keeps its normal network.
+# Settings: server through adb reverse, TCP, server key; the rest of the
+# device keeps its normal network (no full tunnel, #172).
 cat > "$CTX/camex.xml" <<'EOF'
 <?xml version='1.0' encoding='utf-8' standalone='yes' ?>
 <map>
@@ -144,7 +145,6 @@ cat > "$CTX/camex.xml" <<'EOF'
     <string name="transport">tcp</string>
     <string name="server_pubkey">__SERVER_PUBKEY__</string>
     <string name="psk">devtest-key</string>
-    <boolean name="full_tunnel" value="false" />
     <int name="mtu" value="1500" />
     <int name="keepalive" value="5" />
     <int name="server_timeout" value="15" />
@@ -168,6 +168,21 @@ tap_text() {   # tap the UI element whose text matches $1 (regex)
         $ADB shell uiautomator dump /data/local/tmp/ui.xml >/dev/null 2>&1
         xy=$($ADB shell cat /data/local/tmp/ui.xml | tr '>' '\n' |
             grep -iE "text=\"[^\"]*($1)[^\"]*\"" | head -1 |
+            sed -nE 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/p' |
+            awk '{ print int(($1 + $3) / 2), int(($2 + $4) / 2) }')
+        [ -n "$xy" ] && { $ADB shell input tap $xy; return 0; }
+        sleep 1
+    done
+    return 1
+}
+
+tap_id() {     # tap the UI element with resource-id $1 (the consent dialog's OK is
+               # android:id/button1: its text "allows ..." would match "Allow")
+    local xy _
+    for _ in 1 2 3 4 5; do
+        $ADB shell uiautomator dump /data/local/tmp/ui.xml >/dev/null 2>&1
+        xy=$($ADB shell cat /data/local/tmp/ui.xml | tr '>' '\n' |
+            grep -F "resource-id=\"$1\"" | head -1 |
             sed -nE 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/p' |
             awk '{ print int(($1 + $3) / 2), int(($2 + $4) / 2) }')
         [ -n "$xy" ] && { $ADB shell input tap $xy; return 0; }
@@ -210,7 +225,7 @@ $ADB shell am start -W -n "$PKG/.MainActivity" >/dev/null
 sleep 2
 tap_exact "Start" || { echo "start button not found"; exit 2; }
 sleep 3
-tap_text "OK|ОК|Allow" >/dev/null 2>&1 || true   # VPN consent, if shown
+tap_id "android:id/button1" >/dev/null 2>&1 || true   # VPN consent, if shown
 
 up=1
 for _ in $(seq 1 30); do
@@ -226,7 +241,7 @@ MTU=$(iface_mtu "$IFACE")
 RULES=$($ADB shell ip route show table all 2>/dev/null | grep " dev $IFACE" || true)
 echo "$RULES" | grep -q "192.168.77.0/24"; check $? "CONFIG route 192.168.77.0/24 goes through the VPN"
 echo "$RULES" | grep -q "192.168.78.0/24"; check $? "CONFIG route with host bits (192.168.78.5/24) is installed as 192.168.78.0/24"
-! echo "$RULES" | grep -qE "^(default|0\.0\.0\.0/0) "; check $? "no default route through the VPN (full tunnel off)"
+! echo "$RULES" | grep -qE "^(default|0\.0\.0\.0/0) "; check $? "no default route through the VPN"
 
 docker exec "$SRV" ping -c 5 -W 2 10.200.0.7 >/dev/null 2>&1
 check $? "server reaches the device through the tunnel"

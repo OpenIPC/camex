@@ -44,6 +44,13 @@ public final class CamexTunnel {
     public static final String PSK = Values.PSK;
     public static final String MTU = Values.MTU;
     public static final String KEEPALIVE = Values.KEEPALIVE;
+    /** Seconds without an answer before camex reconnects (optional, default 20). */
+    public static final String SERVER_TIMEOUT = Values.SERVER_TIMEOUT;
+    /**
+     * The port of the app's web page, for nginx on the server (optional, #174): nginx
+     * reaches the app's name there instead of port 80. Needs a server 3.19.0 or later.
+     */
+    public static final String WEB_PORT = Values.WEB_PORT;
 
     public enum State {
         /** not started, or stopped by {@link #stop} */

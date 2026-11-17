@@ -347,7 +347,8 @@ static void control_finish(control_conn_t *c, size_t len);
 static void control_bad_command(control_conn_t *c, size_t *len)
 {
     static const char err[] = "ERROR unknown command (STATUS, "
-                              "STATUS JSON, CLIENTS, CLIENTS NAMES, "
+                              "STATUS JSON, CLIENTS, CLIENTS WEB, "
+                              "CLIENTS NAMES, "
                               "CLIENTS INDEX, DOMAIN, "
                               "WAIT <hash|-> <seconds>)\n";
 
@@ -472,9 +473,11 @@ static void control_answer(control_conn_t *c)
     } else if (strcmp(c->cmd, "STATUS JSON") == 0) {
         c->out = server_status(1, &len);
     } else if (strcmp(c->cmd, "CLIENTS") == 0) {
-        c->out = server_clients_list(0, &len);
+        c->out = server_clients_list(0, 0, &len);
+    } else if (strcmp(c->cmd, "CLIENTS WEB") == 0) {
+        c->out = server_clients_list(0, 1, &len);
     } else if (strcmp(c->cmd, "CLIENTS NAMES") == 0) {
-        c->out = server_clients_list(1, &len);
+        c->out = server_clients_list(1, 0, &len);
     } else if (strcmp(c->cmd, "CLIENTS INDEX") == 0) {
         c->out = server_clients_index(&len);
     } else if (strcmp(c->cmd, "DOMAIN") == 0) {
@@ -878,8 +881,11 @@ static int control_put(const char *text, const char *what)
 }
 
 /* cmd to every server (path: only that one): their answers one after
- * the other in *all (malloc'd). 0, or 1 with a message on stderr */
-static int control_gather(const char *path, const char *cmd, char **all)
+ * the other in *all (malloc'd). A server that does not know cmd (an older
+ * one) is asked fallback instead, when there is one. 0, or 1 with a
+ * message on stderr */
+static int control_gather(const char *path, const char *cmd,
+                          const char *fallback, char **all)
 {
     control_path_t one;
     control_path_t *paths = &one;
@@ -910,7 +916,30 @@ static int control_gather(const char *path, const char *cmd, char **all)
         size_t len = 0U;
         char *grown;
 
-        int rc = control_ask(paths[i], cmd, &buf, &len);
+        int rc;
+
+        if (fallback != NULL) {
+            control_quiet = 1;
+            rc = control_ask(paths[i], cmd, &buf, &len);
+            control_quiet = 0;
+            if (rc == -3) {
+                /* a server before 3.19.0: the plain list (#174) */
+                free(buf);
+                buf = NULL;
+                len = 0U;
+                rc = control_ask(paths[i], fallback, &buf, &len);
+            } else if (rc == -2) {
+                /* no server there: quiet mode hid the connect error, so
+                 * ask again to say it (a timeout or a cut answer was said
+                 * already, and is not waited for twice) */
+                free(buf);
+                buf = NULL;
+                len = 0U;
+                rc = control_ask(paths[i], cmd, &buf, &len);
+            }
+        } else {
+            rc = control_ask(paths[i], cmd, &buf, &len);
+        }
 
         /* A socket left behind by a server that is gone (found in the
          * directory, not named with --control) has no clients: skip it */
@@ -1047,7 +1076,7 @@ int control_nginx_map(const char *path, const char *domain, int port,
     char dom[254];
 
     if (control_domain(path, domain, dom, sizeof(dom)) != 0 ||
-        control_gather(path, "CLIENTS\n", &all) != 0) {
+        control_gather(path, "CLIENTS WEB\n", "CLIENTS\n", &all) != 0) {
         return 1;
     }
     map = nginx_map_format(all, dom, port, dflt, stderr, &count);
@@ -1073,7 +1102,7 @@ int control_nginx_index(const char *path, const char *domain, int http_port)
     char dom[254];
 
     if (control_domain(path, domain, dom, sizeof(dom)) != 0 ||
-        control_gather(path, "CLIENTS INDEX\n", &all) != 0) {
+        control_gather(path, "CLIENTS INDEX\n", NULL, &all) != 0) {
         return 1;
     }
     page = nginx_index_format(all, dom, http_port, stderr, &count);

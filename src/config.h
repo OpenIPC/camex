@@ -32,6 +32,7 @@ typedef struct {
     uint8_t route_count;
     int mtu;
     int peer_port;   /* peer_port= (#119): 0 = not set, -1 = none */
+    int web_port;    /* web_port= (#174): nginx's port on the client, 0 = not set */
     char psk[128];   /* hex: + 64 digits fits; passphrases too */
 } camex_profile_t;
 
@@ -162,6 +163,12 @@ int config_db_lookup_profile(const char *client_id, camex_profile_t *profile);
  * peer_port=, else that of [defaults], else CAMEX_PEER_PORT_DEFAULT;
  * -1 for peer_port=none */
 int config_db_peer_port(const char *client_id);
+
+/* The port nginx reaches a client's web UI on (#174): web_port= of its
+ * [client ID] block, else the port the client announced (announced, 0 =
+ * none), else web_port= of [defaults]; 0 when none of them is set (the
+ * map then takes --upstream-port) */
+int config_db_web_port(const char *client_id, int announced);
 
 /* Build the keystore from global PSK and per-client PSKs */
 /* 0; -1 when no key is usable (no client could connect); KEY_ERR_NOMEM

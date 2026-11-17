@@ -298,8 +298,8 @@ public final class CamexVpnService extends VpnService {
                 // the old TUN goes now; until this one is up there is no address to report
                 tunAddress = "";
             }
-            if (prefixLen <= 0 || prefixLen > 32) {
-                // a /0 tunnel subnet would be a default route
+            if (!Values.routeAllowed(prefixLen)) {
+                // a /0 tunnel subnet would be a default route, a wide one nearly (#175)
                 Log.w(TAG, "refusing the tunnel subnet /" + prefixLen);
                 post(State.CONNECTING, "", "the server gave the tunnel subnet /" + prefixLen);
                 return -1;
@@ -319,7 +319,12 @@ public final class CamexVpnService extends VpnService {
                 if (slash <= 0) continue;
                 try {
                     int prefix = Integer.parseInt(cidr.substring(slash + 1));
-                    if (prefix <= 0) continue;   // never a default route
+                    if (!Values.routeAllowed(prefix)) {
+                        // never a default route, nor one wider than a /8 (#175)
+                        Log.w(TAG, "skipping route " + cidr + ": wider than /"
+                                + Values.ROUTE_PREFIX_MIN);
+                        continue;
+                    }
                     b.addRoute(Values.networkOf(cidr.substring(0, slash), prefix), prefix);
                 } catch (IllegalArgumentException e) {
                     Log.w(TAG, "skipping route " + cidr + ": " + e.getMessage());

@@ -40,7 +40,8 @@ public class ValuesTest {
 
     @Test
     public void fields() {
-        assertEquals(Arrays.asList("server", "name", "transport", "pubkey", "psk", "mtu", "keepalive"),
+        assertEquals(Arrays.asList("server", "name", "transport", "pubkey", "psk", "mtu", "keepalive",
+                        "server_timeout", "web_port"),
                 Arrays.asList(Values.FIELDS.stream().map(f -> f.key).toArray()));
         Field t = Values.FIELDS.get(2);
         assertEquals(Field.Kind.CHOICE, t.kind);
@@ -87,6 +88,9 @@ public class ValuesTest {
         assertEquals("psk", bad(Values.PSK, "line\nbreak"));
         assertEquals("mtu", bad(Values.MTU, "100"));
         assertEquals("keepalive", bad(Values.KEEPALIVE, "x"));
+        assertEquals("server_timeout", bad(Values.SERVER_TIMEOUT, "4"));
+        assertEquals("web_port", bad(Values.WEB_PORT, "0"));
+        assertEquals("web_port", bad(Values.WEB_PORT, "65536"));
         assertEquals("server", Values.check(new HashMap<>())[0]);
         assertEquals("server", Values.check(null)[0]);
     }
@@ -115,6 +119,25 @@ public class ValuesTest {
         String[] a = Values.argv(v);
         assertEquals("25", a[Arrays.asList(a).indexOf("--keepalive") + 1]);
         assertEquals("1400", a[Arrays.asList(a).indexOf("--mtu") + 1]);
+        assertFalse(Arrays.asList(a).contains("--web-port"));
+        v.put(Values.WEB_PORT, "8080");
+        v.put(Values.SERVER_TIMEOUT, "30");
+        a = Values.argv(v);
+        assertEquals("8080", a[Arrays.asList(a).indexOf("--web-port") + 1]);
+        assertEquals("30", a[Arrays.asList(a).indexOf("--server-timeout") + 1]);
+        assertNull(Values.check(v));
+    }
+
+    @Test
+    public void routes() {
+        // #175: no default route, and nothing wider than a /8 (0.0.0.0/1 + 128.0.0.0/1)
+        assertFalse(Values.routeAllowed(0));
+        assertFalse(Values.routeAllowed(1));
+        assertFalse(Values.routeAllowed(7));
+        assertTrue(Values.routeAllowed(8));
+        assertTrue(Values.routeAllowed(24));
+        assertTrue(Values.routeAllowed(32));
+        assertFalse(Values.routeAllowed(33));
     }
 
     @Test

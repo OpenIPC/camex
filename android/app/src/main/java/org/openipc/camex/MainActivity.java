@@ -1,43 +1,32 @@
 /*
  * Copyright (c) OpenIPC  https://openipc.org  MIT License
  *
- * MainActivity.java — camex VPN launcher for Android
+ * MainActivity.java — camex VPN launcher for Android, on the tunnel library (#172)
  */
 package org.openipc.camex;
 
 import android.Manifest;
-import android.annotation.SuppressLint;
 import android.app.Activity;
-import android.content.BroadcastReceiver;
-import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
-import android.net.VpnService;
 import android.os.Build;
 import android.os.Bundle;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.openipc.camex.tunnel.CamexTunnel;
+
+import java.util.HashMap;
+import java.util.Map;
+
 public class MainActivity extends Activity {
     private TextView statusView;
     private Button startButton, stopButton, settingsButton;
-    private boolean running = false;
 
-    // camex exited (bad key, server unreachable at start...): not connected
-    private final BroadcastReceiver exitReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            updateStatus(false);
-            int code = intent.getIntExtra("code", 0);
-            if (code != 0) {
-                Toast.makeText(MainActivity.this,
-                    getString(R.string.err_exited, code), Toast.LENGTH_LONG).show();
-            }
-        }
-    };
+    // The tunnel's state from the library (it reconnects by itself until Stop)
+    private final CamexTunnel.Listener listener = this::showState;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -50,39 +39,27 @@ public class MainActivity extends Activity {
         settingsButton = findViewById(R.id.btn_settings);
 
         startButton.setOnClickListener(v -> startVpn());
-        stopButton.setOnClickListener(v -> stopVpn());
+        stopButton.setOnClickListener(v -> CamexTunnel.stop());
         settingsButton.setOnClickListener(v -> openSettings());
 
+        CamexTunnel.setNotificationLook(getString(R.string.app_name), 0);
         requestNotificationPermission();
-        updateStatus(false);
-        registerExitReceiver();
     }
 
-    // Only our own service may send ACTION_EXITED: Android 13+ honours the
-    // not-exported flag, older versions the signature permission of this app
-    // (what ContextCompat.registerReceiver does). The form with flags is API 26;
-    // before it the permission alone protects the receiver, and the flag lint
-    // asks for matters only from Android 14 (#158)
-    @SuppressLint("UnspecifiedRegisterReceiverFlag")
-    private void registerExitReceiver() {
-        IntentFilter exited = new IntentFilter(TunnelService.ACTION_EXITED);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            registerReceiver(exitReceiver, exited,
-                TunnelService.PERMISSION_INTERNAL, null, RECEIVER_NOT_EXPORTED);
-        } else {
-            registerReceiver(exitReceiver, exited,
-                TunnelService.PERMISSION_INTERNAL, null);
-        }
+    @Override
+    protected void onStart() {
+        super.onStart();
+        CamexTunnel.addListener(listener);
+    }
+
+    @Override
+    protected void onStop() {
+        CamexTunnel.removeListener(listener);
+        super.onStop();
     }
 
     private void openSettings() {
         startActivity(new Intent(this, SettingsActivity.class));
-    }
-
-    @Override
-    protected void onDestroy() {
-        unregisterReceiver(exitReceiver);
-        super.onDestroy();
     }
 
     // Android 13+ needs runtime POST_NOTIFICATIONS for the foreground notification.
@@ -94,18 +71,35 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** The saved settings as the library's values. */
+    static Map<String, String> values(SharedPreferences p) {
+        Map<String, String> v = new HashMap<>();
+        v.put(CamexTunnel.SERVER, p.getString("server_host", "") + ":"
+            + p.getInt("server_port", SettingsActivity.DEFAULT_PORT));
+        v.put(CamexTunnel.NAME, p.getString("name", SettingsActivity.DEFAULT_NAME));
+        v.put(CamexTunnel.TRANSPORT, "tcp".equals(p.getString("transport", "udp")) ? "TCP" : "UDP");
+        v.put(CamexTunnel.PUBKEY, p.getString("server_pubkey", ""));
+        v.put(CamexTunnel.PSK, p.getString("psk", ""));
+        v.put(CamexTunnel.MTU, String.valueOf(p.getInt("mtu", SettingsActivity.DEFAULT_MTU)));
+        v.put(CamexTunnel.KEEPALIVE,
+            String.valueOf(p.getInt("keepalive", SettingsActivity.DEFAULT_KEEPALIVE)));
+        v.put(CamexTunnel.SERVER_TIMEOUT,
+            String.valueOf(p.getInt("server_timeout", SettingsActivity.DEFAULT_TIMEOUT)));
+        return v;
+    }
+
     private void startVpn() {
-        // Protocol v2 needs both keys: without them camex cannot start
-        SharedPreferences prefs = getSharedPreferences("camex", MODE_PRIVATE);
-        if (!SettingsActivity.isServerPubkey(prefs.getString("server_pubkey", ""))
-                || prefs.getString("psk", "").isEmpty()) {
-            Toast.makeText(this, R.string.err_keys_missing, Toast.LENGTH_LONG).show();
+        // Protocol v2 needs both keys and a server: without them camex cannot start
+        String[] bad = CamexTunnel.check(values(getSharedPreferences("camex", MODE_PRIVATE)));
+        if (bad != null) {
+            Toast.makeText(this, getString(R.string.err_settings, bad[0], bad[1]),
+                Toast.LENGTH_LONG).show();
             openSettings();
             return;
         }
-        Intent intent = VpnService.prepare(this);
-        if (intent != null) {
-            startActivityForResult(intent, 0);
+        Intent consent = CamexTunnel.consentIntent(this);
+        if (consent != null) {
+            startActivityForResult(consent, 0);
         } else {
             onActivityResult(0, RESULT_OK, null);
         }
@@ -115,27 +109,31 @@ public class MainActivity extends Activity {
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         if (result == RESULT_OK) {
-            Intent svc = new Intent(this, TunnelService.class);
-            // Before Android 8 a started service may go foreground later (#158)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(svc);
-            } else {
-                startService(svc);
-            }
-            updateStatus(true);
+            CamexTunnel.start(this, values(getSharedPreferences("camex", MODE_PRIVATE)));
         }
     }
 
-    private void stopVpn() {
-        // stopService() is not enough while the system holds the VPN binding
-        startService(new Intent(this, TunnelService.class)
-            .setAction(TunnelService.ACTION_STOP));
-        updateStatus(false);
-    }
-
-    private void updateStatus(boolean on) {
-        running = on;
-        statusView.setText(on ? R.string.status_connected : R.string.status_disconnected);
+    private void showState(CamexTunnel.State state, String address, String error) {
+        boolean on = state == CamexTunnel.State.CONNECTING || state == CamexTunnel.State.CONNECTED;
+        String text;
+        switch (state) {
+            case CONNECTED:
+                text = getString(R.string.status_connected) + " · " + address;
+                break;
+            case CONNECTING:
+                text = getString(R.string.status_connecting);
+                break;
+            case NEEDS_CONSENT:
+                text = getString(R.string.status_needs_consent);
+                break;
+            case FAILED:
+                text = getString(R.string.status_failed);
+                break;
+            default:
+                text = getString(R.string.status_disconnected);
+        }
+        if (!error.isEmpty() && state != CamexTunnel.State.CONNECTED) text += "\n" + error;
+        statusView.setText(text);
         startButton.setEnabled(!on);
         stopButton.setEnabled(on);
         // Settings only editable while disconnected.

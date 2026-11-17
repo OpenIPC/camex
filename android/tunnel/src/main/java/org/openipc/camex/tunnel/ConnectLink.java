@@ -20,7 +20,8 @@ import java.util.Map;
  *
  * <p>{@link #values} holds what came through, under the keys of {@link CamexTunnel#fields()}:
  * {@code h} and {@code p} make {@code server} (a host without a port takes camex's 5800; a
- * malformed port leaves {@code server} out), the
+ * malformed port, or a port without a host, leaves {@code server} out: {@link #host} and
+ * {@link #port} have each on its own), the
  * transport is {@code UDP} or {@code TCP}. A malformed field is left out of the values and named
  * in {@link #errors}; unknown fields are ignored (a later version's). {@code r} is read and
  * ignored: the library never routes all traffic. The app puts the values over its own
@@ -36,10 +37,19 @@ public final class ConnectLink {
     public final Map<String, String> values;
     /** The link's malformed fields: its letter ("h", "s"...) and a short reason. */
     public final Map<String, String> errors;
+    /**
+     * The link's host and port each on its own, null when the link has none (or a malformed
+     * one): an app that keeps them apart puts only what the link has over its settings.
+     */
+    public final String host;
+    public final Integer port;
 
-    private ConnectLink(Map<String, String> values, Map<String, String> errors) {
+    private ConnectLink(Map<String, String> values, Map<String, String> errors, String host,
+                        Integer port) {
         this.values = Collections.unmodifiableMap(values);
         this.errors = Collections.unmodifiableMap(errors);
+        this.host = host;
+        this.port = port;
     }
 
     /** The link's values, or null when it is not a camex link. */
@@ -89,8 +99,6 @@ public final class ConnectLink {
             // a malformed port leaves the server out, not the default port in
             values.put(Values.SERVER, host + ":" + (port != null
                     ? Integer.parseInt(port) : Values.DEFAULT_PORT));
-        } else if (port != null && !errors.containsKey("h")) {
-            errors.put("p", "a port without a host");
         }
         if (got.containsKey("n")) values.put(Values.NAME, got.get("n"));
         if (got.containsKey("t")) values.put(Values.TRANSPORT, got.get("t").toUpperCase(java.util.Locale.ROOT));
@@ -98,7 +106,8 @@ public final class ConnectLink {
         if (got.containsKey("s")) values.put(Values.PSK, got.get("s"));
         if (got.containsKey("m")) values.put(Values.MTU, String.valueOf(Integer.parseInt(got.get("m"))));
         if (got.containsKey("a")) values.put(Values.KEEPALIVE, String.valueOf(Integer.parseInt(got.get("a"))));
-        return new ConnectLink(values, errors);
+        return new ConnectLink(values, errors, host,
+                port != null ? Integer.valueOf(Integer.parseInt(port)) : null);
     }
 
     // Null when the link's field is fine, otherwise why not

@@ -130,7 +130,10 @@ encryption is done by the userspace app.
 
 The app uses `VpnService`, so Android shows the VPN key icon while the tunnel is
 up; there is no way around that with `VpnService`. Only the tunnel network and
-the routes the server sends go through the tunnel; a `0.0.0.0/0` route from the
-server is ignored unless **Route all traffic through the tunnel** is enabled in
-the settings. That switch covers IPv4 only: IPv6 traffic does not go through the
-tunnel.
+the routes the server sends go through the tunnel. A default route
+(`0.0.0.0/0`) from the server is never taken, nor a route wider than a `/8`
+(two halves, `0.0.0.0/1` and `128.0.0.0/1`, would take all traffic as well;
+#175): camex on Android is for reaching the cameras, not a VPN for all traffic
+(there is no full-tunnel setting since 3.19.0, #172). IPv6 does not go through
+the tunnel and is not blocked by it. The same holds for apps that build camex in
+through the [Android library](android-library.md).

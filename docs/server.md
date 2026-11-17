@@ -23,7 +23,11 @@ For nginx in front of the clients, `domain=` in `[server]` is the clients'
 domain, `name=` in a `[client ID]` block a display name, and `peer_port=` in
 `[defaults]` or a `[client ID]` block the port of the start page's link to the
 client's external IP (8080 by default, `none` for no link; see
-[nginx in front of the clients](nginx.md#reference)).
+[nginx in front of the clients](nginx.md#reference)). `web_port=` in `[defaults]`
+or a `[client ID]` block is the port nginx reaches a client's web UI on (#174):
+the client's own block wins, then the port the client announced itself
+(`--web-port`, for example an Android app that serves its page on 8080), then
+`[defaults]`, then `--upstream-port` of the map (80).
 
 After a change to the file, `kill -HUP` the server. A running auto-mode client
 picks up a changed address, gateway, MTU or routes with its next handshake (a
@@ -73,6 +77,7 @@ Three kinds of blocks; lines starting with `#` are comments:
 | `route_cidr` | a route the client installs through the tunnel; repeatable                                               |
 | `psk`        | the client's own pre-shared key; the global one then no longer works for it ([usage.md](usage.md#notes)) |
 | `peer_port`  | the port of the start page's link to the client's external IP, 8080 by default, `none` for no link       |
+| `web_port`   | the port nginx reaches the client's web UI on (#174): 1–65535; the order is above                        |
 | `name`       | (`[client ID]` only) the display name on the start page and in `camex --status`: UTF-8, up to 64 bytes   |
 
 A `[client ID]` block lists its ID even with only `name=`: with

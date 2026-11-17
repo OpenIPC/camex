@@ -55,6 +55,7 @@ typedef struct {
     uint8_t registered;   /* a handshake was accepted for this entry; until
                            * then a TCP slot is pre-auth (#9) */
     uint8_t auto_client;  /* registered in auto mode (#15) */
+    int web_port;         /* the port of its web UI it announced (#174), 0 = none */
     time_t connected_at;  /* TCP accept time: the pre-auth deadline counts
                            * from here, not from last_seen (#9) */
     int tcp_fd;           /* TCP socket fd for this client (-1 = UDP) */
@@ -157,9 +158,10 @@ char *server_status(int json, size_t *len);
 
 /* The live clients with an ID as "<client ID> <tunnel address>" lines,
  * for camex --status --format nginx-map (#84); with names, followed by
- * " <name>" for a client with name= (#105), for --format nginx-index.
+ * " <name>" for a client with name= (#105), for --format nginx-index; with
+ * web (CLIENTS WEB, #174), followed by " <port>" for a client with a web port.
  * malloc'd, NULL without memory */
-char *server_clients_list(int names, size_t *len);
+char *server_clients_list(int names, int web, size_t *len);
 
 /* The start page's records (#110), tab-separated, one a line:
  *   L <ID> <address> <configured 0|1> <connected s> <last packet s|->

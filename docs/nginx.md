@@ -325,6 +325,14 @@ blocks in the file, Auto otherwise, and the browser remembers the tab chosen
 |--------------------------------------------|-------------------------------------------------------------|
 | ![Start page](images/nginx-start-page.png) | ![Start page on a phone](images/nginx-start-page-phone.png) |
 
+- **Web port** (#174): nginx reaches a device's name on port 80 of its tunnel
+  address. A device that serves its page on another port (an Android app
+  cannot listen below 1024 without root) says so with `--web-port <port>`, or
+  the server sets it: `web_port=` in its `[client ID]` block, else the port the
+  device announced, else `web_port=` of `[defaults]`, else `--upstream-port`.
+  The map then has `<address>:<port>` for it; nginx's configuration does not
+  change. `camex --status` shows the port after the address. Announcing it
+  needs a server 3.19.0 or later: an older server refuses a client that sends it.
 - **Peer links**: `peer_port=` in `[defaults]` or in a camera's `[client ID]`
   block sets the port of the link; the camera's own value wins, then
   `[defaults]`, then 8080. With port 80 the link has no port. `peer_port=none`
@@ -476,7 +484,9 @@ map $host $camex_upstream {
 - The host is the client ID in lower case plus the domain: `--domain`, or
   without it `domain=` of the server (the `# domain:` line names it); an ID that is not a
   valid host name label (letters, digits and `-`, up to 63) is left out with a
-  warning. `--upstream-port` sets the clients' web port (80), `--default
+  warning. `--upstream-port` sets the clients' web port (80); a client with
+  its own web port (`web_port=` in its `[client ID]` block or `[defaults]`,
+  or the port it announced with `--web-port`, #174) gets that one, `--default
   <ip:port>` a target for names with no live client. The output is sorted, so
   an unchanged state gives an identical file; when a running server does not
   answer, nothing is printed and the exit code is 1, and the sync script keeps

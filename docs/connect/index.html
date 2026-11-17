@@ -38,7 +38,7 @@ pre{padding:10px;white-space:pre-wrap;word-break:break-all}
 <p class="dim">The app shows these settings; nothing connects until you tap Save there.</p>
 <p>No app yet: install <a href="https://github.com/OpenIPC/camex/releases/latest/download/camex-android.apk">camex-android.apk</a>
 (Android 8.0 and later), then open this link again.</p>
-<p class="dim">On a computer, the same server with camex (its routes come from the server: "Route all traffic" is the Android app's own setting):</p>
+<p class="dim">On a computer, the same server with camex (its routes come from the server):</p>
 <pre id="cli"></pre>
 <p id="cli-defaults" class="dim" hidden></p>
 <details><summary class="dim">The command with the psk (it is the password)</summary><pre id="cli-psk"></pre></details>
@@ -50,10 +50,10 @@ pre{padding:10px;white-space:pre-wrap;word-break:break-all}
 <script>
 // The fields of the link (see ConnectLink.java): h host, p port, t
 // transport, k server public key, s psk; n client ID, m MTU, a keepalive,
-// r route all traffic
+// r route all traffic (read and ignored since 3.19.0: no full tunnel, #172)
 var CAMEX = {
     names: {h: 'Server host', p: 'Port', t: 'Transport', k: 'Server public key',
-            n: 'Client name', m: 'MTU', a: 'Keepalive, s', r: 'Route all traffic'},
+            n: 'Client name', m: 'MTU', a: 'Keepalive, s'},
     // The link's fields in its order; null when the escapes are malformed
     fields: function (hash) {
         var out = [], s = hash.replace(/^#/, '');
@@ -152,10 +152,11 @@ var CAMEX = {
     var table = document.getElementById('fields');
     for (var j = 0; j < f.length; j++) {
         var name = CAMEX.names[f[j][0]];
-        if (!name) continue;   // the psk is not shown: it is the password
+        // the psk is not shown (it is the password), nor r (ignored, #172)
+        if (!name) continue;
         var tr = table.insertRow(), th = tr.insertCell(), td = tr.insertCell();
         th.textContent = name;
-        td.textContent = f[j][0] === 'r' ? (f[j][1] === '1' ? 'yes' : 'no') : f[j][1];
+        td.textContent = f[j][1];
     }
     document.getElementById('open').href = CAMEX.intent(f);
     document.getElementById('cli').textContent = CAMEX.cli(f, false);

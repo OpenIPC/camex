@@ -241,9 +241,9 @@ echo "$L" | grep -q "back OK" && ok "server back: CONNECTED, peer reached" || ba
 echo "$L" | grep -q "stop OK" && ok "stop(): STOPPED and the VPN gone" || bad "stop()"
 if echo "$L" | grep -q "start after stop OK"; then
     ok "start() after stop(): CONNECTED, peer reached"
-elif echo "$L" | grep -q "start after stop CONNECTED, peer skipped"; then
+elif echo "$L" | grep -q "start after stop: peer not reached"; then
     ok "start() after stop(): CONNECTED"
-    echo "SKIP: the peer after start() after stop() on Android 5.0 (#173)"
+    echo "KNOWN: the peer not reached after start() after stop() on Android 5.0 (#173)"
 else
     bad "start() after stop()"
 fi
