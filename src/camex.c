@@ -626,8 +626,20 @@ static size_t camex_wanted_slots(int quiet)
         /* The UDP socket takes a place in the read set too */
         cap = cap > 1U ? cap - 1U : 0U;
 #endif
-        /* Harmless with fewer slots: there can be no more connections */
+        /* Harmless with fewer slots: there can be no more connections.
+         * Registered clients get all but a reserve, which stays for
+         * pre-auth connections: a client whose old connection is still
+         * open can always come back on a new one */
         tcp_conn_cap = cap;
+        {
+            size_t reserve = cap / 4U < CAMEX_TCP_PREAUTH_MAX
+                                 ? cap / 4U : CAMEX_TCP_PREAUTH_MAX;
+
+            if (reserve == 0U) {
+                reserve = 1U;
+            }
+            server_tcp_reg_cap = cap > reserve ? cap - reserve : 1U;
+        }
         if (slots > cap) {
             log_message(LOG_INFO, "TCP: at most %u of the %u clients over "
                         "TCP (FD_SETSIZE and the open files limit); UDP "

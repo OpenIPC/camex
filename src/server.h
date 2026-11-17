@@ -89,6 +89,10 @@ typedef struct {
                                     * zero on accept/reuse, see net.h */
 } server_client_t;
 
+/* TCP clients that may be registered at once with --transport both (0 =
+ * no limit), set at startup (#178) */
+extern size_t server_tcp_reg_cap;
+
 /* Live client slots, allocated at startup (#75) */
 extern server_client_t *server_clients;
 extern size_t server_max_clients;

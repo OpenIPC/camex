@@ -1611,6 +1611,21 @@ static uint32_t server_new_index(const server_client_t *entry)
     return 0U;
 }
 
+/* What the last server_adopt_tcp() of a handshake took over (#178): a
+ * failed handshake puts a UDP client back, and a client that already had
+ * a TCP connection is not a new one for the TCP limit */
+static struct {
+    server_client_t *entry;
+    int had_tcp;                 /* it replaced a TCP connection */
+    int from_udp;                /* a registered UDP client moved to TCP */
+    struct sockaddr_in addr;     /* its UDP address before */
+    time_t since;                /* its session_since before */
+} adopt_rec;
+
+/* TCP clients that may be registered at once with --transport both, 0 =
+ * no limit; set by camex.c at startup (#178) */
+size_t server_tcp_reg_cap = 0U;
+
 /* A client that came back on a new TCP connection: the entry takes the new
  * fd, the slot that connection got at accept() is freed, the old
  * connection is closed */
@@ -1620,6 +1635,14 @@ static void server_adopt_tcp(server_client_t *entry, int fd)
 
     if (fd < 0 || entry->tcp_fd == fd) {
         return;
+    }
+    adopt_rec.entry = entry;
+    adopt_rec.had_tcp = entry->tcp_fd >= 0;
+    adopt_rec.from_udp = entry->tcp_fd < 0 && entry->registered;
+    adopt_rec.addr = entry->addr;
+    adopt_rec.since = entry->session_since;
+    if (adopt_rec.from_udp) {
+        entry->session_since = 0;   /* a new connection on TCP (#82) */
     }
     for (j = 0; j < server_max_clients; ++j) {
         if (server_clients[j].active && server_clients[j].tcp_fd == fd &&
@@ -1648,6 +1671,7 @@ static void server_drop_tcp(server_client_t *entry)
     net_tcp_close(entry->tcp_fd);
     entry->tcp_fd = -1;
     memset(&entry->recv_state, 0, sizeof(entry->recv_state));
+    entry->session_since = g_now;   /* its connection is a new one (#82) */
 }
 
 /* The client entry a handshake belongs to (created or reused), or NULL if
@@ -2017,6 +2041,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         }
     }
 
+    memset(&adopt_rec, 0, sizeof(adopt_rec));
     entry = server_entry_for(used_key, client_id, local_ip, auto_request,
                              from, fd, &fresh);
     if (entry == NULL) {
@@ -2027,6 +2052,29 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     memcpy(psk_before, entry->psk_key, sizeof(psk_before));
     pending_before = entry->pending_ip_be;
     ip_before = entry->ip_be;
+    /* --transport both (#178): a client new on TCP (not one that replaces
+     * its TCP connection, nor a rekey on it) counts against the limit of
+     * registered TCP clients; the rest of the connections is kept free for
+     * pre-auth ones, so a client can always come back on a new one */
+    if (fd >= 0 && server_tcp_reg_cap != 0U &&
+        (adopt_rec.entry == entry ? !adopt_rec.had_tcp : first)) {
+        size_t k, reg = 0U;
+
+        for (k = 0; k < server_max_clients; ++k) {
+            const server_client_t *c = &server_clients[k];
+
+            if (c != entry && c->active && c->registered && c->tcp_fd >= 0) {
+                ++reg;
+            }
+        }
+        if (reg >= server_tcp_reg_cap) {
+            log_peer(LOG_WARNING, "Rejected handshake from %s: %u clients "
+                     "on TCP, the most this server can watch", peer,
+                     (unsigned)reg);
+            noise_wipe(&hs);
+            goto fail;
+        }
+    }
     /* A UDP entry with a working session keeps its address until the first
      * packet on the new one (server_handle_data), so a replayed message 1
      * cannot redirect its traffic; over TCP the connection carries it */
@@ -2195,6 +2243,16 @@ fail:
         if (cur_set) {
             /* The client never got the keys of that session */
             session_wipe(&entry->cur);
+        }
+        /* A UDP client whose move to TCP failed stays on UDP (#178): the
+         * new connection is closed, the client tries again */
+        if (adopt_rec.entry == entry && adopt_rec.from_udp &&
+            fd >= 0 && entry->tcp_fd == fd) {
+            net_tcp_close(fd);
+            entry->tcp_fd = -1;
+            memset(&entry->recv_state, 0, sizeof(entry->recv_state));
+            server_set_addr(entry, &adopt_rec.addr);
+            entry->session_since = adopt_rec.since;
         }
         /* A pre-auth TCP slot stays pre-auth (its timeout, its log); the
          * key stays the one its sessions were made with (reloads check
@@ -2451,6 +2509,7 @@ static int server_udp_socket(const char *bind_ip, int port)
                    (const char *)&reuse, sizeof(reuse)) < 0) {
         print_errno_message(LOG_WARNING, "setsockopt(SO_REUSEADDR)");
     }
+
 
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;

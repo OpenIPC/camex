@@ -19,6 +19,9 @@
 # 5. A server in both whose TCP or UDP port is taken (also by a UDP server
 #    that binds with SO_REUSEADDR) does not start and says why;
 #    --transport both is refused for a client.
+# 6. The TCP limit (select(), open files) of a server on both counts only
+#    TCP clients, keeps room for pre-auth connections, and leaves UDP
+#    clients alone.
 #
 # Usage: ./test-e2e-both.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
@@ -172,6 +175,9 @@ wait_for 10 sh -c "docker logs $P-srv 2>&1 | grep -q 'Client CAM-S moved from TC
 check $? "the server logs the move and closes the old connection"
 [ "$(json_get "len([c for c in d['servers'][0]['clients'] if c['id']=='CAM-S'])")" = 1 ]
 check $? "one entry for CAM-S"
+cs=$(client_of CAM-S connected_s)
+[ -n "$cs" ] && [ "$cs" -lt 30 ]
+check $? "its connection age starts again with the move (${cs:-?} s)"
 docker rm -f "$P-S2" >/dev/null
 
 echo "== 4. one ID over UDP and TCP at once"
@@ -219,6 +225,31 @@ check $? "--transport both is refused for a client"
 
 docker exec "$P-srv" true
 check $? "the server is still running"
+
+echo "== 6. the TCP limit of a server on both"
+# nofile 40: 8 TCP connections (40 - 32), 2 of them kept for pre-auth ones
+docker run -d --name "$P-lim" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    --ulimit nofile=40:40 "$IMAGE" --mode server --port 5800 \
+    --local-cidr 10.220.0.1/24 $SERVER_KEY_ARGS --psk "$PSK" >/dev/null
+sleep 1
+lim_client() {  # lim_client <n> <udp|tcp>
+    docker run -d --name "$P-L$1" --network "$NET_NAME" --cap-add NET_ADMIN \
+        --cap-add MKNOD "$IMAGE" --mode client --auto --name "LIM$1" \
+        --server-host "$P-lim" --port 5800 --transport "$2" \
+        --server-pubkey "$SERVER_PUBKEY" --psk "$PSK" --keepalive 2 >/dev/null
+}
+for n in 1 2 3 4 5 6 7; do lim_client $n tcp; done
+lim_client 8 udp; lim_client 9 udp
+sleep 10
+lim_json() { docker exec "$P-lim" camex --status --json | python3 -c "import json,sys; d=json.load(sys.stdin); print($1)" 2>/dev/null; }
+tcp_n=$(lim_json "len([c for c in d['servers'][0]['clients'] if c['transport']=='tcp' and c['address']])")
+udp_n=$(lim_json "len([c for c in d['servers'][0]['clients'] if c['transport']=='udp'])")
+[ "$tcp_n" = 6 ] && [ "$udp_n" = 2 ]
+check $? "6 clients on TCP (8 connections less 2 for pre-auth), both UDP ones too (tcp $tcp_n, udp $udp_n)"
+docker logs "$P-lim" 2>&1 | grep -q "clients on TCP, the most this server can watch"
+check $? "the seventh TCP client is refused with a reason"
+docker logs "$P-lim" 2>&1 | grep -q "at most 8 of the 256 clients over TCP"
+check $? "the log names the TCP limit at startup"
 
 if [ "$FAILS" -ne 0 ]; then
     echo "FAIL: $FAILS check(s) failed"
