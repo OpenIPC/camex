@@ -163,14 +163,13 @@ given over adb meanwhile.
 
 ### Android 5.0
 
-After `stop()` and a new `start()` in the same process, Android 5.0 sometimes
-routes the app's own connections outside the new VPN: its first packets reach
-the tunnel with the source address of the device's own network, then they go
-out of that network. In our emulator tests that happened in half of the runs,
-and it either passed within seconds or not within minutes
-([#173](https://github.com/OpenIPC/camex/issues/173), still open). The first
-start, new values while running and a server that comes back are not affected;
-it was not seen on Android 14.
+Android 5.0 may apply the VPN's routing a moment after `CONNECTED`. A
+connection the app opens at that very moment can leave through the device's
+own network, and its retries then reach the tunnel with that network's source
+address, which the server drops. Give such a connection a timeout and open a
+new one: it goes through the tunnel
+([#173](https://github.com/OpenIPC/camex/issues/173)). A `stop()` and a new
+`start()` in the same process work as the first start does.
 
 ### Starting without a screen
 
