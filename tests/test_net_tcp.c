@@ -195,11 +195,55 @@ static void test_pending_flushes_in_order(void)
     close(p[1]);
 }
 
+/* A frame whose body arrives in two pieces, read with a different buffer
+ * each call (a local array in the event loop): the first piece must not be
+ * lost (#180) */
+static void test_split_body_other_buffer(void)
+{
+    int p[2];
+    uint8_t first[2048], second[2048];
+    uint8_t wire[2 + 1000];
+    size_t len = 0, i;
+    tcp_recv_state_t st;
+    int rc;
+
+    if (make_pair(p) != 0) {
+        ++failures;
+        return;
+    }
+    wire[0] = 0x03;
+    wire[1] = 0xE8;   /* 1000 */
+    for (i = 0; i < 1000; ++i) {
+        wire[2 + i] = (uint8_t)(i * 7U + 1U);
+    }
+    memset(&st, 0, sizeof(st));
+    CHECK(write(p[0], wire, 2 + 400) == 2 + 400, "short write");
+    memset(first, 0x55, sizeof(first));
+    rc = net_tcp_recv_frame(p[1], first, sizeof(first), &len, &st);
+    CHECK(rc == 1, "a partial body must wait for the rest");
+    CHECK(write(p[0], wire + 2 + 400, 600) == 600, "short write");
+    memset(second, 0x55, sizeof(second));   /* another buffer, other bytes */
+    rc = net_tcp_recv_frame(p[1], second, sizeof(second), &len, &st);
+    CHECK(rc == 0 && len == 1000, "the frame did not complete");
+    CHECK(memcmp(second, wire + 2, 1000) == 0,
+          "the body read before EAGAIN was lost (#180)");
+
+    /* The next frame starts clean on the same fd */
+    CHECK(write(p[0], wire, 2 + 1000) == 2 + 1000, "short write");
+    rc = net_tcp_recv_frame(p[1], first, sizeof(first), &len, &st);
+    CHECK(rc == 0 && len == 1000 && memcmp(first, wire + 2, 1000) == 0,
+          "the next frame is not intact");
+
+    net_tcp_close(p[0]);
+    net_tcp_close(p[1]);
+}
+
 int main(void)
 {
     test_close_clears_pending();
     test_no_head_of_line_blocking();
     test_pending_flushes_in_order();
+    test_split_body_other_buffer();
 
     if (failures != 0) {
         fprintf(stderr, "test_net_tcp: %d failure(s)\n", failures);

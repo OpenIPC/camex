@@ -6,6 +6,24 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 4.0.1 — 2026-11-17
+
+- TCP transport: a frame whose body arrived in pieces lost its first piece (#180). The bytes read
+  before an EAGAIN went into the caller's buffer, a local array of the event loop, and the next call
+  went on in another one; the frame came out corrupted, the peer dropped it ("not a v2 packet") and
+  the tunnelled TCP stalled. Measured on a 60 ms link: server to client crawled at ~10 KB/s (512 KB
+  not within 30 s, 20 MB not within 3 minutes). The part of a body read so far is now kept per
+  connection until the frame is complete. Both sides had it: the client's 4 MB socket buffers hid it
+  on the server's side of the stream, and without them client to server stalled the same way.
+- A server's TCP connections get the same 4 MB send and receive buffers as a client's socket
+  (`net_tcp_tune_socket()`) once the client has registered; a pre-auth connection keeps the small
+  default, so peers that never register cannot take more memory.
+- Measured after the fix on a server with a 60 ms round trip, 20 MB each way: TCP server to client
+  2.1–2.9 MB/s (was ~10 KB/s), client to server 2.3–2.4 MB/s; UDP unchanged (~2 MB/s and 8–11 MB/s).
+- Tests: `docker/test-e2e-throughput.sh` (in CI): 4 MB through the tunnel both ways over UDP and TCP
+  with a 30 ms netem delay on each side, all of it and at least 300 KB/s each, within one deadline
+  per transfer; it found 0 bytes server to client over TCP before the fix. A unit test of a body that arrives in two pieces into two buffers.
+
 ## 4.0.0 — 2026-11-17
 
 - **A server now listens on UDP and TCP at once** (#178): `--transport both`, the new default,

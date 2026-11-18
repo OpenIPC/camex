@@ -148,6 +148,66 @@ static void tcp_pending_release(tcp_send_pending_t *slot)
 }
 
 /*
+ * The body of a frame that arrives in pieces (#180). The caller's buffer
+ * may be a different one on every call (a local array in the event loop),
+ * so what was read before an EAGAIN is kept here, per fd, until the frame
+ * is complete; only then is it copied out. A slot is taken when a body
+ * starts and given back when it is done or the fd is closed.
+ */
+typedef struct {
+    int fd;            /* owner fd, -1 = slot free */
+    uint8_t *buf;      /* TCP_SEND_BUF_SIZE bytes, allocated on first use */
+} tcp_recv_slot_t;
+
+static tcp_recv_slot_t tcp_recv_slots[TCP_PENDING_SLOTS];
+static int tcp_recv_ready = 0;
+
+static tcp_recv_slot_t *tcp_recv_slot(int fd, int take)
+{
+    tcp_recv_slot_t *free_slot = NULL;
+    size_t i;
+
+    if (!tcp_recv_ready) {
+        for (i = 0; i < TCP_PENDING_SLOTS; ++i) {
+            tcp_recv_slots[i].fd = -1;
+            tcp_recv_slots[i].buf = NULL;
+        }
+        tcp_recv_ready = 1;
+    }
+    for (i = 0; i < TCP_PENDING_SLOTS; ++i) {
+        if (tcp_recv_slots[i].fd == fd) {
+            return &tcp_recv_slots[i];
+        }
+        if (tcp_recv_slots[i].fd == -1 &&
+            (free_slot == NULL ||
+             (free_slot->buf == NULL && tcp_recv_slots[i].buf != NULL))) {
+            free_slot = &tcp_recv_slots[i];
+        }
+    }
+    if (!take || free_slot == NULL) {
+        return NULL;
+    }
+    if (free_slot->buf == NULL) {
+        /* Frames on the wire are encrypted: no need to lock the memory */
+        free_slot->buf = calloc(1U, TCP_SEND_BUF_SIZE);
+        if (free_slot->buf == NULL) {
+            return NULL;
+        }
+    }
+    free_slot->fd = fd;
+    return free_slot;
+}
+
+static void tcp_recv_slot_release(int fd)
+{
+    tcp_recv_slot_t *slot = tcp_recv_slot(fd, 0);
+
+    if (slot != NULL) {
+        slot->fd = -1;
+    }
+}
+
+/*
  * Flush any pending TCP send data for the given fd.
  * Returns 0 when fully flushed, 1 if still pending (EAGAIN), -1 on error.
  */
@@ -256,6 +316,7 @@ void net_tcp_close(int fd)
     if (slot != NULL) {
         tcp_pending_release(slot);
     }
+    tcp_recv_slot_release(fd);
     close(fd);
 }
 
@@ -464,6 +525,16 @@ int net_client_send(const uint8_t *data, size_t len)
     return net_send_payload(net_fd, NULL, data, len);
 }
 
+void net_tcp_tune_socket(int fd)
+{
+    int bufsize = 4 * 1024 * 1024;
+
+    (void)setsockopt(fd, SOL_SOCKET, SO_RCVBUF,
+                     OPTVAL_CAST &bufsize, sizeof(bufsize));
+    (void)setsockopt(fd, SOL_SOCKET, SO_SNDBUF,
+                     OPTVAL_CAST &bufsize, sizeof(bufsize));
+}
+
 int net_tcp_send_frame(int fd, const uint8_t *data, size_t len)
 {
     return net_tcp_send_frame_ex(fd, data, len, NULL);
@@ -578,19 +649,32 @@ int net_tcp_recv_frame(int fd, uint8_t *buffer, size_t size, size_t *len,
         state->body_have = 0;
     }
 
-    while (state->body_have < state->body_len) {
-        n = read(fd, buffer + state->body_have,
-                 state->body_len - state->body_have);
-        if (n < 0) {
-            if (net_sock_err_is_again()) {
-                return 1;  /* caller will re-select; state preserved */
-            }
+    /* The body goes to this fd's own slot: a call after an EAGAIN may get
+     * another buffer, and what was read before must not be lost (#180) */
+    {
+        tcp_recv_slot_t *slot = tcp_recv_slot(fd, 1);
+
+        if (slot == NULL || state->body_len > TCP_SEND_BUF_SIZE) {
             return -1;
         }
-        if (n == 0) {
-            return -1;  /* connection closed */
+        while (state->body_have < state->body_len) {
+            n = read(fd, slot->buf + state->body_have,
+                     state->body_len - state->body_have);
+            if (n < 0) {
+                if (net_sock_err_is_again()) {
+                    return 1;  /* caller will re-select; state preserved */
+                }
+                slot->fd = -1;
+                return -1;
+            }
+            if (n == 0) {
+                slot->fd = -1;
+                return -1;  /* connection closed */
+            }
+            state->body_have += (size_t)n;
         }
-        state->body_have += (size_t)n;
+        memcpy(buffer, slot->buf, state->body_len);
+        slot->fd = -1;
     }
 
     *len = state->body_len;
@@ -714,13 +798,7 @@ int net_tcp_connect(const char *host, int port)
         }
     }
 #endif
-    {
-        int bufsize = 4 * 1024 * 1024;
-        (void)setsockopt(fd, SOL_SOCKET, SO_RCVBUF,
-                         OPTVAL_CAST &bufsize, sizeof(bufsize));
-        (void)setsockopt(fd, SOL_SOCKET, SO_SNDBUF,
-                         OPTVAL_CAST &bufsize, sizeof(bufsize));
-    }
+    net_tcp_tune_socket(fd);
 
     /* Non-blocking connect with a timeout: a blocking connect() to an
      * unreachable server stalled the event loop until the kernel gave up,

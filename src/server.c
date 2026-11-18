@@ -2188,6 +2188,12 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
                                 V2_RESP_HDR + resp_len) < 0) {
         goto fail;
     }
+    /* A registered TCP connection gets the same buffers as a client's
+     * socket (#180); a pre-auth one keeps the small default, so peers that
+     * never register cannot take more memory */
+    if (fd >= 0) {
+        net_tcp_tune_socket(fd);
+    }
     /* --transport both (#178): a client that comes back over the other
      * transport. Over TCP the new connection carries it at once (as a new
      * TCP connection always did); over UDP a TCP client without a working

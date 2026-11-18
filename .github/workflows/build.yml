@@ -129,6 +129,10 @@ jobs:
         run: ./docker/test-e2e-both.sh
         if: matrix.target == 'x86_64'
 
+      - name: E2E test (bulk data both ways over UDP and TCP with a 60 ms round trip, issue #180)
+        run: ./docker/test-e2e-throughput.sh
+        if: matrix.target == 'x86_64'
+
       - name: E2E test (client isolation, issue #83)
         run: ./docker/test-e2e-isolation.sh
         if: matrix.target == 'x86_64'
