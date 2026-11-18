@@ -82,42 +82,77 @@ int __wrap_socket(int domain, int type, int protocol)
 
 /* The gate for new TCP connections from the tunnel (#187): only to the web
  * port, and only when CamexVpnService.ownsListener() finds this app's socket
- * listening there; other apps' servers on the device stay out of reach. */
-static int jni_tcp_gate(uint32_t dst, uint16_t dport, uint32_t src, uint16_t sport)
+ * listening there; other apps' servers on the device stay out of reach.
+ *
+ * It runs on the packet thread: the answer is kept for GATE_CACHE_MS, so a
+ * page's burst of connections (or a flood of SYNs) asks Java once, and the
+ * refusals are logged at most once per GATE_LOG_S with their count. */
+#define GATE_CACHE_MS 2000
+#define GATE_LOG_S 60
+
+static long long gate_now_ms(void)
 {
-    static uint16_t last_port;
-    static time_t last_log;
+    struct timespec ts;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static int gate_cached = -1;            /* -1 none, else the last answer */
+static long long gate_cached_at;
+static int gate_cached_port;
+static unsigned long gate_refused;      /* refusals since the last log line */
+static long long gate_logged_at = -GATE_LOG_S * 1000LL;
+
+static int jni_owns_listener(uint32_t dst, uint16_t dport, uint32_t src, uint16_t sport)
+{
     JNIEnv *env = g_env;
     jclass cls;
     jmethodID mid;
     jboolean ok = JNI_FALSE;
+    long long now = gate_now_ms();
 
-    if (current_config.web_port > 0 && dport == (uint16_t)current_config.web_port &&
-        env != NULL && g_service != NULL && pthread_equal(pthread_self(), g_thread)) {
-        cls = (*env)->GetObjectClass(env, g_service);
-        mid = cls ? (*env)->GetMethodID(env, cls, "ownsListener", "(IIII)Z") : NULL;
-        if (mid != NULL) {
-            ok = (*env)->CallBooleanMethod(env, g_service, mid, (jint)ntohl(dst), (jint)dport,
-                                           (jint)ntohl(src), (jint)sport);
-        }
-        if ((*env)->ExceptionCheck(env)) {
-            (*env)->ExceptionClear(env);
-            ok = JNI_FALSE;
-        }
-        if (cls != NULL) {
-            (*env)->DeleteLocalRef(env, cls);
-        }
-        if (ok) {
-            return 1;
-        }
+    if (gate_cached >= 0 && gate_cached_port == dport && now - gate_cached_at < GATE_CACHE_MS) {
+        return gate_cached;
     }
-    /* A port scan must not flood the log: a port once a minute */
-    if (dport != last_port || time(NULL) - last_log >= 60) {
-        last_port = dport;
-        last_log = time(NULL);
-        log_message(LOG_INFO, "TCP to port %u from the tunnel refused: %s", (unsigned)dport,
-                    dport == (uint16_t)current_config.web_port && current_config.web_port > 0
-                    ? "another app listens there, or none" : "not this app's web port");
+    if (env == NULL || g_service == NULL || !pthread_equal(pthread_self(), g_thread)) {
+        return 0;
+    }
+    cls = (*env)->GetObjectClass(env, g_service);
+    mid = cls ? (*env)->GetMethodID(env, cls, "ownsListener", "(IIII)Z") : NULL;
+    if (mid != NULL) {
+        ok = (*env)->CallBooleanMethod(env, g_service, mid, (jint)ntohl(dst), (jint)dport,
+                                       (jint)ntohl(src), (jint)sport);
+    }
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        ok = JNI_FALSE;
+    }
+    if (cls != NULL) {
+        (*env)->DeleteLocalRef(env, cls);
+    }
+    gate_cached = ok ? 1 : 0;
+    gate_cached_port = dport;
+    gate_cached_at = now;
+    return gate_cached;
+}
+
+static int jni_tcp_gate(uint32_t dst, uint16_t dport, uint32_t src, uint16_t sport)
+{
+    int web = current_config.web_port > 0 && dport == (uint16_t)current_config.web_port;
+    long long now;
+
+    if (web && jni_owns_listener(dst, dport, src, sport)) {
+        return 1;
+    }
+    gate_refused++;
+    now = gate_now_ms();
+    if (now - gate_logged_at >= GATE_LOG_S * 1000LL) {
+        log_message(LOG_INFO, "TCP from the tunnel refused (%lu since the last note), "
+                    "the last to port %u: %s", gate_refused, (unsigned)dport,
+                    web ? "not this app's listener, or none" : "not this app's web port");
+        gate_refused = 0;
+        gate_logged_at = now;
     }
     return 0;
 }
@@ -214,6 +249,7 @@ Java_org_openipc_camex_tunnel_CamexVpnService_nativeRun(JNIEnv *env, jobject thi
     g_service = thiz;
     g_thread = pthread_self();
     tun_set_provider(jni_tun_provider, NULL);
+    gate_cached = -1;
     tcpgate_set(jni_tcp_gate);
     unsetenv("CAMEX_TUN_FD");
 

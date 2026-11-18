@@ -105,13 +105,34 @@ int main(void)
     len = segment(pkt, 0x02, 0);
     pkt[9] = 17;                        /* UDP */
     CHECK(tcpgate_check(pkt, len, rst, sizeof(rst), &rst_len) == 1, "UDP passes");
+    pkt[6] = 0x20; pkt[7] = 0x10;       /* a later fragment of UDP */
+    CHECK(tcpgate_check(pkt, len, rst, sizeof(rst), &rst_len) == 1, "a UDP fragment passes");
     pkt[9] = 6;
-    pkt[6] = 0x20; pkt[7] = 0x10;       /* a later fragment */
-    CHECK(tcpgate_check(pkt, len, rst, sizeof(rst), &rst_len) == 1, "a later fragment passes");
     pkt[0] = 0x60;                      /* IPv6 */
     CHECK(tcpgate_check(pkt, len, rst, sizeof(rst), &rst_len) == 1, "IPv6 passes");
-    CHECK(tcpgate_check(pkt, 30, rst, sizeof(rst), &rst_len) == 1, "a short packet passes");
+    len = segment(pkt, 0x02, 0);
+    CHECK(tcpgate_check(pkt, 30, rst, sizeof(rst), &rst_len) == 1,
+          "a packet shorter than its IP length passes (the kernel drops it)");
     CHECK(asked == 0, "the gate is not asked about those");
+
+    /* TCP in fragments: dropped without asking, even when the gate would accept
+     * (the kernel would put together a SYN the gate never saw whole) */
+    answer = 1;
+    len = segment(pkt, 0x02, 0);
+    pkt[6] = 0x20; pkt[7] = 0x00;       /* a first fragment: more fragments */
+    CHECK(tcpgate_check(pkt, len, rst, sizeof(rst), &rst_len) == 0 && rst_len == 0,
+          "a first TCP fragment is dropped, no RST");
+    pkt[6] = 0x00; pkt[7] = 0x02;       /* a later one: offset 16 bytes */
+    CHECK(tcpgate_check(pkt, len, rst, sizeof(rst), &rst_len) == 0 && rst_len == 0,
+          "a later TCP fragment is dropped");
+    len = segment(pkt, 0x02, 0);
+    pkt[3] = 28;                        /* 8 TCP bytes: the flags not even there */
+    CHECK(tcpgate_check(pkt, 28, rst, sizeof(rst), &rst_len) == 0, "a cut TCP header is dropped");
+    len = segment(pkt, 0x02, 0);
+    pkt[32] = 15 << 4;                  /* a data offset past the end */
+    CHECK(tcpgate_check(pkt, len, rst, sizeof(rst), &rst_len) == 0, "a broken data offset is dropped");
+    CHECK(asked == 0, "the gate is not asked about fragments");
+    answer = 0;
 
     /* A refused SYN with 3 bytes of data: RST|ACK back */
     len = segment(pkt, 0x02, 3);

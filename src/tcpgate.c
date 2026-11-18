@@ -103,7 +103,7 @@ static void build_rst(const uint8_t *ip, size_t ihl, size_t total, uint8_t *out)
 int tcpgate_check(const uint8_t *pkt, size_t len,
                   uint8_t *rst, size_t rst_cap, size_t *rst_len)
 {
-    size_t ihl, total;
+    size_t ihl, total, doff;
     const uint8_t *tcp;
     uint32_t dst, src;
 
@@ -115,15 +115,24 @@ int tcpgate_check(const uint8_t *pkt, size_t len,
     }
     ihl = (size_t)(pkt[0] & 0x0fU) * 4U;
     total = rd16(pkt + 2);
-    if (ihl < 20U || total > len || total < ihl + 20U || pkt[9] != 6) {
-        return 1;                       /* not a whole TCP segment: the kernel judges it */
+    if (ihl < 20U || total > len || total < ihl) {
+        return 1;                       /* malformed: the kernel drops it */
     }
-    if ((rd16(pkt + 6) & 0x1fffU) != 0U) {
-        return 1;                       /* a later fragment */
+    if (pkt[9] != 6) {
+        return 1;                       /* not TCP */
+    }
+    /* TCP in fragments (more fragments, or an offset) is dropped: the kernel
+     * would reassemble a SYN the gate never saw whole (#188 review). The
+     * server's TCP sends whole segments (DF), so nothing real is lost. */
+    if ((rd16(pkt + 6) & 0x3fffU) != 0U || total < ihl + 20U) {
+        return 0;
     }
     tcp = pkt + ihl;
-    if ((tcp[13] & 0x12U) != 0x02U || (size_t)(tcp[12] >> 4) * 4U < 20U ||
-        ihl + (size_t)(tcp[12] >> 4) * 4U > total) {
+    doff = (size_t)(tcp[12] >> 4) * 4U;
+    if (doff < 20U || ihl + doff > total) {
+        return 0;                       /* a broken TCP header: dropped */
+    }
+    if ((tcp[13] & 0x12U) != 0x02U) {
         return 1;                       /* not a new connection */
     }
     memcpy(&dst, pkt + 16, 4);

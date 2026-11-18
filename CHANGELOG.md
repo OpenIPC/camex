@@ -6,6 +6,19 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 4.1.1 — 2026-11-18
+
+- Android library, the gate of 4.1.0 (#187, review of #188):
+  - a minified app (R8) kept no `CamexVpnService.ownsListener()`, which camex finds by name, and
+    refused even its own page: `consumer-rules.pro` keeps it;
+  - TCP in IP fragments is dropped: a SYN split into fragments went past the gate, and the kernel
+    put it together for another app's listener;
+  - Android 5–9: only the listeners that could take the connection count (the tunnel address or
+    any address, `::` and `::ffff:` included), and a `/proc/net/tcp{,6}` table that cannot be read
+    refuses instead of being taken as empty;
+  - the answer is kept for 2 seconds (the check ran on the packet thread for every SYN) and the
+    refusals are logged at most once a minute, with their count.
+
 ## 4.1.0 — 2026-11-18
 
 - Android library: a new TCP connection from the tunnel reaches only the app's own web page

@@ -194,17 +194,29 @@ if passed "$R"; then ok "bad values: FAILED with the field's name"; else bad "ba
 
 consent allow
 $ADB logcat -c
-# another process's listener for the web port of the restart (#187): the shell's nc, where
-# the image has one (toybox from Android 6)
-FOREIGN=
-if $ADB shell 'command -v nc' >/dev/null 2>&1; then
-    $ADB shell 'nc -L -p 8082 echo shell-ok >/dev/null 2>&1 &' >/dev/null 2>&1 &
-    # only a listener that is really there makes the refusal mean something
+# another process's listener for the web port of the restart (#187): the shell's nc where it
+# listens (toybox, Android 7+), else the peer image's busybox, run by its own musl loader
+# (x86_64, as the emulator); each held by an adb shell of its own
+listening_8082() {
     for _ in $(seq 1 10); do
         $ADB shell 'cat /proc/net/tcp /proc/net/tcp6' 2>/dev/null | grep -q ':1F92 [0-9A-F:]* 0A' &&
-            { FOREIGN=8082; break; }
+            return 0
         sleep 1
     done
+    return 1
+}
+FOREIGN=
+$ADB shell 'nc -L -p 8082 echo shell-ok' >/dev/null 2>&1 &
+if listening_8082; then
+    FOREIGN=8082
+else
+    docker run --rm --pull never "$PEER_IMAGE" cat /bin/busybox > "$OUT/w/busybox"
+    docker run --rm --pull never "$PEER_IMAGE" cat /lib/ld-musl-x86_64.so.1 > "$OUT/w/ld-musl"
+    $ADB push /w/busybox /w/ld-musl /data/local/tmp/ >/dev/null 2>&1
+    $ADB shell 'chmod 755 /data/local/tmp/busybox /data/local/tmp/ld-musl' >/dev/null 2>&1
+    $ADB shell '/data/local/tmp/ld-musl /data/local/tmp/busybox nc -lk -p 8082 -e /system/bin/id' \
+        >"$OUT/busybox-nc.log" 2>&1 &
+    listening_8082 && FOREIGN=8082
 fi
 # a refused connection from the peer: busybox nc says nothing and exits with 1 at once
 # (an RST); a lost SYN would hit the 3 s limit (143), an accepted one exit 0
@@ -273,7 +285,7 @@ if [ -n "$FOREIGN" ]; then
     [ "$foreign" = refused ] && ok "TCP to web port $FOREIGN where another process listens: refused" \
         || bad "web port $FOREIGN of another process was not refused ($foreign)"
 else
-    echo "SKIP: no nc in the emulator image: another process's listener not tried"
+    echo "SKIP: no listener of another process on 8082 (neither nc nor busybox ran)"
 fi
 echo "$L" | grep -q "restart OK" && ok "new values while running: camex again in-process, CONNECTED, peer reached" \
     || bad "restart with new values"
