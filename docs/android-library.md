@@ -115,6 +115,25 @@ The values (`fields()`):
 Nothing is stored or logged: the psk is passed to camex and wiped after the
 run, and a reason from `check()` names the field, never its value.
 
+### Connections from the tunnel
+
+A new TCP connection from the tunnel (the server's nginx, another client) reaches
+only the app's own web page: its destination must be `web_port`, and the socket
+listening there must belong to the app's UID. Any other connection gets a TCP
+reset at once, so nginx answers 502 instead of waiting (#187). Android runs one
+VPN at a time, and a connection through the tunnel goes to whichever app listens
+on the port: without the check, one app's tunnel would publish another app's
+page, or any other server on the device, under its name.
+
+- Android 10 and later: the owner comes from
+  `ConnectivityManager.getConnectionOwnerUid()`, which the active VPN app may call.
+- Android 5 to 9: from `/proc/net/tcp` and `/proc/net/tcp6`; a port another UID
+  listens on too is refused.
+- Without `web_port` every new TCP connection from the tunnel is refused. The
+  app's own connections out, their answers, UDP and ICMP are not affected.
+- Our apps put their web page on port 8085; one of them with its tunnel runs on
+  a device at a time.
+
 ### States
 
 | State           | Meaning                                                                                               |

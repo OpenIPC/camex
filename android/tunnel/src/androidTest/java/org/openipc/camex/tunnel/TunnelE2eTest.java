@@ -55,6 +55,7 @@ public class TunnelE2eTest {
         v.put(CamexTunnel.TRANSPORT, args.getString("transport", "UDP"));
         v.put(CamexTunnel.PUBKEY, args.getString("pubkey"));
         v.put(CamexTunnel.PSK, args.getString("psk"));
+        v.put(CamexTunnel.WEB_PORT, args.getString("web", ""));
         return v;
     }
 
@@ -128,7 +129,7 @@ public class TunnelE2eTest {
      * step=run: CONNECTED with an address of the server's pool (or the one named); the VPN has the tunnel subnet and the
      * server's routes but no default route; the peer is reached over TCP through the tunnel;
      * the peer reaches this app's listening socket (0.0.0.0:port) through it; new values restart
- * it; a lost server gives CONNECTING and CONNECTED again when it is back; stop() ends it, a
+ * it; only the web port of this app's own listener takes connections from the tunnel (#187); a lost server gives CONNECTING and CONNECTED again when it is back; stop() ends it, a
  * start after it works, and a stop right after a start wins.
      */
     @Test
@@ -156,6 +157,11 @@ public class TunnelE2eTest {
             }
         });
         accept.start();
+        // a second socket of this app on a port that is not its web port: the tunnel refuses
+        // connections to it (#187)
+        ServerSocket other = new ServerSocket();
+        other.setReuseAddress(true);
+        other.bind(new InetSocketAddress("0.0.0.0", listen + 1));
 
         assertNull(CamexTunnel.consentIntent(context));
         assertTrue(CamexTunnel.start(context, values()));
@@ -191,15 +197,23 @@ public class TunnelE2eTest {
                 incoming.await(90, TimeUnit.SECONDS));
         Log.i(TAG, "incoming OK from " + from.get());
         server.close();
+        // the script tries the other port meanwhile; it says when it is done
+        Thread.sleep(Integer.parseInt(args.getString("probe", "0")) * 1000L);
+        other.close();
 
         // new values while it runs: camex again in the same process (its options read anew),
         // a new name gets a new address from the pool
+        // a new name gets a new address from the pool; its web port is one another process
+        // listens on (the script's shell listener, where there is one): refused (#187)
         Map<String, String> v2 = values();
         v2.put(CamexTunnel.NAME, "app2");
+        String foreign = args.getString("foreign", "");
+        if (!foreign.isEmpty()) v2.put(CamexTunnel.WEB_PORT, foreign);
         assertTrue(CamexTunnel.start(context, v2));
         await(CamexTunnel.State.CONNECTED, me, 90);
         assertEquals("peer-ok", askPeer(peer));
         Log.i(TAG, "restart OK " + CamexTunnel.address());
+        Thread.sleep(Integer.parseInt(args.getString("probe", "0")) * 1000L);
 
         // the server goes away (the script stops it): CONNECTING, the VPN stays; back: CONNECTED
         Log.i(TAG, "server-loss ready");

@@ -6,6 +6,16 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 4.1.0 — 2026-11-18
+
+- Android library: a new TCP connection from the tunnel reaches only the app's own web page
+  (#187). Its destination must be `web_port` and the socket listening there the app's (Android
+  10+: `ConnectivityManager.getConnectionOwnerUid()`, earlier: `/proc/net/tcp`); any other gets a
+  TCP reset back through the tunnel. Before, with several apps embedding the library on one
+  device (one VPN at a time), one app's tunnel delivered connections to another app's server on
+  the same port: the server published another app's page under this client's name. camex on
+  Linux, Windows and macOS is unchanged (`src/tcpgate.c`, a gate only the library's JNI sets).
+
 ## 4.0.2 — 2026-11-18
 
 - Windows build without warnings: the log line of a bad TCP frame length printed its sizes with

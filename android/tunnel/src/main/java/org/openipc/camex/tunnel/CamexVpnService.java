@@ -21,8 +21,16 @@ import android.net.NetworkRequest;
 import android.net.VpnService;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
+import android.os.Process;
 import android.system.OsConstants;
 import android.util.Log;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.ByteArrayOutputStream;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 
 import org.openipc.camex.tunnel.CamexTunnel.State;
 
@@ -280,6 +288,52 @@ public final class CamexVpnService extends VpnService {
         synchronized (lock) {
             if (instance != this || (stopped && s != State.NEEDS_CONSENT)) return;
             CamexTunnel.post(s, addr, error);
+        }
+    }
+
+    /**
+     * Called from native code (the camex thread) for a new TCP connection from the tunnel to
+     * this app's web port (#187): whether this app listens there. Another app's server on the
+     * same port, which the kernel would hand the connection to, is refused (camex answers with
+     * an RST); so is any port when the check fails. Addresses are IPv4 in host byte order.
+     */
+    private boolean ownsListener(int dst, int dport, int src, int sport) {
+        int me = Process.myUid();
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                // The active VPN app may ask; the kernel finds the listener for a new tuple
+                ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+                int uid = cm.getConnectionOwnerUid(OsConstants.IPPROTO_TCP,
+                    new InetSocketAddress(ipv4(dst), dport), new InetSocketAddress(ipv4(src), sport));
+                if (uid == me) return true;
+                Log.i(TAG, "port " + dport + ": listener uid " + uid + ", not this app's; refused");
+                return false;
+            }
+            // Up to Android 9 the tables are readable
+            if (Listeners.ownedBy(dport, me, read("/proc/net/tcp"), read("/proc/net/tcp6"))) return true;
+            Log.i(TAG, "port " + dport + ": no listener of this app; refused");
+            return false;
+        } catch (Exception e) {
+            Log.w(TAG, "port " + dport + ": owner unknown, refused", e);
+            return false;
+        }
+    }
+
+    private static InetAddress ipv4(int a) throws IOException {
+        return InetAddress.getByAddress(new byte[]{
+            (byte) (a >>> 24), (byte) (a >>> 16), (byte) (a >>> 8), (byte) a});
+    }
+
+    /** A /proc file, or null when it cannot be read. */
+    private static String read(String path) {
+        try (InputStream in = new FileInputStream(path)) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] b = new byte[8192];
+            int n;
+            while ((n = in.read(b)) > 0) out.write(b, 0, n);
+            return out.toString("US-ASCII");
+        } catch (IOException e) {
+            return null;
         }
     }
 
