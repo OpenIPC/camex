@@ -83,6 +83,24 @@ gen_server_key "$BUILD_CTX" "$CAMEX_BINARY" || { echo "cannot create a server ke
 printf '[server]\ndomain=%s\n[client CAM-A]\nname=%s\npeer_port=80\n[client CAM-Z]\nname=Gate\n' \
     "$DOMAIN" "$NAME_A" > "$BUILD_CTX/camex.conf"
 echo "$PAGE_PW" > "$BUILD_CTX/page-pw"
+# A device's web server: files of the current directory, and a POST read to its
+# end before the answer (python's http.server answers 501 at once, and nginx,
+# still sending the body, then took the device for offline: 503)
+cat > "$BUILD_CTX/web.py" <<'PY'
+import http.server, sys
+class H(http.server.SimpleHTTPRequestHandler):
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", 0)); got = 0
+        while got < n:
+            d = self.rfile.read(min(65536, n - got))
+            if not d:
+                break
+            got += len(d)
+        body = b"got %d\n" % got
+        self.send_response(200); self.send_header("Content-Length", str(len(body)))
+        self.end_headers(); self.wfile.write(body)
+http.server.ThreadingHTTPServer(("", int(sys.argv[1])), H).serve_forever()
+PY
 cat > "$BUILD_CTX/Dockerfile" <<'DOCKERFILE'
 FROM ubuntu:24.04
 # New clients right after the server starts: no start hold (#81)
@@ -91,6 +109,7 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
         nginx-light curl python3 iputils-ping iproute2 openssl >/dev/null && \
     rm -rf /var/lib/apt/lists/* /etc/nginx/sites-enabled/default
 COPY camex /usr/local/bin/camex
+COPY web.py /usr/local/bin/web.py
 COPY server.key /etc/camex/server.key
 COPY camex.conf /etc/camex/camex.conf
 RUN mkdir -p /var/lib/camex-nginx
@@ -126,7 +145,7 @@ client_web() {  # client_web <name> <port>: serves "I am <name>" on <port> only,
     docker run -d --name "$P-$1" --network "$NET_NAME" --cap-add NET_ADMIN \
         --cap-add MKNOD -e CAMEX_ID="$1" -e WEB="$2" --entrypoint /bin/sh "$IMAGE" -c \
         'mkdir -p /www && echo "I am $CAMEX_ID" > /www/index.html &&
-         (cd /www && python3 -m http.server "$WEB" >/dev/null 2>&1 &) &&
+         (cd /www && python3 /usr/local/bin/web.py "$WEB" >/dev/null 2>&1 &) &&
          exec /usr/local/bin/camex-run --mode client --auto --name "$CAMEX_ID" \
              --server-host '"$P-srv"' --port 5800 --server-pubkey '"$SERVER_PUBKEY"' \
              --psk '"$PSK"' --keepalive 2 --web-port "$WEB"' >/dev/null
@@ -564,13 +583,13 @@ check $? "nginx reaches WEB-1's page on its own port"
 docker exec "$P-srv" camex --status --json | grep -q '"id":"WEB-1"[^}]*"web_port":8080' &&
     docker exec "$P-srv" camex --status | grep -E '^WEB-1 ' | grep -q ':8080'
 check $? "--status and --json show its web port"
-# 2 MB through nginx to a device: nginx passes it on (the device's own
-# answer, 501 from python's http.server), no 413 of its 1 MB default
-code=$(docker exec "$P-srv" sh -c 'head -c 2097152 /dev/zero > /tmp/big &&
-    curl -s -o /dev/null -w "%{http_code}" -m 20 -H "Host: '"$WEB_HOST"'" \
-        --data-binary @/tmp/big http://127.0.0.1/')
-[ "$code" != 413 ] && [ "$code" != 503 ] && [ -n "$code" ] && [ "$code" != 000 ]
-check $? "a 2 MB upload goes through nginx to the device (got $code, not 413)"
+# 2 MB through nginx to a device: nginx passes all of it on (the device
+# answers with what it got), no 413 of its 1 MB default
+got=$(docker exec "$P-srv" sh -c 'head -c 2097152 /dev/zero > /tmp/big &&
+    curl -s -w " %{http_code}" -m 20 -H "Host: '"$WEB_HOST"'" \
+        --data-binary @/tmp/big http://127.0.0.1/' | tr -d '\n')
+[ "$got" = "got 2097152 200" ]
+check $? "a 2 MB upload goes through nginx to the device (got: ${got:-nothing}; want: got 2097152 200)"
 docker rm -f "$P-WEB-1" >/dev/null
 
 echo "== 11. the start page refreshes itself in place (#142)"

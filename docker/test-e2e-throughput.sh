@@ -8,7 +8,7 @@
 # A server (UDP and TCP) and a client per transport, each container with a
 # netem delay on its link (30 ms each way, 60 ms round trip). A TCP stream
 # inside the tunnel carries SIZE_KB from the server's side to the client
-# and back; every transfer must finish within its time limit (MIN_KBPS).
+# and back; every transfer must arrive whole at MIN_KBPS or faster.
 # Before #180 the server sent at most one frame per TCP connection while
 # its socket was busy and dropped the rest: server-to-client over TCP
 # crawled at ~10 KB/s.
@@ -104,7 +104,7 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
 COPY camex /usr/local/bin/camex
 COPY server.key /etc/camex/server.key
 COPY sink.py source.py /usr/local/bin/
-RUN printf '#!/bin/sh\nmkdir -p /dev/net\n[ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200\ntc qdisc add dev eth0 root netem delay ${DELAY_MS:-30}ms 2>/dev/null\nexec /usr/local/bin/camex "$@"\n' \
+RUN printf '#!/bin/sh\nmkdir -p /dev/net\n[ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200\ntc qdisc add dev eth0 root netem delay ${DELAY_MS:-30}ms || { echo \"cannot add the netem delay\" >&2; exit 1; }\nexec /usr/local/bin/camex "$@"\n' \
         > /usr/local/bin/camex-run && chmod +x /usr/local/bin/camex-run
 ENTRYPOINT ["/usr/local/bin/camex-run"]
 DOCKERFILE
@@ -131,8 +131,18 @@ for _ in $(seq 1 20); do
     [ -n "$(tun_addr "$P-udp")" ] && [ -n "$(tun_addr "$P-tcp")" ] && break
     sleep 1
 done
-rtt=$(docker exec "$P-udp" ping -c 3 -q 10.200.0.1 2>/dev/null | sed -n 's|.*= [0-9.]*/\([0-9.]*\)/.*|\1|p')
+# the address comes before the session: ping until the server answers
+for _ in $(seq 1 20); do
+    rtt=$(docker exec "$P-udp" ping -c 3 -q -W 2 10.200.0.1 2>/dev/null |
+        sed -n 's|.*= [0-9.]*/\([0-9.]*\)/.*|\1|p')
+    [ -n "$rtt" ] && break
+    sleep 1
+done
 echo "== tunnels up (round trip through the tunnel ${rtt:-?} ms), ${SIZE_KB} KiB each way, at least ${MIN_KBPS} KB/s"
+# Without the delay the test proves nothing: the round trip must be at least
+# the two one-way delays (a container whose tc failed has exited already)
+awk -v r="${rtt:-0}" -v d="$DELAY_MS" 'BEGIN { exit !(r + 0 >= 2 * d) }'
+check $? "the link has its delay (round trip ${rtt:-?} ms, at least $((2 * DELAY_MS)) ms)"
 
 limit=$(( SIZE_KB / MIN_KBPS + 3 ))
 transfer() {  # transfer <from container> <to container> <to address> <label>
