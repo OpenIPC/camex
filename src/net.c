@@ -637,8 +637,8 @@ int net_tcp_recv_frame(int fd, uint8_t *buffer, size_t size, size_t *len,
         }
 
         if (state->body_len == 0U || state->body_len > size) {
-            log_message(LOG_ERR, "net_tcp_recv_frame: bad body_len=%zu (size cap=%zu), header bytes=%02x %02x, fd=%d",
-                        state->body_len, size, state->header[0], state->header[1], fd);
+            log_message(LOG_ERR, "net_tcp_recv_frame: bad body_len=%lu (size cap=%lu), header bytes=%02x %02x, fd=%d",
+                        (unsigned long)state->body_len, (unsigned long)size, state->header[0], state->header[1], fd);
             /* Stream is desynced beyond recovery for this connection —
              * caller treats this as a hard error and tears the connection
              * down, so no point preserving state further. */
