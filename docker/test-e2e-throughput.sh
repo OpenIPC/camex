@@ -131,7 +131,13 @@ for _ in $(seq 1 20); do
     [ -n "$(tun_addr "$P-udp")" ] && [ -n "$(tun_addr "$P-tcp")" ] && break
     sleep 1
 done
-rtt=$(docker exec "$P-udp" ping -c 3 -q 10.200.0.1 2>/dev/null | sed -n 's|.*= [0-9.]*/\([0-9.]*\)/.*|\1|p')
+# the address comes before the session: ping until the server answers
+for _ in $(seq 1 20); do
+    rtt=$(docker exec "$P-udp" ping -c 3 -q -W 2 10.200.0.1 2>/dev/null |
+        sed -n 's|.*= [0-9.]*/\([0-9.]*\)/.*|\1|p')
+    [ -n "$rtt" ] && break
+    sleep 1
+done
 echo "== tunnels up (round trip through the tunnel ${rtt:-?} ms), ${SIZE_KB} KiB each way, at least ${MIN_KBPS} KB/s"
 # Without the delay the test proves nothing: the round trip must be at least
 # the two one-way delays (a container whose tc failed has exited already)
