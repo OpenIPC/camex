@@ -16,6 +16,7 @@
 #include "tun.h"
 #include "config.h"
 #include "camex.h"
+#include "tcpgate.h"
 
 #include <errno.h>
 #include <stdlib.h>
@@ -262,6 +263,18 @@ int client_handle_net_packet(const uint8_t *buffer, size_t len)
     reconnect_backoff = 0;
     if (plain_len == 0U) {
         return 0;   /* keepalive answer */
+    }
+    if (tcpgate_active()) {
+        uint8_t rst[TCPGATE_RST_LEN];
+        size_t rst_len;
+
+        /* A connection the app does not take (#187): refused at once */
+        if (!tcpgate_check(plain, plain_len, rst, sizeof(rst), &rst_len)) {
+            if (rst_len != 0U) {
+                (void)client_handle_tun_packet(rst, rst_len);
+            }
+            return 0;
+        }
     }
     return packet_write(plain, plain_len);
 }

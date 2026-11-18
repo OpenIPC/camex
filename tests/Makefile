@@ -9,7 +9,7 @@ SRC     = ../src
 CFLAGS  += -I$(SRC) -std=c99 -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L \
            -Wall -Wextra -Wshadow -Wstrict-prototypes -O1 -g $(EXTRA_CFLAGS)
 
-TESTS = test_net_tcp test_proto test_log test_packet test_noise test_keys test_session test_nginxmap
+TESTS = test_net_tcp test_proto test_log test_packet test_noise test_keys test_session test_nginxmap test_tcpgate
 
 # Rebuild the tests when any project header changes
 HEADERS = $(wildcard $(SRC)/*.h)
@@ -27,6 +27,9 @@ test_proto: test_proto.c $(SRC)/proto.c $(SRC)/config.c $(SRC)/nginxmap.c $(SRC)
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
 
 test_nginxmap: test_nginxmap.c $(SRC)/nginxmap.c $(HEADERS)
+	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
+
+test_tcpgate: test_tcpgate.c $(SRC)/tcpgate.c $(HEADERS)
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
 
 test_log: test_log.c $(SRC)/log.c $(HEADERS)

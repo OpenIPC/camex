@@ -21,7 +21,9 @@
 #                 the system dialog, its OK tapped): CONNECTED
 #                 with the address, the routes as above and no default route, TCP out to
 #                 the peer through the tunnel, TCP in from the peer to the app's listening
-#                 socket 0.0.0.0:8080; new values while running (camex again in-process);
+#                 socket 0.0.0.0:8080, its web port; its other socket 8081 refused, and so is
+#                 the web port of the restart, 8082, where the shell's nc listens (#187);
+#                 new values while running (camex again in-process);
 #                 the server stopped (CONNECTING) and started (CONNECTED); stop() and the
 #                 VPN gone; start() after stop(); stop() right after start().
 #
@@ -192,12 +194,34 @@ if passed "$R"; then ok "bad values: FAILED with the field's name"; else bad "ba
 
 consent allow
 $ADB logcat -c
-instrument run -e name app -e peer "$PEER_IP:9000" -e listen 8080 \
+# another process's listener for the web port of the restart (#187): the shell's nc, where
+# the image has one (toybox from Android 6)
+FOREIGN=
+if $ADB shell 'command -v nc' >/dev/null 2>&1; then
+    $ADB shell 'nc -L -p 8082 echo shell-ok >/dev/null 2>&1 &' >/dev/null 2>&1 &
+    # only a listener that is really there makes the refusal mean something
+    for _ in $(seq 1 10); do
+        $ADB shell 'cat /proc/net/tcp /proc/net/tcp6' 2>/dev/null | grep -q ':1F92 [0-9A-F:]* 0A' &&
+            { FOREIGN=8082; break; }
+        sleep 1
+    done
+fi
+# a refused connection from the peer: busybox nc says nothing and exits with 1 at once
+# (an RST); a lost SYN would hit the 3 s limit (143), an accepted one exit 0
+refused() {
+    docker run --rm --net "container:$PEER" --pull never "$PEER_IMAGE" \
+        sh -c "timeout 3 nc -w 5 $1 $2 </dev/null >/dev/null 2>&1; echo rc=\$?" 2>/dev/null |
+        grep -q '^rc=1$'
+}
+instrument run -e name app -e peer "$PEER_IP:9000" -e listen 8080 -e web 8080 -e probe 15 \
+    ${FOREIGN:+-e foreign $FOREIGN} \
     -e routes "10.200.0.0/24,$SUBNET,192.0.2.0/24" > "$OUT/run.log" 2>&1 &
 RUN=$!
 # in: as soon as the app listens in the tunnel, the peer connects to it
 got=
 APP_IP=
+other=
+foreign=
 for i in $(seq 1 120); do
     APP_IP=$($ADB logcat -d -s CAMEX_E2E 2>/dev/null | sed -n 's/.*listening \([0-9.]*\):8080.*/\1/p' | tail -1)
     if [ -n "$APP_IP" ]; then
@@ -207,6 +231,8 @@ for i in $(seq 1 120); do
             [ "$got" = app-ok ] && break
             sleep 1
         done
+        # the app's other socket, not its web port: refused by the tunnel (#187)
+        refused "$APP_IP" 8081 && other=refused
         break
     fi
     kill -0 $RUN 2>/dev/null || break
@@ -216,6 +242,11 @@ done
 lost=
 for i in $(seq 1 300); do
     LOG=$($ADB logcat -d -s CAMEX_E2E 2>/dev/null)
+    APP2_IP=$(sed -n 's/.*restart OK \([0-9.]*\).*/\1/p' <<<"$LOG" | tail -1)
+    if [ -n "$FOREIGN" ] && [ -n "$APP2_IP" ] && [ -z "$foreign" ]; then
+        foreign=tried
+        refused "$APP2_IP" "$FOREIGN" && foreign=refused
+    fi
     if grep -q "server-loss ready" <<<"$LOG"; then
         if [ -z "$lost" ]; then docker stop -t 1 "$SRV" >/dev/null; lost=1; fi
         if grep -q "lost OK" <<<"$LOG"; then docker start "$SRV" >/dev/null; break; fi
@@ -236,6 +267,14 @@ echo "$L" | grep -q "outgoing OK" && ok "TCP to the peer $PEER_IP through the tu
     || bad "TCP to the peer through the tunnel"
 [ "$got" = app-ok ] && ok "TCP from the peer to the app's 0.0.0.0:8080 through the tunnel" \
     || bad "TCP from the peer to the app's listening socket"
+[ "$other" = refused ] && ok "TCP from the peer to the app's other port 8081 (not its web port): refused" \
+    || bad "the app's other port 8081 was not refused"
+if [ -n "$FOREIGN" ]; then
+    [ "$foreign" = refused ] && ok "TCP to web port $FOREIGN where another process listens: refused" \
+        || bad "web port $FOREIGN of another process was not refused ($foreign)"
+else
+    echo "SKIP: no nc in the emulator image: another process's listener not tried"
+fi
 echo "$L" | grep -q "restart OK" && ok "new values while running: camex again in-process, CONNECTED, peer reached" \
     || bad "restart with new values"
 echo "$L" | grep -q "lost OK" && ok "server stopped: CONNECTING" || bad "no CONNECTING when the server went away"

@@ -27,11 +27,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <arpa/inet.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "camex.h"
 #include "client.h"
 #include "log.h"
+#include "tcpgate.h"
 #include "tun.h"
 
 extern int camex_main(int argc, char *argv[]);
@@ -75,6 +78,48 @@ int __wrap_socket(int domain, int type, int protocol)
         }
     }
     return fd;
+}
+
+/* The gate for new TCP connections from the tunnel (#187): only to the web
+ * port, and only when CamexVpnService.ownsListener() finds this app's socket
+ * listening there; other apps' servers on the device stay out of reach. */
+static int jni_tcp_gate(uint32_t dst, uint16_t dport, uint32_t src, uint16_t sport)
+{
+    static uint16_t last_port;
+    static time_t last_log;
+    JNIEnv *env = g_env;
+    jclass cls;
+    jmethodID mid;
+    jboolean ok = JNI_FALSE;
+
+    if (current_config.web_port > 0 && dport == (uint16_t)current_config.web_port &&
+        env != NULL && g_service != NULL && pthread_equal(pthread_self(), g_thread)) {
+        cls = (*env)->GetObjectClass(env, g_service);
+        mid = cls ? (*env)->GetMethodID(env, cls, "ownsListener", "(IIII)Z") : NULL;
+        if (mid != NULL) {
+            ok = (*env)->CallBooleanMethod(env, g_service, mid, (jint)ntohl(dst), (jint)dport,
+                                           (jint)ntohl(src), (jint)sport);
+        }
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            ok = JNI_FALSE;
+        }
+        if (cls != NULL) {
+            (*env)->DeleteLocalRef(env, cls);
+        }
+        if (ok) {
+            return 1;
+        }
+    }
+    /* A port scan must not flood the log: a port once a minute */
+    if (dport != last_port || time(NULL) - last_log >= 60) {
+        last_port = dport;
+        last_log = time(NULL);
+        log_message(LOG_INFO, "TCP to port %u from the tunnel refused: %s", (unsigned)dport,
+                    dport == (uint16_t)current_config.web_port && current_config.web_port > 0
+                    ? "another app listens there, or none" : "not this app's web port");
+    }
+    return 0;
 }
 
 /* Calls CamexVpnService.establishTun(ip, prefix, mtu, routes) -> fd or -1 */
@@ -169,6 +214,7 @@ Java_org_openipc_camex_tunnel_CamexVpnService_nativeRun(JNIEnv *env, jobject thi
     g_service = thiz;
     g_thread = pthread_self();
     tun_set_provider(jni_tun_provider, NULL);
+    tcpgate_set(jni_tcp_gate);
     unsetenv("CAMEX_TUN_FD");
 
     argc = (*env)->GetArrayLength(env, jargv);
@@ -196,6 +242,7 @@ Java_org_openipc_camex_tunnel_CamexVpnService_nativeRun(JNIEnv *env, jobject thi
     ret = camex_main((int)argc, argv);
 
 out:
+    tcpgate_set(NULL);
     tun_set_provider(NULL, NULL);
     g_env = NULL;
     g_service = NULL;
