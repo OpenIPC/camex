@@ -50,6 +50,41 @@ public class ValuesTest {
         assertEquals(Field.Kind.SECRET, Values.FIELDS.get(4).kind);
         assertFalse(Values.FIELDS.get(5).required);
         assertTrue(Values.FIELDS.get(0).required);
+        // short labels, defaults as hints (2026-11-18)
+        assertEquals("Client name", Values.FIELDS.get(1).label);
+        assertEquals("Proto", t.label);
+        assertEquals("empty: the server's", Values.FIELDS.get(5).hint);
+        assertEquals("empty: 10", Values.FIELDS.get(6).hint);
+        assertEquals("empty: 20", Values.FIELDS.get(7).hint);
+        assertEquals("", Values.FIELDS.get(1).hint);
+        assertEquals("Show the key", Field.SHOW_SECRET);
+    }
+
+    @Test
+    public void defaultName() {
+        assertEquals("camex-3f2a", Values.defaultName("camex", "9a8b7c6d5e4f3f2a"));
+        assertEquals("microsnander-3f2a", Values.defaultName("MicroSNANDer", "9A8B3F2A"));
+        assertEquals("vectis", Values.defaultName("vectis", null));
+        assertEquals("vectis", Values.defaultName("vectis", "ab"));
+        assertEquals("camex-0001", Values.defaultName(" ", "0001"));
+        String n = Values.defaultName("a-very-long-application-name-indeed", "12345678");
+        assertTrue(n, n.length() <= 31 && n.endsWith("-5678"));
+        assertNull(Values.check(withName(Values.defaultName("decoder", "ffffffffffff3f2a"))));
+    }
+
+    @Test
+    public void fieldsWithName() {
+        java.util.List<Field> f = Values.fields("decoder-3f2a");
+        assertEquals("decoder-3f2a", f.get(1).initial);
+        assertEquals("Client name", f.get(1).label);
+        assertEquals("", Values.FIELDS.get(1).initial);   // the shared list is not changed
+        assertEquals(Values.FIELDS.size(), f.size());
+    }
+
+    private static java.util.Map<String, String> withName(String name) {
+        java.util.Map<String, String> v = good();
+        v.put(Values.NAME, name);
+        return v;
     }
 
     @Test

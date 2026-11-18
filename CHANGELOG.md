@@ -6,6 +6,19 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 4.2.0 — 2026-11-19
+
+- Android library, settings (owner's decisions 2026-11-18, the interface review):
+  - short labels: `Client name`, `Proto` (was Transport), `MTU (576–9000)`,
+    `Keepalive, sec (0–3600)`, `Server timeout, sec (5–3600)`, `Web port for nginx (1–65535)`;
+    what camex takes for an empty field is the field's new `hint` (`empty: the server's`,
+    `empty: 10`, `empty: 20`, `empty: none`);
+  - the client name of a new setting: `CamexTunnel.defaultName(context, app)`, the app's name and
+    the last 4 characters of the device's ANDROID_ID (`camex-3f2a`, `vectis-3f2a`), and
+    `CamexTunnel.fields(context, app)` with it as the name's initial value;
+  - the pre-shared key is shown hidden, with `Field.SHOW_SECRET` ("Show the key") under it, the
+    same in every app.
+
 ## 4.1.2 — 2026-11-18
 
 - Android library, the gate (#187, review of #189): an acceptance is no longer kept. 4.1.1 kept the

@@ -21,13 +21,17 @@ public final class Field {
         TEXT,
         /** host:port */
         HOST_PORT,
-        /** a secret: hidden on the screen, kept by the app as it keeps its secrets */
+        /** a secret: hidden on the screen (dots) with a check box {@link #SHOW_SECRET} under it,
+         *  the same in every app; kept by the app as it keeps its secrets */
         SECRET,
         /** one of {@link #choices} */
         CHOICE,
         /** on or off */
         FLAG,
     }
+
+    /** The label of the check box under a {@link Kind#SECRET} field that shows it. */
+    public static final String SHOW_SECRET = "Show the key";
 
     /** The key of the value in the values Map. */
     public final String key;
@@ -40,31 +44,44 @@ public final class Field {
     public final List<String> choices;
     /** False for a setting that may stay empty (camex then takes its default). */
     public final boolean required;
+    /** The hint of an empty field: what camex takes then ("empty: 10"), or "" for none. */
+    public final String hint;
 
     private Field(String key, String label, Kind kind, String initial, boolean required,
-                  String... choices) {
+                  String hint, String... choices) {
         this.key = key;
         this.label = label;
         this.kind = kind;
         this.initial = initial;
         this.required = required;
+        this.hint = hint;
         this.choices = Collections.unmodifiableList(Arrays.asList(choices));
     }
 
     static Field text(String key, String label, String initial, boolean required) {
-        return new Field(key, label, Kind.TEXT, initial, required);
+        return new Field(key, label, Kind.TEXT, initial, required, "");
+    }
+
+    static Field text(String key, String label, String hint) {
+        return new Field(key, label, Kind.TEXT, "", false, hint);
     }
 
     static Field hostPort(String key, String label, String initial) {
-        return new Field(key, label, Kind.HOST_PORT, initial, true);
+        return new Field(key, label, Kind.HOST_PORT, initial, true, "");
     }
 
     static Field secret(String key, String label) {
-        return new Field(key, label, Kind.SECRET, "", true);
+        return new Field(key, label, Kind.SECRET, "", true, "");
     }
 
     static Field choice(String key, String label, String initial, String... choices) {
-        return new Field(key, label, Kind.CHOICE, initial, true, choices);
+        return new Field(key, label, Kind.CHOICE, initial, true, "", choices);
+    }
+
+    /** This field with another initial value. */
+    Field withInitial(String value) {
+        return new Field(key, label, kind, value, required, hint,
+                choices.toArray(new String[0]));
     }
 
     @Override
