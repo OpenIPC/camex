@@ -474,7 +474,7 @@ check_all() {
             if [ -n "$INDEX" ] && command -v curl >/dev/null 2>&1; then
                 b=$(probe "$dom")
                 case "$b" in
-                    *"Camex Devices"*)
+                    *'name="camex-version"'*|*"Camex Devices"*)
                         warn "the start page on $dom has no password: see" \
                              "auth_basic in nginx-camex.conf"
                         ok "nginx serves the start page on $dom" ;;
@@ -496,7 +496,7 @@ check_all() {
                                 b=$(probe "$dom" -K "$kf") || b=
                             [ -n "${kf-}" ] && rm -f "$kf"
                             case "$b" in
-                                *"Camex Devices"*)
+                                *'name="camex-version"'*|*"Camex Devices"*)
                                     ok "nginx serves the start page on $dom" ;;
                                 *"
 401")

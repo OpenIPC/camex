@@ -1,7 +1,10 @@
 /*
  * Copyright (c) OpenIPC  https://openipc.org  MIT License
  *
- * MainActivity.java — camex VPN launcher for Android, on the tunnel library (#172)
+ * MainActivity.java — camex VPN launcher for Android, on the tunnel library (#172), in brass
+ * (brand brass 1.3.0, the interface review of 2026-11-18): the heading with the version, the
+ * board TUNNEL / SERVER / CLIENT / PROTO with its lamp, START, STOP and SETTINGS in a row, the
+ * check boxes Start on boot and Show log, the tunnel's log under the panel
  */
 package org.openipc.camex;
 
@@ -12,18 +15,23 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.Gravity;
+import android.view.View;
 import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import org.openipc.camex.tunnel.CamexTunnel;
 
-import java.util.HashMap;
 import java.util.Map;
 
 public class MainActivity extends Activity {
-    private TextView statusView;
+    private Brass.Row rowTunnel, rowServer, rowClient, rowProto;
     private Button startButton, stopButton, settingsButton;
+    private TextView logView;
 
     // The tunnel's state from the library (it reconnects by itself until Stop)
     private final CamexTunnel.Listener listener = this::showState;
@@ -31,15 +39,89 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
+        TunnelLog.listen();
+        int pad = Brass.dp(this, 16);
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setPadding(pad, pad, pad, pad);
 
-        statusView = findViewById(R.id.status);
-        startButton = findViewById(R.id.btn_start);
-        stopButton = findViewById(R.id.btn_stop);
-        settingsButton = findViewById(R.id.btn_settings);
+        String version;
+        try {
+            version = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (PackageManager.NameNotFoundException e) {
+            version = CamexTunnel.VERSION;
+        }
+        page.addView(Brass.titleRow(this, getString(R.string.app_name), version));
+        TextView sub = new TextView(this);
+        sub.setText(R.string.subtitle);
+        sub.setTextColor(Brass.color(this, R.color.dim));
+        sub.setGravity(Gravity.CENTER_HORIZONTAL);
+        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2);
+        sp.setMargins(0, 0, 0, pad);
+        page.addView(sub, sp);
+
+        LinearLayout panel = Brass.panel(this);
+        page.addView(panel);
+        LinearLayout board = new LinearLayout(this);
+        board.setOrientation(LinearLayout.VERTICAL);
+        board.setBackgroundResource(R.drawable.display);
+        int bp = Brass.dp(this, 12);
+        board.setPadding(bp, bp - Brass.dp(this, 3), bp, bp - Brass.dp(this, 3));
+        rowTunnel = new Brass.Row(this, "TUNNEL");
+        rowServer = new Brass.Row(this, "SERVER");
+        rowClient = new Brass.Row(this, "CLIENT");
+        rowProto = new Brass.Row(this, "PROTO");
+        for (Brass.Row r : new Brass.Row[]{rowTunnel, rowServer, rowClient, rowProto})
+            board.addView(r.view);
+        LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(-1, -2);
+        bl.setMargins(Brass.dp(this, 6), 0, Brass.dp(this, 6), Brass.dp(this, 6));
+        panel.addView(board, bl);
+
+        // three single buttons: one row (the approved mock-up)
+        LinearLayout buttons = new LinearLayout(this);
+        panel.addView(buttons);
+        startButton = Brass.button(this, R.string.btn_start);
+        stopButton = Brass.button(this, R.string.btn_stop);
+        settingsButton = Brass.button(this, R.string.btn_settings);
+        for (Button b : new Button[]{startButton, stopButton, settingsButton})
+            buttons.addView(b, Brass.margins(this, 0, -2, 1));
+
+        // under the buttons, in a row: Start on boot, Show log (both off by default)
+        SharedPreferences prefs = Prefs.of(this);
+        LinearLayout checks = new LinearLayout(this);
+        CheckBox boot = new CheckBox(this);
+        boot.setText(R.string.start_on_boot);
+        boot.setChecked(prefs.getBoolean(Prefs.START_ON_BOOT, false));
+        boot.setOnCheckedChangeListener((b, on) -> prefs.edit().putBoolean(Prefs.START_ON_BOOT, on).apply());
+        checks.addView(boot, new LinearLayout.LayoutParams(-2, -2));
+        checks.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
+        CheckBox showLog = new CheckBox(this);
+        showLog.setText(R.string.show_log);
+        showLog.setChecked(prefs.getBoolean(Prefs.SHOW_LOG, false));
+        checks.addView(showLog, new LinearLayout.LayoutParams(-2, -2));
+        checks.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
+        panel.addView(checks);
+
+        logView = Brass.display(this);
+        logView.setTextSize(11);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(0, pad, 0, 0);
+        page.addView(logView, lp);
+        showLog.setOnCheckedChangeListener((b, on) -> {
+            prefs.edit().putBoolean(Prefs.SHOW_LOG, on).apply();
+            showLog(on);
+        });
+        showLog(showLog.isChecked());
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(page);
+        setContentView(scroll);
 
         startButton.setOnClickListener(v -> startVpn());
-        stopButton.setOnClickListener(v -> CamexTunnel.stop());
+        stopButton.setOnClickListener(v -> {
+            TunnelLog.add("stop");
+            CamexTunnel.stop();
+        });
         settingsButton.setOnClickListener(v -> openSettings());
 
         CamexTunnel.setNotificationLook(getString(R.string.app_name), 0);
@@ -49,13 +131,21 @@ public class MainActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
+        // the listener gives the state at once; the settings may have changed meanwhile
         CamexTunnel.addListener(listener);
+        TunnelLog.onChange(() -> logView.setText(TunnelLog.text()));
+        logView.setText(TunnelLog.text());
     }
 
     @Override
     protected void onStop() {
         CamexTunnel.removeListener(listener);
+        TunnelLog.onChange(null);
         super.onStop();
+    }
+
+    private void showLog(boolean on) {
+        logView.setVisibility(on ? View.VISIBLE : View.GONE);
     }
 
     private void openSettings() {
@@ -67,30 +157,13 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                     != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{ Manifest.permission.POST_NOTIFICATIONS }, 1);
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
         }
-    }
-
-    /** The saved settings as the library's values. */
-    static Map<String, String> values(SharedPreferences p) {
-        Map<String, String> v = new HashMap<>();
-        v.put(CamexTunnel.SERVER, p.getString("server_host", "") + ":"
-            + p.getInt("server_port", SettingsActivity.DEFAULT_PORT));
-        v.put(CamexTunnel.NAME, p.getString("name", SettingsActivity.DEFAULT_NAME));
-        v.put(CamexTunnel.TRANSPORT, "tcp".equals(p.getString("transport", "udp")) ? "TCP" : "UDP");
-        v.put(CamexTunnel.PUBKEY, p.getString("server_pubkey", ""));
-        v.put(CamexTunnel.PSK, p.getString("psk", ""));
-        v.put(CamexTunnel.MTU, String.valueOf(p.getInt("mtu", SettingsActivity.DEFAULT_MTU)));
-        v.put(CamexTunnel.KEEPALIVE,
-            String.valueOf(p.getInt("keepalive", SettingsActivity.DEFAULT_KEEPALIVE)));
-        v.put(CamexTunnel.SERVER_TIMEOUT,
-            String.valueOf(p.getInt("server_timeout", SettingsActivity.DEFAULT_TIMEOUT)));
-        return v;
     }
 
     private void startVpn() {
         // Protocol v2 needs both keys and a server: without them camex cannot start
-        String[] bad = CamexTunnel.check(values(getSharedPreferences("camex", MODE_PRIVATE)));
+        String[] bad = CamexTunnel.check(Prefs.load(this));
         if (bad != null) {
             Toast.makeText(this, getString(R.string.err_settings, bad[0], bad[1]),
                 Toast.LENGTH_LONG).show();
@@ -109,34 +182,50 @@ public class MainActivity extends Activity {
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         if (result == RESULT_OK) {
-            CamexTunnel.start(this, values(getSharedPreferences("camex", MODE_PRIVATE)));
+            TunnelLog.add("start");
+            CamexTunnel.start(this, Prefs.load(this));
         }
     }
 
     private void showState(CamexTunnel.State state, String address, String error) {
         boolean on = state == CamexTunnel.State.CONNECTING || state == CamexTunnel.State.CONNECTED;
+        // red only for an error; a stopped tunnel: a lamp without colour
+        int lamp;
         String text;
         switch (state) {
             case CONNECTED:
-                text = getString(R.string.status_connected) + " · " + address;
+                lamp = R.color.green;
+                text = "CONNECTED · " + address;
                 break;
             case CONNECTING:
-                text = getString(R.string.status_connecting);
+                lamp = R.color.amber;
+                text = "CONNECTING";
                 break;
             case NEEDS_CONSENT:
-                text = getString(R.string.status_needs_consent);
+                lamp = R.color.amber;
+                text = "VPN CONSENT NEEDED";
                 break;
             case FAILED:
-                text = getString(R.string.status_failed);
+                lamp = R.color.red;
+                text = "FAILED";
                 break;
             default:
-                text = getString(R.string.status_disconnected);
+                lamp = R.color.dim;
+                text = "STOPPED";
         }
         if (!error.isEmpty() && state != CamexTunnel.State.CONNECTED) text += "\n" + error;
-        statusView.setText(text);
+        rowTunnel.set(lamp, text);
+
+        Map<String, String> v = Prefs.load(this);
+        String server = v.get(CamexTunnel.SERVER);
+        rowServer.set(0, server.isEmpty() ? "NOT SET" : server);
+        rowClient.set(0, v.get(CamexTunnel.NAME));
+        String mtu = v.get(CamexTunnel.MTU);
+        rowProto.set(0, v.get(CamexTunnel.TRANSPORT) + (mtu.isEmpty() ? "" : " · MTU " + mtu));
+
         startButton.setEnabled(!on);
         stopButton.setEnabled(on);
-        // Settings only editable while disconnected.
+        // Settings only editable while disconnected
         settingsButton.setEnabled(!on);
     }
 }

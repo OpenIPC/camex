@@ -5,26 +5,38 @@
 `camex-android.apk` of the [`latest`](../README.md#permanent-links) release,
 Android 5.0 and later. The app connects in auto mode: the server sends the
 address, routes and MTU. It is built on the [Android library](android-library.md)
-(since 3.19.0, #172): after **Start** it reconnects by itself until **Stop**, and the
-main screen shows the state (connecting, connected with the address, VPN
-permission needed, or why it did not start).
+(since 3.19.0, #172): after **Start** it reconnects by itself until **Stop**. The
+screens are in brass (brand brass 1.3.0, 4.3.0): the main screen has the board —
+**TUNNEL** with its lamp (green connected with the address, amber connecting or
+waiting for the VPN permission, red failed with the reason, colourless stopped),
+**SERVER**, **CLIENT** and **PROTO** — and **START**, **STOP** and **SETTINGS** in a
+row; under them **Start on boot** (the tunnel with the saved settings after a
+reboot, once the VPN permission was given) and **Show log** (the tunnel's states,
+the address and the reasons of failures and reconnects, under the panel); both
+are off at first.
 
-| Main screen                             | Settings                                 |
+| Main screen                             | Settings (opened by a link)              |
 |-----------------------------------------|------------------------------------------|
 | ![Main screen](images/android-main.png) | ![Settings](images/android-settings.png) |
 
 ## Settings
 
-- **Server host / port** — the camex server.
-- **Client name** — the client ID, i.e. the `[client ID]` block on the server.
-- **Transport** — UDP (the default) or TCP, for networks that block UDP; a
+One **SETTINGS** window, the section **CAMEX** built from the
+[library's fields](android-library.md#using-it): their order, labels and the
+defaults shown in an empty field are the same in every app on camex.
+
+- **Server (host:port)** — the camex server, its port 5800 by default.
+- **Client name** — the client ID, i.e. the `[client ID]` block on the server; a
+  new setting starts as `camex-` and the last 4 characters of the device's
+  ANDROID_ID (`camex-3f2a`); an empty name is not saved.
+- **Proto** — UDP (the default) or TCP, for networks that block UDP; a
   server on both (the default since camex 4.0.0) takes either, an older one
   only the one it was started with.
 - **Server public key** and **Pre-shared key** — `--server-pubkey --psk`; the
-  key must match the client's `psk=` (or the global key).
-- **Advanced** — MTU, keepalive and server timeout.
-
-![Advanced settings](images/android-settings-advanced.png)
+  key must match the client's `psk=` (or the global key); it is hidden, **Show
+  the key** under it shows it.
+- **MTU**, **Keepalive** and **Server timeout** — empty: the server's MTU, 10 and
+  20 seconds.
 
 ## VPN and routes
 

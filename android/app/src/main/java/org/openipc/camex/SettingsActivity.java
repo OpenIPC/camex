@@ -1,12 +1,15 @@
 /*
  * Copyright (c) OpenIPC  https://openipc.org  MIT License
  *
- * SettingsActivity.java — camex connection settings (platform widgets only)
+ * SettingsActivity.java — camex connection settings in brass: one SETTINGS window, the
+ * section CAMEX built from the tunnel library's fields (CamexTunnel.fields()), brass Cancel
+ * and Save (brand brass 1.3.0, the interface review of 2026-11-18)
  */
 package org.openipc.camex;
 
 import android.app.Activity;
-import android.content.SharedPreferences;
+import android.content.Intent;
+import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.LayerDrawable;
@@ -16,110 +19,209 @@ import android.os.Bundle;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.RadioButton;
 import android.widget.RadioGroup;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import org.openipc.camex.tunnel.CamexTunnel;
 import org.openipc.camex.tunnel.ConnectLink;
+import org.openipc.camex.tunnel.Field;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Editable connection settings persisted to the "camex" SharedPreferences, handed to the
- * tunnel library at Start ({@link MainActivity#values}). Also opened by a camex link
- * (the library's {@link ConnectLink}, #146): its values are filled in and marked, nothing
- * is saved or connected until the user taps Save. The tunnel takes only the server's
- * network, never all traffic (#172).
+ * The settings, kept by {@link Prefs} and handed to the tunnel library at Start. Fields, their
+ * order, labels, hints and the client name's default come from the library only. Also opened
+ * by a camex link (the library's {@link ConnectLink}, #146): its values are filled in and
+ * marked, nothing is saved before Save.
  */
 public class SettingsActivity extends Activity {
-
-    private static final String PREFS = "camex";
-    static final int DEFAULT_PORT = 5800;
-    static final String DEFAULT_NAME = "android-client";
-    // camex defaults (see src/main.c)
-    static final int DEFAULT_MTU = 1500;
-    static final int DEFAULT_KEEPALIVE = 10;
-    static final int DEFAULT_TIMEOUT = 20;
     // The overlay of a field a link changed (green, light)
     private static final int LINK_MARK = 0x332E7D32;
     // Before API 23: a marked field that had no background of its own
     private static final Object NO_BACKGROUND = new Object();
+    private static final String STATE_VALUES = "values";
     private static final String STATE_NOTE = "link_note";
     private static final String STATE_MARKED = "link_marked";
-    // The ids of the fields a link changed
-    private final List<Integer> marked = new ArrayList<>();
 
-    private EditText hostInput, portInput, nameInput, pskInput;
-    private EditText pubkeyInput;
-    private EditText mtuInput, keepaliveInput, timeoutInput;
-    private RadioGroup transportGroup;
+    private final Map<String, Field> fields = new LinkedHashMap<>();
+    private final Map<String, View> inputs = new HashMap<>();
+    private final Map<String, Map<String, RadioButton>> choices = new HashMap<>();
+    // The keys of the fields a link changed
+    private final ArrayList<String> marked = new ArrayList<>();
+    private TextView noteView;
+    private ScrollView scroll;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setTitle(R.string.settings_title);
-        setContentView(R.layout.activity_settings);
+        for (Field f : CamexTunnel.fields(this, Prefs.APP)) {
+            // camex's own app has no web page: no port for nginx
+            if (!CamexTunnel.WEB_PORT.equals(f.key)) fields.put(f.key, f);
+        }
+        build();
 
-        hostInput = findViewById(R.id.input_server_host);
-        portInput = findViewById(R.id.input_server_port);
-        nameInput = findViewById(R.id.input_name);
-        pskInput = findViewById(R.id.input_psk);
-        pubkeyInput = findViewById(R.id.input_server_pubkey);
-        transportGroup = findViewById(R.id.group_transport);
-        mtuInput = findViewById(R.id.input_mtu);
-        keepaliveInput = findViewById(R.id.input_keepalive);
-        timeoutInput = findViewById(R.id.input_server_timeout);
-
-        CheckBox showPsk = findViewById(R.id.check_show_psk);
-        showPsk.setOnCheckedChangeListener((b, show) -> {
-            int sel = pskInput.getSelectionEnd();
-            pskInput.setInputType(InputType.TYPE_CLASS_TEXT | (show
-                ? InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
-                : InputType.TYPE_TEXT_VARIATION_PASSWORD));
-            pskInput.setSelection(Math.max(sel, 0));
-        });
-
-        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        // After a rotation the views restore what was typed: keep it
         if (savedInstanceState == null) {
-            load(prefs);
+            show(Prefs.load(this));
             Uri data = getIntent().getData();
             if (data != null) fromLink(data.toString());
         } else {
-            // What a link changed stays shown after a rotation
+            // After a rotation: what was typed, the link's note and marks
+            @SuppressWarnings("unchecked")
+            HashMap<String, String> v = (HashMap<String, String>) savedInstanceState.getSerializable(STATE_VALUES);
+            show(v != null ? v : Prefs.load(this));
             CharSequence note = savedInstanceState.getCharSequence(STATE_NOTE);
             if (note != null) showNote(note);
-            int[] marked = savedInstanceState.getIntArray(STATE_MARKED);
-            if (marked != null) {
-                for (int id : marked) mark(findViewById(id));
-            }
+            ArrayList<String> keys = savedInstanceState.getStringArrayList(STATE_MARKED);
+            if (keys != null) for (String k : keys) mark(k);
         }
-
-        Button save = findViewById(R.id.btn_save);
-        save.setOnClickListener(view -> save(prefs));
     }
 
-    private void load(SharedPreferences prefs) {
-        hostInput.setText(prefs.getString("server_host", ""));
-        portInput.setText(String.valueOf(prefs.getInt("server_port", DEFAULT_PORT)));
-        nameInput.setText(prefs.getString("name", DEFAULT_NAME));
-        pskInput.setText(prefs.getString("psk", ""));
-        pubkeyInput.setText(prefs.getString("server_pubkey", ""));
+    /** The window: SETTINGS, a note of a link, the section CAMEX, Cancel and Save. */
+    private void build() {
+        int pad = Brass.dp(this, 16);
+        LinearLayout frame = Brass.panel(this);
+        TextView title = Brass.title(this, getString(R.string.settings_title));
+        title.setTextSize(20);
+        frame.addView(title);
 
-        // Transport: default UDP unless "tcp" was saved.
-        boolean tcp = "tcp".equals(prefs.getString("transport", "udp"));
-        transportGroup.check(tcp ? R.id.btn_tcp : R.id.btn_udp);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(Brass.dp(this, 4), 0, Brass.dp(this, 4), 0);
+        noteView = Brass.display(this);
+        noteView.setTextColor(Brass.color(this, R.color.amber));
+        noteView.setVisibility(View.GONE);
+        LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(-1, -2);
+        np.setMargins(0, Brass.dp(this, 8), 0, 0);
+        box.addView(noteView, np);
+        Brass.section(box, this, getString(R.string.section_camex), false);
+        for (Field f : fields.values()) box.addView(field(f));
 
-        mtuInput.setText(String.valueOf(prefs.getInt("mtu", DEFAULT_MTU)));
-        keepaliveInput.setText(String.valueOf(prefs.getInt("keepalive", DEFAULT_KEEPALIVE)));
-        timeoutInput.setText(String.valueOf(prefs.getInt("server_timeout", DEFAULT_TIMEOUT)));
+        ScrollView sv = new ScrollView(this);
+        sv.addView(box);
+        // opens at the top (a link's note first), the keyboard only when a field is tapped
+        // (windowSoftInputMode in the manifest); the window, not its first field, takes the
+        // first focus
+        box.setDescendantFocusability(ViewGroup.FOCUS_BEFORE_DESCENDANTS);
+        box.setFocusableInTouchMode(true);
+        scroll = sv;
+        frame.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout actions = new LinearLayout(this);
+        Button cancel = Brass.button(this, R.string.cancel);
+        Button save = Brass.button(this, R.string.save);
+        actions.addView(cancel, Brass.margins(this, 0, -2, 1));
+        actions.addView(save, Brass.margins(this, 0, -2, 1));
+        frame.addView(actions);
+        cancel.setOnClickListener(v -> finish());
+        save.setOnClickListener(v -> save());
+
+        LinearLayout page = new LinearLayout(this);
+        page.setPadding(pad, pad, pad, pad);
+        page.addView(frame, new LinearLayout.LayoutParams(-1, -1));
+        setContentView(page);
+    }
+
+    /** A field as the library describes it: its label, then its input. */
+    private View field(Field f) {
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        TextView label = new TextView(this);
+        label.setText(f.label);
+        label.setTextColor(Brass.color(this, R.color.dim));
+        label.setPadding(0, Brass.dp(this, 10), 0, 0);
+        col.addView(label);
+        if (f.kind == Field.Kind.CHOICE) {
+            RadioGroup g = new RadioGroup(this);
+            g.setOrientation(RadioGroup.HORIZONTAL);
+            Map<String, RadioButton> buttons = new HashMap<>();
+            for (String c : f.choices) {
+                RadioButton r = new RadioButton(this);
+                r.setText(c);
+                r.setId(View.generateViewId());
+                r.setSaveEnabled(false);   // the activity keeps the values itself
+                g.addView(r);
+                buttons.put(c, r);
+            }
+            choices.put(f.key, buttons);
+            inputs.put(f.key, g);
+            col.addView(g);
+            return col;
+        }
+        EditText e = new EditText(this);
+        e.setSingleLine(true);
+        e.setTypeface(Typeface.MONOSPACE);
+        e.setSaveEnabled(false);
+        if (!f.hint.isEmpty()) e.setHint(f.hint);
+        if (CamexTunnel.MTU.equals(f.key) || CamexTunnel.KEEPALIVE.equals(f.key)
+                || CamexTunnel.SERVER_TIMEOUT.equals(f.key)) {
+            e.setInputType(InputType.TYPE_CLASS_NUMBER);
+        } else if (f.kind == Field.Kind.HOST_PORT) {
+            e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        }
+        inputs.put(f.key, e);
+        col.addView(e);
+        if (f.kind == Field.Kind.SECRET) {
+            // hidden, with "Show the key" under it, the same in every app on camex
+            e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            e.setTypeface(Typeface.MONOSPACE);
+            CheckBox show = new CheckBox(this);
+            show.setText(Field.SHOW_SECRET);
+            show.setSaveEnabled(false);
+            show.setOnCheckedChangeListener((b, on) -> {
+                int sel = e.getSelectionEnd();
+                e.setInputType(InputType.TYPE_CLASS_TEXT | (on
+                    ? InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                    : InputType.TYPE_TEXT_VARIATION_PASSWORD));
+                e.setTypeface(Typeface.MONOSPACE);
+                e.setSelection(Math.max(sel, 0));
+            });
+            col.addView(show, new LinearLayout.LayoutParams(-2, -2));
+        }
+        return col;
+    }
+
+    private String get(String key) {
+        View v = inputs.get(key);
+        if (v instanceof RadioGroup) {
+            for (Map.Entry<String, RadioButton> c : choices.get(key).entrySet())
+                if (c.getValue().isChecked()) return c.getKey();
+            return fields.get(key).initial;
+        }
+        String s = ((EditText) v).getText() == null ? "" : ((EditText) v).getText().toString();
+        return CamexTunnel.PSK.equals(key) ? s : s.trim();
+    }
+
+    private void set(String key, String value) {
+        View v = inputs.get(key);
+        if (v == null) return;
+        if (v instanceof RadioGroup) {
+            RadioButton r = choices.get(key).get(value);
+            if (r == null) r = choices.get(key).get(fields.get(key).initial);
+            if (r != null) ((RadioGroup) v).check(r.getId());
+        } else {
+            ((EditText) v).setText(value == null ? "" : value);
+        }
+    }
+
+    private void show(Map<String, String> v) {
+        for (String key : fields.keySet()) set(key, v.get(key));
+    }
+
+    private HashMap<String, String> values() {
+        HashMap<String, String> v = new HashMap<>();
+        for (String key : fields.keySet()) v.put(key, get(key));
+        return v;
     }
 
     /*
@@ -127,7 +229,7 @@ public class SettingsActivity extends Activity {
      * here, so no older screen is left behind to save stale values over it
      */
     @Override
-    protected void onNewIntent(android.content.Intent intent) {
+    protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
         Uri data = intent.getData();
@@ -138,27 +240,24 @@ public class SettingsActivity extends Activity {
             fromLink(data.toString());   // only its note
             if (!marked.isEmpty()) {
                 // The marks on the screen are an earlier link's, not this one's
-                TextView note = findViewById(R.id.text_link_note);
-                showNote(note.getText() + "\n" + getString(R.string.link_earlier));
+                showNote(noteView.getText() + "\n" + getString(R.string.link_earlier));
             }
             return;
         }
         // The saved settings again, the marks of an earlier link gone: only
         // this link's values over them
-        for (int id : marked) unmark(findViewById(id));
+        for (String key : marked) unmark(inputs.get(key));
         marked.clear();
-        load(getSharedPreferences(PREFS, MODE_PRIVATE));
+        show(Prefs.load(this));
         fromLink(data.toString());
     }
 
     @Override
     protected void onSaveInstanceState(Bundle out) {
         super.onSaveInstanceState(out);
-        TextView note = findViewById(R.id.text_link_note);
-        if (note.getVisibility() == View.VISIBLE) out.putCharSequence(STATE_NOTE, note.getText());
-        int[] ids = new int[marked.size()];
-        for (int i = 0; i < ids.length; i++) ids[i] = marked.get(i);
-        out.putIntArray(STATE_MARKED, ids);
+        out.putSerializable(STATE_VALUES, values());
+        if (noteView.getVisibility() == View.VISIBLE) out.putCharSequence(STATE_NOTE, noteView.getText());
+        out.putStringArrayList(STATE_MARKED, marked);
     }
 
     /** A link's values over the saved ones: the changed fields marked. */
@@ -169,58 +268,72 @@ public class SettingsActivity extends Activity {
             return;
         }
         List<String> changed = new ArrayList<>();
-        Map<String, String> v = c.values;
         // Host and port each only when the link has it: the saved other one stays
-        set(hostInput, c.host, R.string.server_host, changed);
-        set(portInput, c.port == null ? null : String.valueOf(c.port), R.string.server_port, changed);
-        set(nameInput, v.get(CamexTunnel.NAME), R.string.client_name, changed);
-        set(pubkeyInput, v.get(CamexTunnel.PUBKEY), R.string.server_pubkey, changed);
-        set(pskInput, v.get(CamexTunnel.PSK), R.string.psk, changed);
-        set(mtuInput, v.get(CamexTunnel.MTU), R.string.mtu, changed);
-        set(keepaliveInput, v.get(CamexTunnel.KEEPALIVE), R.string.keepalive, changed);
-        String transport = v.get(CamexTunnel.TRANSPORT);
-        if (transport != null) {
-            int id = "TCP".equals(transport) ? R.id.btn_tcp : R.id.btn_udp;
-            if (transportGroup.getCheckedRadioButtonId() != id) {
-                transportGroup.check(id);
-                mark(findViewById(id));
-                changed.add(getString(R.string.transport));
-            }
+        if (c.host != null || c.port != null) {
+            String cur = get(CamexTunnel.SERVER);
+            int colon = cur.lastIndexOf(':');
+            String host = c.host != null ? c.host : colon > 0 ? cur.substring(0, colon) : cur;
+            String port = c.port != null ? String.valueOf(c.port)
+                : colon > 0 ? cur.substring(colon + 1) : String.valueOf(Prefs.DEFAULT_PORT);
+            if (!host.isEmpty()) take(CamexTunnel.SERVER, host + ":" + port, changed);
+        }
+        for (String key : new String[]{CamexTunnel.NAME, CamexTunnel.TRANSPORT, CamexTunnel.PUBKEY,
+                CamexTunnel.PSK, CamexTunnel.MTU, CamexTunnel.KEEPALIVE}) {
+            String value = c.values.get(key);
+            if (value != null) take(key, value, changed);
         }
         StringBuilder note = new StringBuilder();
         // Nothing came through (a cut link, every field malformed): not
         // "the settings saved already"
-        note.append(v.isEmpty() && c.port == null ? getString(R.string.link_unknown)
+        note.append(c.values.isEmpty() && c.port == null ? getString(R.string.link_unknown)
             : changed.isEmpty() ? getString(R.string.link_same)
             : getString(R.string.link_changed, TextUtils.join(", ", changed)));
         if (!c.errors.isEmpty()) {
             List<String> bad = new ArrayList<>();
-            for (String key : c.errors.keySet()) bad.add(label(key));
-            note.append('\n').append(getString(R.string.link_rejected,
-                TextUtils.join(", ", bad)));
+            for (String letter : c.errors.keySet()) bad.add(label(letter));
+            note.append('\n').append(getString(R.string.link_rejected, TextUtils.join(", ", bad)));
         }
         showNote(note);
     }
 
-    private void showNote(CharSequence text) {
-        TextView view = findViewById(R.id.text_link_note);
-        view.setText(text);
-        view.setVisibility(View.VISIBLE);
+    private void take(String key, String value, List<String> changed) {
+        if (!fields.containsKey(key) || value.equals(get(key))) return;
+        set(key, value);
+        mark(key);
+        changed.add(fields.get(key).label);
     }
 
-    /** The name of a link's field, as the screen shows it. */
-    private String label(String key) {
-        switch (key) {
-            case "h": return getString(R.string.server_host);
-            case "p": return getString(R.string.server_port);
-            case "t": return getString(R.string.transport);
-            case "k": return getString(R.string.server_pubkey);
-            case "s": return getString(R.string.psk);
-            case "n": return getString(R.string.client_name);
-            case "m": return getString(R.string.mtu);
-            case "a": return getString(R.string.keepalive);
-            default: return key;
+    /** The label of a link's field (its letter), as the screen shows it. */
+    private String label(String letter) {
+        String key;
+        switch (letter) {
+            case "h": case "p": key = CamexTunnel.SERVER; break;
+            case "t": key = CamexTunnel.TRANSPORT; break;
+            case "k": key = CamexTunnel.PUBKEY; break;
+            case "s": key = CamexTunnel.PSK; break;
+            case "n": key = CamexTunnel.NAME; break;
+            case "m": key = CamexTunnel.MTU; break;
+            case "a": key = CamexTunnel.KEEPALIVE; break;
+            default: return letter;
         }
+        return fields.containsKey(key) ? fields.get(key).label : letter;
+    }
+
+    private void showNote(CharSequence text) {
+        noteView.setText(text);
+        noteView.setVisibility(View.VISIBLE);
+        scroll.post(() -> scroll.scrollTo(0, 0));   // the note first
+    }
+
+    private void mark(String key) {
+        View field = inputs.get(key);
+        if (field == null) return;
+        if (key.equals(CamexTunnel.TRANSPORT)) {
+            RadioButton r = choices.get(key).get(get(key));
+            if (r != null) field = r;
+        }
+        mark(field);
+        if (!marked.contains(key)) marked.add(key);
     }
 
     // A field a link changed: a light overlay of its own (the theme's tints
@@ -228,21 +341,24 @@ public class SettingsActivity extends Activity {
     // foreground is API 23; before it the overlay is layered over the field's
     // own background, which is put back as it was (#158)
     private void mark(View field) {
-        if (field == null) return;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             field.setForeground(new ColorDrawable(LINK_MARK));
         } else if (field.getTag(R.id.link_mark) == null) {
             Drawable own = field.getBackground();
             field.setTag(R.id.link_mark, own != null ? own : NO_BACKGROUND);
             field.setBackground(own != null
-                ? new LayerDrawable(new Drawable[]{ own, new ColorDrawable(LINK_MARK) })
+                ? new LayerDrawable(new Drawable[]{own, new ColorDrawable(LINK_MARK)})
                 : new ColorDrawable(LINK_MARK));
         }
-        if (!marked.contains(field.getId())) marked.add(field.getId());
     }
 
     private void unmark(View field) {
         if (field == null) return;
+        if (field instanceof RadioGroup) {
+            for (int i = 0; i < ((RadioGroup) field).getChildCount(); i++)
+                unmark(((RadioGroup) field).getChildAt(i));
+            return;
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             field.setForeground(null);
             return;
@@ -253,107 +369,32 @@ public class SettingsActivity extends Activity {
         field.setTag(R.id.link_mark, null);
     }
 
-    private void set(EditText input, String value, int label, List<String> changed) {
-        if (value == null || value.equals(text(input))) return;
-        input.setText(value);
-        mark(input);
-        changed.add(getString(label));
-    }
-
-    private void save(SharedPreferences prefs) {
-        String host = text(hostInput);
-        if (TextUtils.isEmpty(host)) {
-            hostInput.setError(getString(R.string.server_host));
-            return;
+    private void save() {
+        HashMap<String, String> v = values();
+        // an empty client name is not saved: the default again
+        if (v.get(CamexTunnel.NAME).isEmpty()) {
+            v.put(CamexTunnel.NAME, CamexTunnel.defaultName(this, Prefs.APP));
+            set(CamexTunnel.NAME, v.get(CamexTunnel.NAME));
         }
-
-        int port = DEFAULT_PORT;
-        String portStr = text(portInput);
-        if (!TextUtils.isEmpty(portStr)) {
-            try {
-                port = Integer.parseInt(portStr);
-            } catch (NumberFormatException ignored) { /* keep default */ }
-        }
-        if (port < 1 || port > 65535) {
-            portInput.setError(getString(R.string.server_port));
-            return;
-        }
-
-        String name = text(nameInput);
-        if (TextUtils.isEmpty(name)) name = DEFAULT_NAME;
-
-        int mtu = parseInt(mtuInput, DEFAULT_MTU);
-        if (mtu < 576 || mtu > 9000) {
-            mtuInput.setError(getString(R.string.err_mtu));
-            return;
-        }
-
-        int keepalive = parseInt(keepaliveInput, DEFAULT_KEEPALIVE);
-        if (keepalive < 0 || keepalive > 3600) {
-            keepaliveInput.setError(getString(R.string.err_keepalive));
-            return;
-        }
-
-        int timeout = parseInt(timeoutInput, DEFAULT_TIMEOUT);
-        if (timeout < 5 || timeout > 3600) {
-            timeoutInput.setError(getString(R.string.err_timeout));
-            return;
-        }
-
-        // Protocol v2 is always encrypted: both keys are required; the library checks them
-        // as camex takes them
-        String pubkey = text(pubkeyInput).trim();
-        String psk = pskInput.getText() == null ? "" : pskInput.getText().toString();
-        Map<String, String> v = new HashMap<>();
-        v.put(CamexTunnel.SERVER, host + ":" + port);
-        v.put(CamexTunnel.NAME, name);
-        v.put(CamexTunnel.TRANSPORT, "UDP");
-        v.put(CamexTunnel.PUBKEY, pubkey);
-        v.put(CamexTunnel.PSK, psk);
         String[] bad = CamexTunnel.check(v);
         if (bad != null) {
-            EditText field = CamexTunnel.SERVER.equals(bad[0]) ? hostInput
-                : CamexTunnel.NAME.equals(bad[0]) ? nameInput
-                : CamexTunnel.PUBKEY.equals(bad[0]) ? pubkeyInput : pskInput;
-            field.setError(CamexTunnel.PUBKEY.equals(bad[0]) ? getString(R.string.err_server_pubkey)
-                : CamexTunnel.PSK.equals(bad[0]) ? getString(R.string.err_psk) : bad[1]);
+            View field = inputs.get(bad[0]);
+            String why = CamexTunnel.PUBKEY.equals(bad[0]) ? getString(R.string.err_server_pubkey)
+                : CamexTunnel.PSK.equals(bad[0]) ? getString(R.string.err_psk) : bad[1];
+            if (field instanceof EditText) {
+                ((EditText) field).setError(why);
+                field.requestFocus();
+            } else {
+                Toast.makeText(this, label(bad[0]) + ": " + why, Toast.LENGTH_LONG).show();
+            }
             return;
         }
-
-        String transport =
-            transportGroup.getCheckedRadioButtonId() == R.id.btn_tcp ? "tcp" : "udp";
-
-        prefs.edit()
-            .putString("server_host", host)
-            .putInt("server_port", port)
-            .putString("name", name)
-            .putString("transport", transport)
-            .remove("full_tunnel")   // no full tunnel any more (#172)
-            .putString("server_pubkey", pubkey)
-            .putString("psk", psk)
-            .putInt("mtu", mtu)
-            .putInt("keepalive", keepalive)
-            .putInt("server_timeout", timeout)
-            .apply();
-
+        Prefs.save(this, v);
+        TunnelLog.add("settings saved");
         // From a link the screen opened by itself, even with the tunnel up
         // (the settings go to the tunnel at Start)
         Toast.makeText(this, getIntent().getData() != null ? R.string.saved_next_start
-            : R.string.save, Toast.LENGTH_LONG).show();
+            : R.string.saved, Toast.LENGTH_LONG).show();
         finish();
-    }
-
-    private static String text(EditText input) {
-        return input.getText() == null ? "" : input.getText().toString().trim();
-    }
-
-    private static int parseInt(EditText input, int fallback) {
-        String s = text(input);
-        if (TextUtils.isEmpty(s)) return fallback;
-        try {
-            return Integer.parseInt(s);
-        } catch (NumberFormatException ignored) {
-            return fallback;
-        }
     }
 }
