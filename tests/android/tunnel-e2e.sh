@@ -133,9 +133,11 @@ until PEER_IP=$(docker exec "$PEER" cat /proc/net/fib_trie 2>/dev/null |
     i=$((i + 1)); [ $i -lt 30 ] || { echo "the peer got no address"; tail -20 "$OUT/w/peer.log"; exit 1; }
     sleep 1
 done
-# "peer-ok" on TCP 9000 in the peer's network namespace
+# "peer-ok" on TCP 9000 in the peer's network namespace, a process per connection: a
+# connection whose app side went away with its VPN (stop()) waits for an answer for minutes,
+# and a one-at-a-time listener would refuse every connection after it (#173)
 docker run -d --name "$NC" --net "container:$PEER" --pull never "$PEER_IMAGE" \
-    sh -c 'while true; do echo peer-ok | nc -l -p 9000; done' >/dev/null
+    nc -lk -p 9000 -e echo peer-ok >/dev/null
 echo "server: $SRV_IP:5800 ($TRANSPORT), peer: $PEER_IP, Docker network: $SUBNET"
 
 i=0
@@ -239,14 +241,8 @@ echo "$L" | grep -q "restart OK" && ok "new values while running: camex again in
 echo "$L" | grep -q "lost OK" && ok "server stopped: CONNECTING" || bad "no CONNECTING when the server went away"
 echo "$L" | grep -q "back OK" && ok "server back: CONNECTED, peer reached" || bad "not CONNECTED after the server came back"
 echo "$L" | grep -q "stop OK" && ok "stop(): STOPPED and the VPN gone" || bad "stop()"
-if echo "$L" | grep -q "start after stop OK"; then
-    ok "start() after stop(): CONNECTED, peer reached"
-elif echo "$L" | grep -q "start after stop: peer not reached"; then
-    ok "start() after stop(): CONNECTED"
-    echo "KNOWN: the peer not reached after start() after stop() on Android 5.0 (#173)"
-else
-    bad "start() after stop()"
-fi
+echo "$L" | grep -q "start after stop OK" && ok "start() after stop(): CONNECTED, peer reached" \
+    || bad "start() after stop()"
 echo "$L" | grep -q "quick stop OK" && ok "stop() right after start(): stays STOPPED" || bad "stop() right after start()"
 if passed "$(cat "$OUT/run.log")"; then ok "the run step passed"; else bad "the run step"; tail -30 "$OUT/run.log"; fi
 grep -q 'FATAL EXCEPTION' "$OUT/logcat.txt" && bad "a crash in logcat ($OUT/logcat.txt)" || ok "no crash"

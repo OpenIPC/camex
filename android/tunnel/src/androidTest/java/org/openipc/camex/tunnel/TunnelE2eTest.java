@@ -216,24 +216,8 @@ public class TunnelE2eTest {
         // a start after a stop, then a stop at once: the stop wins over the start not yet run
         assertTrue(CamexTunnel.start(context, values()));
         await(CamexTunnel.State.CONNECTED, 90);
-        if (android.os.Build.VERSION.SDK_INT > 21) {
-            assertEquals("peer-ok", askPeer(peer));
-            Log.i(TAG, "start after stop OK");
-        } else {
-            // Android 5.0 sometimes routes the app's own sockets outside a VPN made again in
-            // one process (OpenIPC/camex#173): in seconds, or not at all. Recorded, not failed
-            long t0 = android.os.SystemClock.elapsedRealtime();
-            String r = null;
-            while (r == null && android.os.SystemClock.elapsedRealtime() - t0 < 60000) {
-                r = askPeer(peer);
-            }
-            long s = (android.os.SystemClock.elapsedRealtime() - t0) / 1000;
-            if ("peer-ok".equals(r)) {
-                Log.i(TAG, "start after stop OK (after " + s + " s on Android 5.0)");
-            } else {
-                Log.i(TAG, "start after stop: peer not reached in " + s + " s on Android 5.0 (#173)");
-            }
-        }
+        assertEquals("peer-ok", askPeer(peer));
+        Log.i(TAG, "start after stop OK");
         CamexTunnel.stop();
         await(CamexTunnel.State.STOPPED, 15);
         assertTrue(CamexTunnel.start(context, values()));
