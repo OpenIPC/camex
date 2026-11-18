@@ -5,5 +5,6 @@
 #
 -keepclassmembers class org.openipc.camex.tunnel.CamexVpnService {
     private int establishTun(java.lang.String, int, int, java.lang.String[]);
+    private boolean ownsListener(int, int, int, int);
     native <methods>;
 }

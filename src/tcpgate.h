@@ -32,8 +32,9 @@ void tcpgate_set(tcpgate_fn fn);
 int tcpgate_active(void);
 
 /* A packet from the server on its way to the tun. Returns 1 if it passes: not
- * an IPv4 TCP SYN (without ACK), no gate, or the gate accepts it. Returns 0 if
- * the gate refused it; then *rst_len is the length of the RST built in rst
+ * IPv4 TCP, no gate, not a SYN (without ACK), or the gate accepts it. Returns 0
+ * if it is dropped: TCP in fragments or with a broken header (no RST), or a SYN
+ * the gate refused; then *rst_len is the length of the RST built in rst
  * (TCPGATE_RST_LEN, or 0 if rst_cap is too small), to send back to the server. */
 int tcpgate_check(const uint8_t *pkt, size_t len,
                   uint8_t *rst, size_t rst_cap, size_t *rst_len);

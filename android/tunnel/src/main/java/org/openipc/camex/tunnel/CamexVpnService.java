@@ -293,9 +293,10 @@ public final class CamexVpnService extends VpnService {
 
     /**
      * Called from native code (the camex thread) for a new TCP connection from the tunnel to
-     * this app's web port (#187): whether this app listens there. Another app's server on the
-     * same port, which the kernel would hand the connection to, is refused (camex answers with
-     * an RST); so is any port when the check fails. Addresses are IPv4 in host byte order.
+     * this app's web port (#187): whether this app owns the listener the kernel would hand it
+     * to. Another app's server on the port is refused (camex answers with an RST), and so is
+     * the connection when the check fails. Addresses are IPv4 in host byte order. camex keeps
+     * the answer for a moment, so a burst of connections asks once.
      */
     private boolean ownsListener(int dst, int dport, int src, int sport) {
         int me = Process.myUid();
@@ -303,21 +304,24 @@ public final class CamexVpnService extends VpnService {
             if (Build.VERSION.SDK_INT >= 29) {
                 // The active VPN app may ask; the kernel finds the listener for a new tuple
                 ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
-                int uid = cm.getConnectionOwnerUid(OsConstants.IPPROTO_TCP,
-                    new InetSocketAddress(ipv4(dst), dport), new InetSocketAddress(ipv4(src), sport));
-                if (uid == me) return true;
-                Log.i(TAG, "port " + dport + ": listener uid " + uid + ", not this app's; refused");
-                return false;
+                return cm.getConnectionOwnerUid(OsConstants.IPPROTO_TCP,
+                    new InetSocketAddress(ipv4(dst), dport),
+                    new InetSocketAddress(ipv4(src), sport)) == me;
             }
-            // Up to Android 9 the tables are readable
-            if (Listeners.ownedBy(dport, me, read("/proc/net/tcp"), read("/proc/net/tcp6"))) return true;
-            Log.i(TAG, "port " + dport + ": no listener of this app; refused");
-            return false;
+            // Up to Android 9 the tables are readable; one not read refuses
+            return Listeners.ownedBy(dport, dst, me, read("/proc/net/tcp"), read("/proc/net/tcp6"));
         } catch (Exception e) {
-            Log.w(TAG, "port " + dport + ": owner unknown, refused", e);
+            // camex logs the refusal (a port at most once in a while); the reason once a minute
+            long now = android.os.SystemClock.elapsedRealtime();
+            if (now - ownerErrorLogged > 60000) {
+                ownerErrorLogged = now;
+                Log.w(TAG, "port " + dport + ": owner unknown, refused", e);
+            }
             return false;
         }
     }
+
+    private long ownerErrorLogged = -120000;
 
     private static InetAddress ipv4(int a) throws IOException {
         return InetAddress.getByAddress(new byte[]{
