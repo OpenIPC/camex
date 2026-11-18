@@ -29,15 +29,15 @@ if [ "$1" = --rebuild ] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -q -t "$IMAGE" -f "$SCRIPT_DIR/Dockerfile.mingw" "$SCRIPT_DIR" || exit 1
 fi
 
-OUT_MOUNT=""
+# The optional mount as positional parameters: a path with spaces stays one
+set --
 if [ -n "$OUT" ]; then
     mkdir -p "$OUT"
-    OUT_MOUNT="-v $(cd "$OUT" && pwd):/out"
+    set -- -v "$(cd "$OUT" && pwd):/out"
 fi
 
-# shellcheck disable=SC2086
 docker run --rm --pull never -u "$(id -u):$(id -g)" -e HOME=/tmp/home \
-    -v "$REPO_DIR:/src:ro" $OUT_MOUNT "$IMAGE" sh -c '
+    -v "$REPO_DIR:/src:ro" "$@" "$IMAGE" sh -c '
     set -e
     # Wine wants a prefix in a directory of its own user, not in /tmp
     mkdir -p "$HOME"
@@ -63,8 +63,9 @@ docker run --rm --pull never -u "$(id -u):$(id -g)" -e HOME=/tmp/home \
         v=$(wine "$exe" --version 2>/dev/null) || fail "--version under Wine" 2
         echo "$v"
         echo "$v" | grep -q "[0-9]\.[0-9]*\.[0-9]" || fail "no version in: $v" 2
-        wine "$exe" --help 2>/dev/null | head -5
-        wine "$exe" --help 2>/dev/null | grep -qi usage || fail "--help under Wine" 2
+        h=$(wine "$exe" --help 2>/dev/null) || fail "--help under Wine" 2
+        echo "$h" | head -5
+        echo "$h" | grep -qi usage || fail "no usage in --help" 2
         echo "PASS: Windows / $arch"
     done
 '
