@@ -60,10 +60,12 @@ int tun_fd = -1;
 char tun_name[IFNAMSIZ];
 static int tun_from_env = 0; /* 1 = fd was passed via CAMEX_TUN_FD */
 static int tun_inherited = 0; /* 1 = that fd came from CAMEX_TUN_FD itself */
+#ifndef _WIN32
 /* 1 = the interface outlives our fd (/dev/camex of camex.ko, #99): closing
  * it does not remove the interface, so its address and flags are ours to
  * clear */
 static int tun_persistent = 0;
+#endif
 
 /* Accept a TUN fd from environment variable CAMEX_TUN_FD (Android VpnService).
  * Returns the accepted fd number or -1 if not set / invalid. */

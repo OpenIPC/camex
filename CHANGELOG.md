@@ -6,6 +6,13 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 4.0.2 — 2026-11-18
+
+- Windows build without warnings: the log line of a bad TCP frame length printed its sizes with
+  `%zu`, which the Windows build's format check rejects, and could log wrong numbers there; the
+  sizes are now printed as `unsigned long`. `tun_persistent`, used only outside Windows, is no longer
+  defined in the Windows build. Found by `docker/test-windows.sh` (#184).
+
 ## 4.0.1 — 2026-11-17
 
 - TCP transport: a frame whose body arrived in pieces lost its first piece (#180). The bytes read
