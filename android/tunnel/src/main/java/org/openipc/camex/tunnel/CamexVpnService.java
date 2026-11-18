@@ -296,7 +296,7 @@ public final class CamexVpnService extends VpnService {
      * this app's web port (#187): whether this app owns the listener the kernel would hand it
      * to. Another app's server on the port is refused (camex answers with an RST), and so is
      * the connection when the check fails. Addresses are IPv4 in host byte order. camex keeps
-     * the answer for a moment, so a burst of connections asks once.
+     * a refusal for a moment (a flood of SYNs asks once), never an acceptance.
      */
     private boolean ownsListener(int dst, int dport, int src, int sport) {
         int me = Process.myUid();

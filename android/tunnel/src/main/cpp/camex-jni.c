@@ -84,9 +84,11 @@ int __wrap_socket(int domain, int type, int protocol)
  * port, and only when CamexVpnService.ownsListener() finds this app's socket
  * listening there; other apps' servers on the device stay out of reach.
  *
- * It runs on the packet thread: the answer is kept for GATE_CACHE_MS, so a
- * page's burst of connections (or a flood of SYNs) asks Java once, and the
- * refusals are logged at most once per GATE_LOG_S with their count. */
+ * It runs on the packet thread: a refusal is kept for GATE_CACHE_MS for its
+ * destination address and port, so a flood of SYNs to a port that is not the
+ * app's asks Java once; an acceptance is never kept, every connection that
+ * passes was checked for its own tuple (#189 review). The refusals are logged
+ * at most once per GATE_LOG_S with their count. */
 #define GATE_CACHE_MS 2000
 #define GATE_LOG_S 60
 
@@ -98,9 +100,10 @@ static long long gate_now_ms(void)
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-static int gate_cached = -1;            /* -1 none, else the last answer */
-static long long gate_cached_at;
-static int gate_cached_port;
+static int gate_refused_kept;           /* a refusal is kept for the address and port below */
+static uint32_t gate_refused_dst;
+static uint16_t gate_refused_port;
+static long long gate_refused_at;
 static unsigned long gate_refused;      /* refusals since the last log line */
 static long long gate_logged_at = -GATE_LOG_S * 1000LL;
 
@@ -112,8 +115,9 @@ static int jni_owns_listener(uint32_t dst, uint16_t dport, uint32_t src, uint16_
     jboolean ok = JNI_FALSE;
     long long now = gate_now_ms();
 
-    if (gate_cached >= 0 && gate_cached_port == dport && now - gate_cached_at < GATE_CACHE_MS) {
-        return gate_cached;
+    if (gate_refused_kept && gate_refused_dst == dst && gate_refused_port == dport &&
+        now - gate_refused_at < GATE_CACHE_MS) {
+        return 0;
     }
     if (env == NULL || g_service == NULL || !pthread_equal(pthread_self(), g_thread)) {
         return 0;
@@ -131,10 +135,15 @@ static int jni_owns_listener(uint32_t dst, uint16_t dport, uint32_t src, uint16_
     if (cls != NULL) {
         (*env)->DeleteLocalRef(env, cls);
     }
-    gate_cached = ok ? 1 : 0;
-    gate_cached_port = dport;
-    gate_cached_at = now;
-    return gate_cached;
+    if (ok) {
+        gate_refused_kept = 0;
+        return 1;
+    }
+    gate_refused_kept = 1;
+    gate_refused_dst = dst;
+    gate_refused_port = dport;
+    gate_refused_at = now;
+    return 0;
 }
 
 static int jni_tcp_gate(uint32_t dst, uint16_t dport, uint32_t src, uint16_t sport)
@@ -249,7 +258,7 @@ Java_org_openipc_camex_tunnel_CamexVpnService_nativeRun(JNIEnv *env, jobject thi
     g_service = thiz;
     g_thread = pthread_self();
     tun_set_provider(jni_tun_provider, NULL);
-    gate_cached = -1;
+    gate_refused_kept = 0;
     tcpgate_set(jni_tcp_gate);
     unsetenv("CAMEX_TUN_FD");
 

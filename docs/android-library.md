@@ -130,12 +130,14 @@ page, or any other server on the device, under its name.
 - Android 5 to 9: from `/proc/net/tcp` and `/proc/net/tcp6`: the listeners that
   could take it (on the tunnel address or any address, IPv4 or IPv6) must all be
   the app's; a table that cannot be read refuses.
-- The answer is kept for 2 seconds, so a page's burst of connections asks once;
-  refusals are logged at most once a minute, with their count.
-- Without `web_port` every new TCP connection from the tunnel is refused. TCP in
-  IP fragments is dropped (a SYN must be checked whole; the server sends whole
-  segments). The app's own connections out, their answers, UDP and ICMP are not
-  affected.
+- Every connection that passes was checked for itself; a refusal is kept for 2
+  seconds for its address and port, so a flood of SYNs asks once (a server the
+  app starts on its web port answers at most 2 seconds later). Refusals are
+  logged at most once a minute, with their count.
+- TCP in IP fragments, or with a broken header, is dropped without an RST: its
+  SYN was never seen whole.
+- Without `web_port` every new TCP connection from the tunnel is refused. The
+  app's own connections out, their answers, UDP and ICMP are not affected.
 - Our apps put their web page on port 8085; one of them with its tunnel runs on
   a device at a time.
 

@@ -6,6 +6,13 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 4.1.2 — 2026-11-18
+
+- Android library, the gate (#187, review of #189): an acceptance is no longer kept. 4.1.1 kept the
+  answer for 2 seconds by port alone, so a connection to another local address on the port, or one
+  right after another app took the port over, could pass on an earlier check. Now every connection
+  that passes is checked for its own tuple; only a refusal is kept, for its address and port.
+
 ## 4.1.1 — 2026-11-18
 
 - Android library, the gate of 4.1.0 (#187, review of #188):
