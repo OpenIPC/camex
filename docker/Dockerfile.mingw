@@ -1,0 +1,19 @@
+#
+# Copyright (c) OpenIPC  https://openipc.org  MIT License
+#
+# Dockerfile.mingw — the CI's Windows build and Wine smoke, locally
+#
+# The same Ubuntu as the CI runners, the same packages as the jobs Windows
+# and Wine smoke of .github/workflows/build.yml: the win32 MinGW compilers
+# for x86_64 and i686, wine64 and wine32. docker/test-windows.sh builds it
+# once (camex-mingw) and runs the checks in it.
+#
+
+FROM ubuntu:24.04
+
+RUN dpkg --add-architecture i386 && \
+    apt-get update -qq && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+        make file gcc-mingw-w64-x86-64-win32 gcc-mingw-w64-i686-win32 \
+        wine wine64 wine32 >/dev/null && \
+    rm -rf /var/lib/apt/lists/*
