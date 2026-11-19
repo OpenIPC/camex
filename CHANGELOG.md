@@ -16,6 +16,11 @@ release, rebuilt from every push to `master`; this file is the change history.
   scroll, Show log opens at the end, and a reader scrolled up keeps the same lines when the full
   buffer drops old ones (shifted by the dropped text as laid out, wrapped lines included; how
   many lines left comes from the log's own counter, so equal lines that repeat count right).
+- Android app: brass check boxes and radio buttons (brand brass 1.4.0, after decoder 2.27.1):
+  own drawings `brass_check` and `brass_radio` through the theme instead of the system ones, which
+  under a remote's focus filled amber whole, so on and off could not be told; 6dp between the
+  drawing and the text and after it, so the focus ring does not lie on the last letter (Start on
+  boot, Show log, Show the key, Proto).
 - Android app: after an update (MY_PACKAGE_REPLACED) the tunnel comes back by itself if it ran
   before it, that is was started and not stopped with STOP; with saved settings and the VPN consent.
 
