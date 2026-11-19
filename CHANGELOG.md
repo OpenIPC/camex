@@ -12,7 +12,9 @@ release, rebuilt from every push to `master`; this file is the change history.
   of 12 lines with its own scroll (the page no longer grows with the log), it follows the last
   line unless the user scrolled up, and it takes the D-pad focus with the focus ring, so it can be
   scrolled on a TV (`Brass.LogWindow`, after pusher 0.22.1: the ring on a frame around the scroll
-  view, so it does not scroll with the text).
+  view, so it does not scroll with the text); following the end changes only by the user's
+  scroll, Show log opens at the end, and a reader scrolled up keeps the same lines when the full
+  buffer drops old ones (shifted by the dropped text as laid out, wrapped lines included).
 - Android app: after an update (MY_PACKAGE_REPLACED) the tunnel comes back by itself if it ran
   before it, that is was started and not stopped with STOP; with saved settings and the VPN consent.
 
