@@ -32,17 +32,37 @@ final class Values {
     /** camex's default server port (install.sh, the README). */
     static final int DEFAULT_PORT = 5800;
 
+    // Short labels and the defaults as hints of the empty fields (owner's decision 2026-11-18)
     static final List<Field> FIELDS = Collections.unmodifiableList(Arrays.asList(
             Field.hostPort(SERVER, "Server (host:port)", ""),
-            Field.text(NAME, "Client name (its ID on the server)", "", true),
-            Field.choice(TRANSPORT, "Transport", "UDP", "UDP", "TCP"),
+            Field.text(NAME, "Client name", "", true),
+            Field.choice(TRANSPORT, "Proto", "UDP", "UDP", "TCP"),
             Field.text(PUBKEY, "Server public key", "", true),
             Field.secret(PSK, "Pre-shared key"),
-            Field.text(MTU, "MTU (576 to 9000, empty: the server's)", "", false),
-            Field.text(KEEPALIVE, "Keepalive, seconds (0 to 3600, empty: 10)", "", false),
-            Field.text(SERVER_TIMEOUT, "Server timeout, seconds (5 to 3600, empty: 20)", "", false),
-            Field.text(WEB_PORT, "Web port for nginx on the server (1 to 65535, empty: none)",
-                    "", false)));
+            Field.text(MTU, "MTU (576\u20139000)", "empty: the server's"),
+            Field.text(KEEPALIVE, "Keepalive, sec (0\u20133600)", "empty: 10"),
+            Field.text(SERVER_TIMEOUT, "Server timeout, sec (5\u20133600)", "empty: 20"),
+            Field.text(WEB_PORT, "Web port for nginx (1\u201365535)", "empty: none")));
+
+    /**
+     * The client name a new setting starts with: the app's name and the last 4 characters of
+     * the device's ANDROID_ID, as {@code camex-3f2a}; the app's name in lower case, letters,
+     * digits and dashes only, at most 26 characters; no ID: the app's name alone.
+     */
+    static String defaultName(String app, String androidId) {
+        String a = app == null ? "" : app.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9-]", "");
+        if (a.length() > 26) a = a.substring(0, 26);
+        if (a.isEmpty()) a = "camex";
+        String id = androidId == null ? "" : androidId.toLowerCase(Locale.ROOT).replaceAll("[^0-9a-z]", "");
+        return id.length() < 4 ? a : a + "-" + id.substring(id.length() - 4);
+    }
+
+    /** {@link #FIELDS} with the client name starting as {@code name}. */
+    static List<Field> fields(String name) {
+        List<Field> out = new ArrayList<>();
+        for (Field f : FIELDS) out.add(NAME.equals(f.key) ? f.withInitial(name) : f);
+        return Collections.unmodifiableList(out);
+    }
 
     // A host name or an IPv4 address (camex resolves IPv4 only), in its server_host[64]
     private static final String HOST =

@@ -105,6 +105,28 @@ public final class CamexTunnel {
     }
 
     /**
+     * The settings with the client name starting as {@link #defaultName(Context, String)}
+     * {@code (context, app)}: the app gives its own name (camex, vectis, microsnander,
+     * decoder). The user may change it; an empty name is not saved (the app keeps or
+     * restores the default).
+     */
+    public static List<Field> fields(Context context, String app) {
+        return Values.fields(defaultName(context, app));
+    }
+
+    /**
+     * The client name of a new setting: the app's name and the last 4 characters of the
+     * device's ANDROID_ID, as {@code vectis-3f2a}, so the same app on two devices gets two
+     * names and two apps on one device too.
+     */
+    @SuppressWarnings("HardwareIds")
+    public static String defaultName(Context context, String app) {
+        String id = android.provider.Settings.Secure.getString(context.getContentResolver(),
+                android.provider.Settings.Secure.ANDROID_ID);
+        return Values.defaultName(app, id);
+    }
+
+    /**
      * Checks the values: null when they are fine, otherwise {@code {key, reason}} of the first
      * wrong field.
      */

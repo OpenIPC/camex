@@ -86,7 +86,9 @@ CamexTunnel.stop();
 
 | Call                                  | What it does                                                                                                |
 |---------------------------------------|-------------------------------------------------------------------------------------------------------------|
-| `fields()`                            | the settings, in the order of a settings screen: key, label, kind, initial value, choices, required         |
+| `fields()`                            | the settings, in the order of a settings screen: key, label, kind, initial value, choices, required, hint   |
+| `fields(context, app)`                | the same, the client name starting as `defaultName(context, app)`                                           |
+| `defaultName(context, app)`           | the app's name and the last 4 characters of the device's ANDROID_ID: `vectis-3f2a`                          |
 | `check(values)`                       | null when the values are fine, otherwise `{key, reason}` of the first wrong field                           |
 | `consentIntent(context)`              | the system's VPN consent dialog to show, or null when the app has the consent (`VpnService.prepare`)        |
 | `start(context, values)`              | starts the tunnel, or restarts it with new values; never throws for a missing consent or bad values         |
@@ -98,19 +100,19 @@ CamexTunnel.stop();
 | `setNotification(id, factory)`        | the app's own notification (and id) instead of the library's                                                |
 | `ConnectLink.parse(link)`             | a camex link to the values, see below                                                                       |
 
-The values (`fields()`):
+The values (`fields()`), with their labels on a settings screen:
 
-| Key              | Kind      | Value                                                                                                                |
-|------------------|-----------|----------------------------------------------------------------------------------------------------------------------|
-| `server`         | host:port | the camex server: a host name or an IPv4 address and its port                                                        |
-| `name`           | text      | the client ID on the server (`[client ID]`), 1 to 31 bytes                                                           |
-| `transport`      | choice    | `UDP` or `TCP`; a server on both (4.0.0+) takes either                                                               |
-| `pubkey`         | text      | the server's public key, 44 characters (`camex --genkey`)                                                            |
-| `psk`            | secret    | the pre-shared key: `hex:`, `base64:` or a passphrase, below 128 bytes                                               |
-| `mtu`            | text      | optional, 576 to 9000; empty: the server's                                                                           |
-| `keepalive`      | text      | optional, 0 to 3600 seconds; empty: 10                                                                               |
-| `server_timeout` | text      | optional, 5 to 3600 seconds without an answer before camex reconnects; empty: 20                                     |
-| `web_port`       | text      | optional, 1 to 65535: the port of the app's web page, for nginx on the server (#174); needs a server 3.19.0 or later |
+| Key              | Kind      | Value                                                                                                                                    |
+|------------------|-----------|------------------------------------------------------------------------------------------------------------------------------------------|
+| `server`         | host:port | the camex server: a host name or an IPv4 address and its port                                                                            |
+| `name`           | text      | `Client name`: the client ID on the server (`[client ID]`), 1 to 31 bytes; a new setting starts as `defaultName(context, app)`           |
+| `transport`      | choice    | `Proto`: `UDP` or `TCP`; a server on both (4.0.0+) takes either                                                                          |
+| `pubkey`         | text      | the server's public key, 44 characters (`camex --genkey`)                                                                                |
+| `psk`            | secret    | `Pre-shared key`: `hex:`, `base64:` or a passphrase, below 128 bytes; hidden (dots), with `Show the key` (`Field.SHOW_SECRET`) under it  |
+| `mtu`            | text      | `MTU (576–9000)`, optional; hint `empty: the server's`                                                                                   |
+| `keepalive`      | text      | `Keepalive, sec (0–3600)`, optional; hint `empty: 10`                                                                                    |
+| `server_timeout` | text      | `Server timeout, sec (5–3600)`: seconds without an answer before camex reconnects, optional; hint `empty: 20`                            |
+| `web_port`       | text      | `Web port for nginx (1–65535)`: the port of the app's web page, for nginx on the server (#174), optional; needs a server 3.19.0 or later |
 
 Nothing is stored or logged: the psk is passed to camex and wiped after the
 run, and a reason from `check()` names the field, never its value.
