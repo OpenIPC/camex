@@ -223,7 +223,7 @@ check $? "CAM-A (configured) under Configured, CAM-B (auto pool) under Auto"
 echo "$conf_part" | grep -qF '<tr class="dev off"><td class="lamp"><span class="bulb"></span></td><td><span class="nm">Gate</span></td><td class="id">cam-z</td>' &&
     ! echo "$home" | grep -q "//cam-z." &&
     echo "$home" | grep -qF 'Configured <b>2</b> &middot; <i>1 offline</i>' &&
-    echo "$home" | grep -qF '<title>2 online, 1 offline &middot; Camex Devices</title>' &&
+    echo "$home" | grep -qF '<title>2 online, 1 offline &middot; Camex</title>' &&
     echo "$home" | grep -q '^<link rel="icon" href="data:image/svg+xml,.*%23c8452c%27'
 check $? "CAM-Z, configured and never connected, is listed offline without a link, counted in the title, the tab's lamp red"
 z_at=$(echo "$conf_part" | grep -n '<span class="nm">Gate</span>' | cut -d: -f1)
@@ -246,7 +246,7 @@ code2=$(docker exec "$P-srv" curl -s -o /dev/null -w '%{http_code}' -m 10 -u cam
 check $? "the start page asks for the password ($code, a wrong one $code2); the cameras do not"
 ip_a=$(ip_of "$P-CAM-A")
 ip_b=$(ip_of "$P-CAM-B")
-echo "$home" | grep -qF '<th class="addr">Address</th><th class="addr">Peer</th><th class="via">Transport</th><th class="conn">'
+echo "$home" | grep -qF '<th class="addr">Address</th><th class="addr">Peer</th><th class="via">Proto</th><th class="conn">'
 check $? "the Peer column right after Address"
 echo "$home" | grep -F "//cam-a.$DOMAIN/" | grep -qF "<td class=\"addr\"><a class=\"peer\" href=\"http://$ip_a/\" target=\"_blank\" rel=\"noopener\">$ip_a</a></td>" &&
     echo "$home" | grep -F "//cam-b.$DOMAIN/" | grep -qF "<td class=\"addr\"><a class=\"peer\" href=\"http://$ip_b:8080/\" target=\"_blank\" rel=\"noopener\">$ip_b</a></td>"

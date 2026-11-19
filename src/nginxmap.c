@@ -675,7 +675,7 @@ static void buf_list(map_buf_t *b, const char *cls, const map_entry_t *e,
     buf_printf(b, "<div class=\"rack\">\n<table>\n<thead><tr><th></th>"
                "<th>Name</th><th class=\"id\">ID</th><th class=\"addr\">"
                "Address</th><th class=\"addr\">Peer</th><th class=\"via\">"
-               "Transport</th><th class=\"conn\">"
+               "Proto</th><th class=\"conn\">"
                "Connected</th><th>Last "
                "packet</th><th class=\"hs\">Handshake</th><th>RX / TX KiB"
                "</th></tr></thead>\n<tbody>\n");
@@ -829,7 +829,7 @@ char *nginx_index_format(const char *lines, const char *domain,
     if (off > 0) {
         buf_printf(&out, ", %ld offline", off);
     }
-    buf_printf(&out, " &middot; Camex Devices</title>\n"
+    buf_printf(&out, " &middot; Camex</title>\n"
         "<link rel=\"icon\" href=\"%s\">\n"
         "<style>\n"
         ":root{--panel:#2c2119;--panel2:#3d2d22;--brass:#c9a24d;"
@@ -845,6 +845,13 @@ char *nginx_index_format(const char *lines, const char *domain,
         "text-transform:uppercase;margin:0 0 6px;text-align:center;"
         "color:var(--brass);text-shadow:0 1px 0 #f3d78a,0 -1px 0 #3d2a0c,"
         "0 0 22px rgba(201,162,77,.35)}\n"
+        /* The heading centred, the version small on its line to the right,
+         * out of the centring (brand brass 1.3.0, 2026-11-18) */
+        ".ttl{position:relative;display:inline-block}\n"
+        ".ttl .ver{position:absolute;left:100%%;bottom:.24em;margin-left:.6em;"
+        "font:12px/1 'Courier New',monospace;letter-spacing:.12em;"
+        "color:var(--dim);text-shadow:none;white-space:nowrap}\n"
+        "@media (max-width:620px){.ttl .ver{bottom:.1em}}\n"
         ".sub{font-family:'Courier New',monospace;font-size:12px;"
         "color:var(--dim);letter-spacing:.3em;text-transform:uppercase;"
         "margin-bottom:24px;text-align:center}\n"
@@ -930,7 +937,8 @@ char *nginx_index_format(const char *lines, const char *domain,
         "@media (max-width:560px){.conn,.id{display:none}.panel{padding:26px "
         "14px 18px}td,th{padding:10px 6px}td.tr,th{white-space:normal}"
         ".tabs{gap:6px}.tabs label{padding:7px 9px;letter-spacing:.08em}}\n"
-        "</style>\n</head>\n<body>\n<h1>Camex Devices</h1>\n",
+        "</style>\n</head>\n<body>\n<h1 class=\"ttl\">Camex<span "
+        "class=\"ver\">" CAMEX_VERSION "</span></h1>\n",
         off > 0 ? LAMP_OFF : LAMP_ON);
     buf_printf(&out, "<div class=\"sub\">%ld online &middot; %ld configured"
                "</div>\n"
@@ -940,8 +948,8 @@ char *nginx_index_format(const char *lines, const char *domain,
                "br\"></span>\n"
                "<div class=\"top\"><span class=\"plate\">Device registry"
                "<span class=\"stale-mark\"> &middot; no connection</span>"
-               "</span><span class=\"plate\">camex %s</span></div>\n",
-               live, nconf, CAMEX_VERSION);
+               "</span></div>\n",
+               live, nconf);
     /* The tabs: CSS only. Configured opens first when it has devices */
     buf_printf(&out, "<input type=\"radio\" name=\"tab\" class=\"tab\" "
                "id=\"tab-conf\"%s>\n<input type=\"radio\" name=\"tab\" "

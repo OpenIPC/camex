@@ -6,6 +6,23 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 4.3.0 — 2026-11-19
+
+- Android app in brass (brand brass 1.3.0, the interface review of 2026-11-18): the heading
+  CAMEX with the version on its line and "Elegant connection system"; the board TUNNEL (its lamp
+  green, amber, red or colourless), SERVER, CLIENT, PROTO; START, STOP and SETTINGS in a row; the
+  check boxes **Start on boot** (a boot receiver starts the tunnel with the saved settings once
+  the VPN consent was given) and **Show log** (the tunnel's states with the address and the
+  reasons, under the panel), both off at first.
+- Android settings: one SETTINGS window, the section CAMEX built from `CamexTunnel.fields()` (labels,
+  hints, `Show the key`, the default client name `camex-<4 characters of ANDROID_ID>`; an empty
+  name is not saved), brass Cancel and Save; a camex link still fills it in and marks what it
+  changed. The settings stay where they were kept; an empty MTU, keepalive or timeout is no longer
+  stored, so camex takes the server's MTU, 10 and 20.
+- Start page of the hub: the heading "Camex" with the version on its line instead of "Camex
+  Devices" and the version plate; the column Transport is Proto. `camex-nginx-sync.sh --check`
+  knows the page by its `camex-version` meta tag too.
+
 ## 4.2.0 — 2026-11-19
 
 - Android library, settings (owner's decisions 2026-11-18, the interface review):

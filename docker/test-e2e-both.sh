@@ -143,7 +143,7 @@ check $? "they reach each other (UDP to TCP and back)"
 status | grep -Eq "^CAM-U .* udp " && status | grep -Eq "^CAM-T .* tcp "
 check $? "the table shows each one's transport"
 status --format nginx-index > "$BUILD_CTX/page.html" 2>/dev/null
-grep -q '<th class="via">Transport</th>' "$BUILD_CTX/page.html" &&
+grep -q '<th class="via">Proto</th>' "$BUILD_CTX/page.html" &&
     grep -q '<td class="via">UDP</td>' "$BUILD_CTX/page.html" &&
     grep -q '<td class="via">TCP</td>' "$BUILD_CTX/page.html"
 check $? "the start page has the transport column with UDP and TCP"

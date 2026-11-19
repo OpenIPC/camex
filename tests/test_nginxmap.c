@@ -108,8 +108,13 @@ static void test_index(void)
     /* No clients: both lists say so, Configured opens */
     m = page("", "openipc.click", &n, warn, sizeof(warn));
     CHECK(m != NULL && n == 0U && strstr(m, "<!doctype html>\n") == m &&
-              strstr(m, "<title>0 online &middot; Camex Devices</title>") !=
+              strstr(m, "<title>0 online &middot; Camex</title>") !=
                   NULL &&
+              /* the heading with the version on its line, no version plate
+               * (brand brass 1.3.0, 2026-11-18) */
+              strstr(m, "<h1 class=\"ttl\">Camex<span class=\"ver\">"
+                        CAMEX_VERSION "</span></h1>") != NULL &&
+              strstr(m, "<span class=\"plate\">camex ") == NULL &&
               strstr(m, "r=%276.5%27 stroke=%27%236e5320%27 fill=%27%235ad38f"
                         "%27/%3E%3C/svg%3E\">") != NULL &&
               strstr(m, "<div class=\"sub\">0 online &middot; 0 configured"
@@ -138,8 +143,8 @@ static void test_index(void)
               strstr(m, "<div class=\"sub\">4 online &middot; 5 configured"
                      "</div>") != NULL,
           "four online, five configured");
-    CHECK(m != NULL && strstr(m, "<title>4 online, 2 offline &middot; Camex "
-                              "Devices</title>") != NULL,
+    CHECK(m != NULL && strstr(m, "<title>4 online, 2 offline &middot; Camex"
+                              "</title>") != NULL,
           "the title counts the online devices, auto ones too, and the "
           "offline ones");
     CHECK(m != NULL && strstr(m, "<link rel=\"icon\" href=\"data:image/svg+"
@@ -377,7 +382,7 @@ static void test_index(void)
              sizeof(warn));
     CHECK(m != NULL && n == 5U &&
               strstr(m, "<th class=\"addr\">Address</th><th class=\"addr\">"
-                     "Peer</th><th class=\"via\">Transport</th><th "
+                     "Peer</th><th class=\"via\">Proto</th><th "
                      "class=\"conn\">") != NULL &&
               strstr(m, ">Gate</a></td><td class=\"id\">cam1</td><td "
                      "class=\"addr\">10.0.0.1</td><td class=\"addr\"><a "
