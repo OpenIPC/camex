@@ -232,7 +232,7 @@ yours.
 prints one line per item, `ok`, `WARN` or `FAIL`. It checks that the servers
 answer, the domain, that nginx includes the map and has `server_name` for the
 domain, and what nginx really answers on port 80 of this host: a name under
-the domain with no camera must get camex's offline page, and the bare domain
+the domain with no device must get camex's page "Device not reachable", and the bare domain
 the start page, behind its password (a `WARN` when it has none; with the
 password from `/etc/camex/nginx-password`, `PASSWORD_FILE=` for another file,
 it also opens the page). Then the start page file, the DNS records and the
@@ -411,9 +411,11 @@ blocks in the file, Auto otherwise, and the browser remembers the tab chosen
   sync script by hand.
 - **Everything at once**: `sudo camex-nginx-sync --check` (see [nginx](#nginx)).
 - **Through nginx**: `curl -sI -H 'Host: 001a2b3c4d5e.openipc.click'
-  http://127.0.0.1/`. The offline page means the name is not in the map:
-  compare with `camex --status --format nginx-map --domain openipc.click`
-  and run the sync script by hand.
+  http://127.0.0.1/`. The page "Device not reachable" means no live device has
+  this name (it is not in the map: compare with `camex --status --format
+  nginx-map --domain openipc.click` and run the sync script by hand), or the
+  device is online but no web page answers on its port (an Android app that does
+  not serve its `web_port` itself, #187).
 - **Logs**: the server logs `Registered auto client <ID>`, `Expired client
   <address>`, address offers and moves, and rejected handshakes (a wrong key, a
   reserved address); `journalctl -u camex-nginx-sync` shows when the map was
@@ -450,18 +452,18 @@ then the script syncs every 10 seconds and says so once in the log.
 Settings (environment; `camex-nginx-sync.service` sets `MAP` and `INDEX`, and
 `--check` run by hand takes those from it):
 
-| Variable             | Meaning                                                                                                                         |
-|----------------------|---------------------------------------------------------------------------------------------------------------------------------|
-| `DOMAIN`             | the domain after the client ID; empty (default): `domain=` in `[server]` of the server                                          |
-| `HTTP_PORT`          | nginx's port, in the start page's links and what `--check` asks (80)                                                            |
-| `UPSTREAM_PORT`      | the clients' web port (80)                                                                                                      |
-| `DEFAULT`            | where unknown names go, `<IPv4>:<port>` (an address: `proxy_pass` with a variable has no resolver); empty: nginx's offline page |
-| `CONTROL`            | one server's control socket; empty: every server                                                                                |
-| `MAP`                | the map file nginx includes (`/etc/nginx/camex-map.conf`)                                                                       |
-| `INDEX`              | the start page, e.g. `/var/lib/camex-nginx/index.html`; empty: no updates; its directory must exist                             |
-| `CHECK_DNS`          | `no`: `--check` skips the DNS records (a container, a private network)                                                          |
-| `PASSWORD_FILE`      | the start page's password (`/etc/camex/nginx-password`): `--check` opens the page with it                                       |
-| `CAMEX`, `NGINX_BIN` | the programs (`camex`, `nginx`; not `NGINX`, which nginx itself reads)                                                          |
+| Variable             | Meaning                                                                                                                                        |
+|----------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
+| `DOMAIN`             | the domain after the client ID; empty (default): `domain=` in `[server]` of the server                                                         |
+| `HTTP_PORT`          | nginx's port, in the start page's links and what `--check` asks (80)                                                                           |
+| `UPSTREAM_PORT`      | the clients' web port (80)                                                                                                                     |
+| `DEFAULT`            | where unknown names go, `<IPv4>:<port>` (an address: `proxy_pass` with a variable has no resolver); empty: nginx's page "Device not reachable" |
+| `CONTROL`            | one server's control socket; empty: every server                                                                                               |
+| `MAP`                | the map file nginx includes (`/etc/nginx/camex-map.conf`)                                                                                      |
+| `INDEX`              | the start page, e.g. `/var/lib/camex-nginx/index.html`; empty: no updates; its directory must exist                                            |
+| `CHECK_DNS`          | `no`: `--check` skips the DNS records (a container, a private network)                                                                         |
+| `PASSWORD_FILE`      | the start page's password (`/etc/camex/nginx-password`): `--check` opens the page with it                                                      |
+| `CAMEX`, `NGINX_BIN` | the programs (`camex`, `nginx`; not `NGINX`, which nginx itself reads)                                                                         |
 
 ## Reference
 
@@ -497,7 +499,8 @@ map $host $camex_upstream {
 - `examples/nginx-camex.conf` is the server block: `proxy_pass` to the map's
   target, WebSocket, no buffering, no limit on the upload size (a firmware image
   through a device's web UI; nginx's default is 1 MB), a short connect timeout
-  and an "offline" page for names with no live client. `examples/camex-nginx-sync.sh` (POSIX sh) runs
+  and the page "Device not reachable" for names with no live client or no web
+  page on the port. `examples/camex-nginx-sync.sh` (POSIX sh) runs
   once, with `--loop <seconds>`, or with `--follow`, as `camex-nginx-sync.service`
   runs it: at every change (see [Sync script](#sync-script)). Addresses are
   stable (#81), so the map changes only when clients come and go.
