@@ -20,6 +20,7 @@ import android.text.InputType;
 import android.text.TextUtils;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -54,6 +55,8 @@ public class SettingsActivity extends Activity {
     private static final String STATE_VALUES = "values";
     private static final String STATE_NOTE = "link_note";
     private static final String STATE_MARKED = "link_marked";
+    private static final String STATE_FOCUS = "focus";
+    private static final String STATE_SELECTION = "selection";
 
     private final Map<String, Field> fields = new LinkedHashMap<>();
     private final Map<String, View> inputs = new HashMap<>();
@@ -85,6 +88,16 @@ public class SettingsActivity extends Activity {
             if (note != null) showNote(note);
             ArrayList<String> keys = savedInstanceState.getStringArrayList(STATE_MARKED);
             if (keys != null) for (String k : keys) mark(k);
+            // the field being edited, its cursor and the keyboard as they were
+            View focus = inputs.get(savedInstanceState.getString(STATE_FOCUS, ""));
+            if (focus instanceof EditText) {
+                EditText e = (EditText) focus;
+                int sel = Math.min(savedInstanceState.getInt(STATE_SELECTION, 0), e.length());
+                e.requestFocus();
+                e.setSelection(Math.max(sel, 0));
+                getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
+                    | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+            }
         }
     }
 
@@ -162,6 +175,9 @@ public class SettingsActivity extends Activity {
         e.setSingleLine(true);
         e.setTypeface(Typeface.MONOSPACE);
         e.setSaveEnabled(false);
+        // no autofill service sees the settings, the psk least of all (as the old layout)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            e.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
         if (!f.hint.isEmpty()) e.setHint(f.hint);
         if (CamexTunnel.MTU.equals(f.key) || CamexTunnel.KEEPALIVE.equals(f.key)
                 || CamexTunnel.SERVER_TIMEOUT.equals(f.key)) {
@@ -258,6 +274,13 @@ public class SettingsActivity extends Activity {
         out.putSerializable(STATE_VALUES, values());
         if (noteView.getVisibility() == View.VISIBLE) out.putCharSequence(STATE_NOTE, noteView.getText());
         out.putStringArrayList(STATE_MARKED, marked);
+        View focus = getCurrentFocus();
+        for (Map.Entry<String, View> i : inputs.entrySet()) {
+            if (i.getValue() == focus && focus instanceof EditText) {
+                out.putString(STATE_FOCUS, i.getKey());
+                out.putInt(STATE_SELECTION, ((EditText) focus).getSelectionEnd());
+            }
+        }
     }
 
     /** A link's values over the saved ones: the changed fields marked. */
@@ -275,7 +298,8 @@ public class SettingsActivity extends Activity {
             String host = c.host != null ? c.host : colon > 0 ? cur.substring(0, colon) : cur;
             String port = c.port != null ? String.valueOf(c.port)
                 : colon > 0 ? cur.substring(colon + 1) : String.valueOf(Prefs.DEFAULT_PORT);
-            if (!host.isEmpty()) take(CamexTunnel.SERVER, host + ":" + port, changed);
+            // a port alone with no host yet: shown as ":port", the host to be typed before it
+            take(CamexTunnel.SERVER, host + ":" + port, changed);
         }
         for (String key : new String[]{CamexTunnel.NAME, CamexTunnel.TRANSPORT, CamexTunnel.PUBKEY,
                 CamexTunnel.PSK, CamexTunnel.MTU, CamexTunnel.KEEPALIVE}) {

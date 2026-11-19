@@ -126,12 +126,22 @@ final class Brass {
             view.addView(value, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
         }
 
-        /** colorId 0: no lamp (an empty slot keeps the column). */
+        /** A lamp without colour: its rim only (a part out of work, as a stopped tunnel). */
+        static final int UNLIT = -1;
+
+        /** colorId 0: no lamp (an empty slot keeps the column); {@link #UNLIT}: the rim only. */
         void set(int colorId, CharSequence v) {
-            if (colorId == 0)
+            if (colorId == 0) {
                 lamp.setBackground(null);
-            else
+            } else if (colorId == UNLIT) {
+                GradientDrawable d = new GradientDrawable();
+                d.setShape(GradientDrawable.OVAL);
+                d.setColor(0);
+                d.setStroke(dp(view.getContext(), 1), 0xff6e5320);
+                lamp.setBackground(d);
+            } else {
                 lamp.setBackground(Brass.lamp(view.getContext(), colorId));
+            }
             value.setText(v);
         }
     }

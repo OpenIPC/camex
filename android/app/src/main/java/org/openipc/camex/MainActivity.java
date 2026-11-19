@@ -210,7 +210,7 @@ public class MainActivity extends Activity {
                 text = "FAILED";
                 break;
             default:
-                lamp = R.color.dim;
+                lamp = Brass.Row.UNLIT;
                 text = "STOPPED";
         }
         if (!error.isEmpty() && state != CamexTunnel.State.CONNECTED) text += "\n" + error;
