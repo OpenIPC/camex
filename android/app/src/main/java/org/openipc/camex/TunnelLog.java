@@ -20,6 +20,8 @@ final class TunnelLog {
     private static String last = "";
     private static Runnable onChange;
     private static boolean listening;
+    // Lines dropped from the top since the start: the log window shifts by them (brass 1.3.1)
+    private static long removed;
 
     private TunnelLog() { }
 
@@ -41,7 +43,10 @@ final class TunnelLog {
         last = text;
         String t = new SimpleDateFormat("HH:mm:ss", Locale.ROOT).format(new Date());
         lines.addLast(t + " " + text);
-        while (lines.size() > LINES) lines.removeFirst();
+        while (lines.size() > LINES) {
+            lines.removeFirst();
+            removed++;
+        }
         if (onChange != null) onChange.run();
     }
 
@@ -49,6 +54,11 @@ final class TunnelLog {
         StringBuilder b = new StringBuilder();
         for (String l : lines) b.append(b.length() == 0 ? "" : "\n").append(l);
         return b.toString();
+    }
+
+    /** How many lines left the top since the start, with {@link #text()} of the same moment. */
+    static long removed() {
+        return removed;
     }
 
     static void onChange(Runnable r) {

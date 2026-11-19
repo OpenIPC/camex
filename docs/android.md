@@ -12,8 +12,10 @@ waiting for the VPN permission, red failed with the reason, colourless stopped),
 **SERVER**, **CLIENT** and **PROTO** — and **START**, **STOP** and **SETTINGS** in a
 row; under them **Start on boot** (the tunnel with the saved settings after a
 reboot, once the VPN permission was given) and **Show log** (the tunnel's states,
-the address and the reasons of failures and reconnects, under the panel); both
-are off at first.
+the address and the reasons of failures and reconnects, under the panel, the oldest
+first, in a window of 12 lines that follows the last one unless scrolled up); both
+are off at first. After an update of the app the tunnel comes back by itself if it
+was running (started and not stopped with **STOP**).
 
 | Main screen                             | Settings (opened by a link)              |
 |-----------------------------------------|------------------------------------------|

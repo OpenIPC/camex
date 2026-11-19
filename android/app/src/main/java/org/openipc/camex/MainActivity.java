@@ -31,7 +31,8 @@ import java.util.Map;
 public class MainActivity extends Activity {
     private Brass.Row rowTunnel, rowServer, rowClient, rowProto;
     private Button startButton, stopButton, settingsButton;
-    private TextView logView;
+    private Brass.LogWindow logWindow;
+    private static final int LOG_LINES = 12;
 
     // The tunnel's state from the library (it reconnects by itself until Stop)
     private final CamexTunnel.Listener listener = this::showState;
@@ -102,11 +103,12 @@ public class MainActivity extends Activity {
         checks.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
         panel.addView(checks);
 
-        logView = Brass.display(this);
-        logView.setTextSize(11);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        // The Show log window (brand brass 1.3.1): oldest line at the top, 12 lines with its own
+        // scroll, it follows the end unless scrolled up, D-pad focus with the focus ring
+        logWindow = new Brass.LogWindow(this, LOG_LINES);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, logWindow.height);
         lp.setMargins(0, pad, 0, 0);
-        page.addView(logView, lp);
+        page.addView(logWindow.view, lp);
         showLog.setOnCheckedChangeListener((b, on) -> {
             prefs.edit().putBoolean(Prefs.SHOW_LOG, on).apply();
             showLog(on);
@@ -120,6 +122,7 @@ public class MainActivity extends Activity {
         startButton.setOnClickListener(v -> startVpn());
         stopButton.setOnClickListener(v -> {
             TunnelLog.add("stop");
+            Prefs.of(this).edit().putBoolean(Prefs.RUNNING, false).apply();
             CamexTunnel.stop();
         });
         settingsButton.setOnClickListener(v -> openSettings());
@@ -133,8 +136,8 @@ public class MainActivity extends Activity {
         super.onStart();
         // the listener gives the state at once; the settings may have changed meanwhile
         CamexTunnel.addListener(listener);
-        TunnelLog.onChange(() -> logView.setText(TunnelLog.text()));
-        logView.setText(TunnelLog.text());
+        TunnelLog.onChange(this::showLogText);
+        showLogText();
     }
 
     @Override
@@ -145,7 +148,12 @@ public class MainActivity extends Activity {
     }
 
     private void showLog(boolean on) {
-        logView.setVisibility(on ? View.VISIBLE : View.GONE);
+        logWindow.view.setVisibility(on ? View.VISIBLE : View.GONE);
+        if (on) logWindow.shown();
+    }
+
+    private void showLogText() {
+        logWindow.setText(TunnelLog.text(), TunnelLog.removed());
     }
 
     private void openSettings() {
@@ -183,6 +191,7 @@ public class MainActivity extends Activity {
         super.onActivityResult(request, result, data);
         if (result == RESULT_OK) {
             TunnelLog.add("start");
+            Prefs.of(this).edit().putBoolean(Prefs.RUNNING, true).apply();
             CamexTunnel.start(this, Prefs.load(this));
         }
     }

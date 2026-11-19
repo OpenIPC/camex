@@ -78,12 +78,15 @@
             </intent-filter>
         </activity>
 
-        <!-- Start on boot: the tunnel with the saved settings, when the VPN consent was given -->
+        <!-- Start on boot, and after an update when the tunnel ran: the saved settings, when the
+             VPN consent was given -->
         <receiver
             android:name=".BootReceiver"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <!-- after an update: the tunnel back if it ran before -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 

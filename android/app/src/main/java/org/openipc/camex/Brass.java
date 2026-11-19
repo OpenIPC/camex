@@ -14,8 +14,10 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 final class Brass {
@@ -177,5 +179,136 @@ final class Brass {
         int m = dp(c, 6);
         lp.setMargins(m, m, m, m);
         return lp;
+    }
+
+    /**
+     * The Show log window (brand brass 1.3.1, after pusher 0.22.1): the oldest line at the top,
+     * `rows` lines high with its own scroll, follows the end unless scrolled up, D-pad focus
+     * with the focus ring on a frame around the scroll view.
+     */
+    static final class LogWindow {
+        final android.widget.FrameLayout view;    // the frame: display, focus ring
+        private final ScrollView scroll;
+        private final TextView text;
+        private String shown = "";
+
+        LogWindow(Context c, int rows) {
+            text = new TextView(c);
+            text.setTypeface(Typeface.MONOSPACE);
+            text.setTextSize(11);
+            text.setTextColor(color(c, R.color.dim));
+            int pad = dp(c, 12);
+            text.setPadding(pad, pad, pad, pad);
+            scroll = new ScrollView(c) {
+                @Override
+                public boolean onInterceptTouchEvent(android.view.MotionEvent e) {
+                    // the page scrolls too: keep the drag inside the window
+                    if (e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN)
+                        getParent().requestDisallowInterceptTouchEvent(true);
+                    return super.onInterceptTouchEvent(e);
+                }
+            };
+            scroll.setFocusable(true);
+            // the ring shows the focus: no system highlight over the text (Android 8+)
+            if (android.os.Build.VERSION.SDK_INT >= 26) scroll.setDefaultFocusHighlightEnabled(false);
+            scroll.setScrollBarStyle(View.SCROLLBARS_INSIDE_OVERLAY);
+            scroll.addView(text);
+            // The ring on a frame around the scroll view: the foreground of a
+            // ScrollView moves with its content; the frame takes the focused
+            // state of its child (FrameLayout foreground works from API 1)
+            view = new android.widget.FrameLayout(c);
+            view.setBackgroundResource(R.drawable.display);
+            view.setAddStatesFromChildren(true);
+            view.setForeground(c.getResources().getDrawable(R.drawable.focus_ring, null));
+            view.addView(scroll, new android.widget.FrameLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
+            height = rows * text.getLineHeight() + 2 * pad;
+        }
+
+        /** The height for the layout parameters: `rows` lines and the padding. */
+        final int height;
+
+        // Whether the window follows the end: true at the end, false once the user scrolls up;
+        // kept by the scroll listener, so a scroll posted earlier sees a later drag (#193 review)
+        private boolean follow = true;
+
+        private boolean atEnd() {
+            return scroll.getScrollY() + scroll.getHeight() >= text.getHeight() - dp(scroll.getContext(), 4);
+        }
+
+        // The offset the window scrolled itself to: a scroll event at it is not the user's
+        private int autoTarget = -1;
+
+        private void scrollToEnd() {
+            autoTarget = Math.max(0, text.getHeight() - scroll.getHeight());
+            scroll.scrollTo(0, autoTarget);
+        }
+
+        private void toEnd() {
+            scroll.post(() -> {
+                if (follow) scrollToEnd();
+            });
+        }
+
+        /** Shown again (Show log on): at the end, as the rule wants. */
+        void shown() {
+            follow = true;
+            toEnd();
+        }
+
+        void setText(String s, long removedNow) {
+            if (s.equals(shown))
+                return;
+            if (!listening) {
+                listening = true;
+                // the user's scroll decides whether to follow; the window's own does not
+                scroll.getViewTreeObserver().addOnScrollChangedListener(() -> {
+                    if (scroll.getHeight() == 0 || scroll.getScrollY() == autoTarget) return;
+                    follow = atEnd();
+                });
+                // new lines laid out: to the end, once the text has its new height
+                text.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+                    if (follow && b - t != ob - ot) scrollToEnd();
+                });
+            }
+            // Lines gone from the top (the buffer is full): the view of a reader scrolled up
+            // stays on the same lines; the shift is the height of the dropped text as laid out,
+            // a long line wraps over several screen lines (after pusher 0.22.2)
+            // How many: the log's counter of dropped lines, not a comparison of the texts,
+            // which is wrong when equal lines repeat (brass 1.3.1, after vectis #120)
+            int dy = 0;
+            long gone = removed < 0 ? 0 : removedNow - removed;
+            removed = removedNow;
+            if (!follow && gone > 0) {
+                int chars = headChars(shown, gone);
+                android.text.Layout lay = text.getLayout();
+                if (chars > 0 && lay != null)
+                    dy = lay.getLineTop(lay.getLineForOffset(Math.min(chars, shown.length())));
+            }
+            shown = s;
+            text.setText(s);
+            if (follow) {
+                toEnd();
+            } else if (dy > 0) {
+                int d = dy;
+                scroll.post(() -> scroll.scrollTo(0, Math.max(0, scroll.getScrollY() - d)));
+            }
+        }
+
+        private boolean listening;
+
+        // The log's dropped-line counter at the text shown (-1: none yet)
+        private long removed = -1;
+
+        /** The length of the first {@code lines} lines of {@code text}, their newlines included. */
+        static int headChars(String text, long lines) {
+            int at = 0;
+            for (long i = 0; i < lines; i++) {
+                int nl = text.indexOf('\n', at);
+                if (nl < 0) return text.length();
+                at = nl + 1;
+            }
+            return at;
+        }
     }
 }

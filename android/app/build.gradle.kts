@@ -72,10 +72,15 @@ android {
             }
         }
     }
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
     // Platform classes only (#55): no AppCompat, Material or AndroidX core.
     // camex itself, its VPN service and the link parser: the tunnel library (#172)
     implementation(project(":tunnel"))
+    // JVM tests of plain logic (Brass.LogWindow.droppedChars)
+    testImplementation("junit:junit:4.13.2")
 }
