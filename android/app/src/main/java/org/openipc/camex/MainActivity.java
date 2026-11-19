@@ -149,6 +149,7 @@ public class MainActivity extends Activity {
 
     private void showLog(boolean on) {
         logWindow.view.setVisibility(on ? View.VISIBLE : View.GONE);
+        if (on) logWindow.shown();
     }
 
     private void showLogText() {
