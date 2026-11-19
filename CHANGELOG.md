@@ -11,7 +11,10 @@ release, rebuilt from every push to `master`; this file is the change history.
 - Android app, the Show log window (brand brass 1.3.1): the oldest line at the top, a fixed height
   of 12 lines with its own scroll (the page no longer grows with the log), it follows the last
   line unless the user scrolled up, and it takes the D-pad focus with the focus ring, so it can be
-  scrolled on a TV.
+  scrolled on a TV (`Brass.LogWindow`, after pusher 0.22.1: the ring on a frame around the scroll
+  view, so it does not scroll with the text).
+- Android app: after an update (MY_PACKAGE_REPLACED) the tunnel comes back by itself if it ran
+  before it, that is was started and not stopped with STOP; with saved settings and the VPN consent.
 
 ## 4.3.0 — 2026-11-19
 

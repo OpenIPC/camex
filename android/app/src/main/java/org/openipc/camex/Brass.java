@@ -14,8 +14,10 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 final class Brass {
@@ -177,5 +179,63 @@ final class Brass {
         int m = dp(c, 6);
         lp.setMargins(m, m, m, m);
         return lp;
+    }
+
+    /**
+     * The Show log window (brand brass 1.3.1, after pusher 0.22.1): the oldest line at the top,
+     * `rows` lines high with its own scroll, follows the end unless scrolled up, D-pad focus
+     * with the focus ring on a frame around the scroll view.
+     */
+    static final class LogWindow {
+        final android.widget.FrameLayout view;    // the frame: display, focus ring
+        private final ScrollView scroll;
+        private final TextView text;
+        private String shown = "";
+
+        LogWindow(Context c, int rows) {
+            text = new TextView(c);
+            text.setTypeface(Typeface.MONOSPACE);
+            text.setTextSize(11);
+            text.setTextColor(color(c, R.color.dim));
+            int pad = dp(c, 12);
+            text.setPadding(pad, pad, pad, pad);
+            scroll = new ScrollView(c) {
+                @Override
+                public boolean onInterceptTouchEvent(android.view.MotionEvent e) {
+                    // the page scrolls too: keep the drag inside the window
+                    if (e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN)
+                        getParent().requestDisallowInterceptTouchEvent(true);
+                    return super.onInterceptTouchEvent(e);
+                }
+            };
+            scroll.setFocusable(true);
+            // the ring shows the focus: no system highlight over the text (Android 8+)
+            if (android.os.Build.VERSION.SDK_INT >= 26) scroll.setDefaultFocusHighlightEnabled(false);
+            scroll.setScrollBarStyle(View.SCROLLBARS_INSIDE_OVERLAY);
+            scroll.addView(text);
+            // The ring on a frame around the scroll view: the foreground of a
+            // ScrollView moves with its content; the frame takes the focused
+            // state of its child (FrameLayout foreground works from API 1)
+            view = new android.widget.FrameLayout(c);
+            view.setBackgroundResource(R.drawable.display);
+            view.setAddStatesFromChildren(true);
+            view.setForeground(c.getResources().getDrawable(R.drawable.focus_ring, null));
+            view.addView(scroll, new android.widget.FrameLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
+            height = rows * text.getLineHeight() + 2 * pad;
+        }
+
+        /** The height for the layout parameters: `rows` lines and the padding. */
+        final int height;
+
+        void setText(String s) {
+            if (s.equals(shown))
+                return;
+            boolean atEnd = scroll.getScrollY() + scroll.getHeight() >= text.getHeight() - dp(scroll.getContext(), 4);
+            shown = s;
+            text.setText(s);
+            if (atEnd)
+                scroll.post(() -> scroll.scrollTo(0, Math.max(0, text.getHeight() - scroll.getHeight())));
+        }
     }
 }

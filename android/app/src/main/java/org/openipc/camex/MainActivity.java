@@ -31,8 +31,7 @@ import java.util.Map;
 public class MainActivity extends Activity {
     private Brass.Row rowTunnel, rowServer, rowClient, rowProto;
     private Button startButton, stopButton, settingsButton;
-    private TextView logView;
-    private ScrollView logScroll;
+    private Brass.LogWindow logWindow;
     private static final int LOG_LINES = 12;
 
     // The tunnel's state from the library (it reconnects by itself until Stop)
@@ -104,30 +103,12 @@ public class MainActivity extends Activity {
         checks.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
         panel.addView(checks);
 
-        // The Show log window (brand brass 1.3.1): oldest line at the top, a fixed height of
-        // about 12 lines with its own scroll (the page does not grow), it follows the last
-        // line unless the user scrolled up, D-pad focus with the focus ring
-        logView = new TextView(this);
-        logView.setTypeface(android.graphics.Typeface.MONOSPACE);
-        logView.setTextColor(Brass.color(this, R.color.dim));
-        logView.setTextSize(11);
-        int lpad = Brass.dp(this, 12);
-        logView.setPadding(lpad, lpad, lpad, lpad);
-        logScroll = new ScrollView(this);
-        logScroll.setBackground(new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{
-            getDrawable(R.drawable.display), getDrawable(R.drawable.focus_ring)}));
-        logScroll.setFocusable(true);
-        // its own scroll inside the page's: a drag on the log moves the log
-        logScroll.setOnTouchListener((v, e) -> {
-            v.getParent().requestDisallowInterceptTouchEvent(true);
-            return false;
-        });
-        logScroll.setFillViewport(true);
-        logScroll.addView(logView);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1,
-            logView.getLineHeight() * LOG_LINES + 2 * lpad);
+        // The Show log window (brand brass 1.3.1): oldest line at the top, 12 lines with its own
+        // scroll, it follows the end unless scrolled up, D-pad focus with the focus ring
+        logWindow = new Brass.LogWindow(this, LOG_LINES);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, logWindow.height);
         lp.setMargins(0, pad, 0, 0);
-        page.addView(logScroll, lp);
+        page.addView(logWindow.view, lp);
         showLog.setOnCheckedChangeListener((b, on) -> {
             prefs.edit().putBoolean(Prefs.SHOW_LOG, on).apply();
             showLog(on);
@@ -141,6 +122,7 @@ public class MainActivity extends Activity {
         startButton.setOnClickListener(v -> startVpn());
         stopButton.setOnClickListener(v -> {
             TunnelLog.add("stop");
+            Prefs.of(this).edit().putBoolean(Prefs.RUNNING, false).apply();
             CamexTunnel.stop();
         });
         settingsButton.setOnClickListener(v -> openSettings());
@@ -166,16 +148,11 @@ public class MainActivity extends Activity {
     }
 
     private void showLog(boolean on) {
-        logScroll.setVisibility(on ? View.VISIBLE : View.GONE);
+        logWindow.view.setVisibility(on ? View.VISIBLE : View.GONE);
     }
 
-    /** The log's text; the window keeps to its end unless the user scrolled up from it. */
     private void showLogText() {
-        View child = logScroll.getChildAt(0);
-        boolean atEnd = child.getHeight() <= logScroll.getHeight()
-            || logScroll.getScrollY() + logScroll.getHeight() >= child.getHeight() - Brass.dp(this, 4);
-        logView.setText(TunnelLog.text());
-        if (atEnd) logScroll.post(() -> logScroll.scrollTo(0, logView.getHeight()));
+        logWindow.setText(TunnelLog.text());
     }
 
     private void openSettings() {
@@ -213,6 +190,7 @@ public class MainActivity extends Activity {
         super.onActivityResult(request, result, data);
         if (result == RESULT_OK) {
             TunnelLog.add("start");
+            Prefs.of(this).edit().putBoolean(Prefs.RUNNING, true).apply();
             CamexTunnel.start(this, Prefs.load(this));
         }
     }

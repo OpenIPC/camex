@@ -25,6 +25,8 @@ final class Prefs {
     static final int DEFAULT_PORT = 5800;
     static final String START_ON_BOOT = "start_on_boot";
     static final String SHOW_LOG = "show_log";
+    /** The tunnel was started and not stopped by the user: it comes back after an update. */
+    static final String RUNNING = "running";
 
     private Prefs() { }
 
