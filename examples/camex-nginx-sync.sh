@@ -455,14 +455,16 @@ check_all() {
         ''|'(none)') ;;
         *)
             if [ -n "$DEFAULT" ]; then
-                ok "nginx not asked for a name with no camera (DEFAULT= sends" \
+                ok "nginx not asked for a name with no device (DEFAULT= sends" \
                    "those to $DEFAULT)"
             elif command -v curl >/dev/null 2>&1; then
                 b=$(probe "camex-check-$$.$dom")
                 case "$b" in
-                    *"camera is offline"*)
+                    # "Device not reachable" since 2026-11-19; "camera is offline" in a
+                    # conf copied before
+                    *"Device not reachable"*|*"camera is offline"*)
                         ok "nginx sends camex-check-$$.$dom to camex" \
-                           "(the offline page of a name with no camera)" ;;
+                           "(the offline page of a name with no device)" ;;
                     *)
                         fail "nginx does not send camex-check-$$.$dom" \
                              "to camex (no offline page): check the server" \

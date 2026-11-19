@@ -35,8 +35,8 @@ name and a link (see [Start page](#start-page)).
   address (a returning camera gets its address back, #81) and carries their
   traffic. Its control socket answers `camex --status`.
 - **nginx**: the only way users reach the cameras. It maps the host name to a
-  camera's tunnel address and proxies to it; a name with no live camera gets an
-  "offline" page.
+  camera's tunnel address and proxies to it; a name with no live device, or a
+  device with no web page on its port, gets the page "Device not reachable".
 - **camex-nginx-sync** (`examples/camex-nginx-sync.sh`): rewrites nginx's map when cameras come or go and
   reloads nginx, and keeps the start page current.
 
@@ -258,7 +258,9 @@ The steps by hand:
    `/etc/nginx/conf.d/camex-nginx.conf`
    and replace `openipc.click` with your domain (the one in `domain=`). It includes the map, proxies
    to the camera with WebSocket support and without buffering, gives up on a
-   camera after 5 s and shows an "offline" page for names with no live camera.
+   camera after 5 s and shows the page "Device not reachable" for names with no live
+   device, and for a device online with no web page on the port (an Android app on
+   camex 4.1 or later that does not serve its `web_port` itself refuses it, #187).
 4. **The map**: create an empty one so that nginx starts, then let the sync
    script keep it current:
 

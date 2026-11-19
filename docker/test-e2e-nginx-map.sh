@@ -203,7 +203,7 @@ docker exec "$P-srv" nginx -t >/dev/null 2>&1
 check $? "nginx -t accepts the configuration"
 [ "$(get cam-a.$DOMAIN)" = "I am CAM-A" ] && [ "$(get cam-b.$DOMAIN)" = "I am CAM-B" ]
 check $? "each name gets its own client's page"
-get nobody.$DOMAIN | grep -q "is offline"
+get nobody.$DOMAIN | grep -q "Device not reachable"
 check $? "an unknown name gets the offline page"
 ! get "<b>x.$DOMAIN" | grep -q "<b>"
 check $? "the offline page does not echo the Host header"
@@ -337,7 +337,7 @@ check $gone "the server expires it"
 sync >/dev/null
 ! docker exec "$P-srv" grep -q "cam-b" /etc/nginx/camex-map.conf
 check $? "it is gone from the map"
-get cam-b.$DOMAIN | grep -q "is offline"
+get cam-b.$DOMAIN | grep -q "Device not reachable"
 check $? "its name gets the offline page"
 ! get "$DOMAIN" | grep -q "cam-b" && get "$DOMAIN" | grep -qF "//cam-a.$DOMAIN/"
 check $? "it is gone from the start page"
@@ -430,7 +430,7 @@ docker exec "$P-srv" grep -q '^    "\\default" ' /etc/nginx/camex-map.conf &&
     docker exec "$P-srv" nginx -t >/dev/null 2>&1
 check $? "the map has them and nginx -t accepts it"
 [ "$(get default)" = "I am default" ] && [ "$(get include)" = "I am include" ] &&
-    get nobody | grep -q "is offline"
+    get nobody | grep -q "Device not reachable"
 check $? "each one gets its own page, an unknown name still the offline page"
 
 echo "== 9. a warning when nginx does not follow the domain (#106)"
