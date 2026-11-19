@@ -6,6 +6,13 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 4.3.1 — 2026-11-19
+
+- Android app, the Show log window (brand brass 1.3.1): the oldest line at the top, a fixed height
+  of 12 lines with its own scroll (the page no longer grows with the log), it follows the last
+  line unless the user scrolled up, and it takes the D-pad focus with the focus ring, so it can be
+  scrolled on a TV.
+
 ## 4.3.0 — 2026-11-19
 
 - Android app in brass (brand brass 1.3.0, the interface review of 2026-11-18): the heading
