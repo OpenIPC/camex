@@ -256,7 +256,7 @@ final class Brass {
             toEnd();
         }
 
-        void setText(String s) {
+        void setText(String s, long removedNow) {
             if (s.equals(shown))
                 return;
             if (!listening) {
@@ -274,9 +274,13 @@ final class Brass {
             // Lines gone from the top (the buffer is full): the view of a reader scrolled up
             // stays on the same lines; the shift is the height of the dropped text as laid out,
             // a long line wraps over several screen lines (after pusher 0.22.2)
+            // How many: the log's counter of dropped lines, not a comparison of the texts,
+            // which is wrong when equal lines repeat (brass 1.3.1, after vectis #120)
             int dy = 0;
-            if (!follow) {
-                int chars = droppedChars(shown, s);
+            long gone = removed < 0 ? 0 : removedNow - removed;
+            removed = removedNow;
+            if (!follow && gone > 0) {
+                int chars = headChars(shown, gone);
                 android.text.Layout lay = text.getLayout();
                 if (chars > 0 && lay != null)
                     dy = lay.getLineTop(lay.getLineForOffset(Math.min(chars, shown.length())));
@@ -293,19 +297,18 @@ final class Brass {
 
         private boolean listening;
 
-        /**
-         * The length of the head of {@code old} that left the top to make {@code now} (a FIFO
-         * log): whole lines, 0 when nothing left, all of {@code old} when nothing is shared.
-         */
-        static int droppedChars(String old, String now) {
-            if (old.isEmpty() || now.startsWith(old))
-                return 0;
-            for (int i = old.indexOf('\n'); i >= 0; i = old.indexOf('\n', i + 1)) {
-                int rest = old.length() - i - 1;
-                if (rest <= now.length() && now.regionMatches(0, old, i + 1, rest))
-                    return i + 1;
+        // The log's dropped-line counter at the text shown (-1: none yet)
+        private long removed = -1;
+
+        /** The length of the first {@code lines} lines of {@code text}, their newlines included. */
+        static int headChars(String text, long lines) {
+            int at = 0;
+            for (long i = 0; i < lines; i++) {
+                int nl = text.indexOf('\n', at);
+                if (nl < 0) return text.length();
+                at = nl + 1;
             }
-            return old.length();
+            return at;
         }
     }
 }

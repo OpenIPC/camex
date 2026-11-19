@@ -153,7 +153,7 @@ public class MainActivity extends Activity {
     }
 
     private void showLogText() {
-        logWindow.setText(TunnelLog.text());
+        logWindow.setText(TunnelLog.text(), TunnelLog.removed());
     }
 
     private void openSettings() {
