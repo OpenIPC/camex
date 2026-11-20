@@ -33,10 +33,11 @@ import java.util.Set;
  */
 final class OtherVpn {
     private static final String TAG = "camex";
-    // Up to Android 9 the VPN's owner is not known: the tunnel's own VPN may still be on the
-    // list for a moment after it went, so the watch starts after it
-    private static final long OWN_VPN_GONE_MS = 3500;   // past CamexVpnService.OWN_VPN_LINGERS_MS
-    // A VPN seen up before the watch began that is gone by then: the watch looks once more
+    // Up to Android 9 the VPN's owner is not known: after a revoke the tunnel's own VPN may
+    // still be on the list for a moment, so the watch starts after it
+    private static final long OWN_VPN_GONE_MS = 3500;
+    // While the callback has not told of a VPN on the list (gone before the watch, or not told
+    // at all), the watch looks at the list again this often
     private static final long RECHECK_MS = 2000;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
 
@@ -49,7 +50,10 @@ final class OtherVpn {
 
     private OtherVpn() { }
 
-    /** Whether a VPN of another app is up now (the tunnel's own is not counted). */
+    /**
+     * Whether a VPN of another app is up now (the tunnel's own is not counted). A list that
+     * cannot be read counts as one: the tunnel waits rather than take a VPN it cannot see.
+     */
     @SuppressWarnings("deprecation")   // getAllNetworks(): the one call from API 21 to 36
     static boolean active(Context context) {
         ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
@@ -60,6 +64,7 @@ final class OtherVpn {
             }
         } catch (RuntimeException e) {
             Log.w(TAG, "the VPNs cannot be read: " + e.getMessage());
+            return true;
         }
         return false;
     }
@@ -69,7 +74,7 @@ final class OtherVpn {
         if (caps == null || !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return false;
         // Android 10+ gives the owner's uid to the owner only: another app's VPN shows none
         if (Build.VERSION.SDK_INT >= 29) return caps.getOwnerUid() != Process.myUid();
-        return !CamexVpnService.vpnMaybeOwn();
+        return !CamexVpnService.vpnUp();
     }
 
     /**
@@ -86,6 +91,8 @@ final class OtherVpn {
         final Context app = context.getApplicationContext();
         Runnable arm = () -> arm(app, values, token, sawOther);
         MAIN.post(() -> {
+            // an older wait posted late must not end a newer one's watch
+            if (CamexTunnel.token() != token) return;
             unwatch();
             if (ownJustWent && Build.VERSION.SDK_INT < 29) {
                 pending = arm;
@@ -156,9 +163,18 @@ final class OtherVpn {
             callback = null;
             return;
         }
-        if (sawOther) {
-            final ConnectivityManager.NetworkCallback cb = callback;
-            pending = () -> {
+        if (sawOther) recheck(app, cm, values, token, callback);
+    }
+
+    /**
+     * A VPN seen up that the callback has not told of: gone before the watch began (the
+     * tunnel starts), or still on the list (the watch looks again later).
+     */
+    private static void recheck(Context app, ConnectivityManager cm, Map<String, String> values,
+                                long token, ConnectivityManager.NetworkCallback cb) {
+        pending = new Runnable() {
+            @Override
+            public void run() {
                 pending = null;
                 if (callback != cb) return;
                 // a VPN gone between the look at the list and the callback has no onLost
@@ -172,14 +188,20 @@ final class OtherVpn {
                     }
                     if (caps == null) it.remove();
                 }
-                if (!seen.isEmpty() || active(app)) return;
+                if (!seen.isEmpty()) return;   // the callback follows it
+                if (active(app)) {
+                    pending = this;
+                    MAIN.postDelayed(this, RECHECK_MS);
+                    return;
+                }
                 unwatch();
-                if (CamexTunnel.token() != token || CamexTunnel.state() != CamexTunnel.State.WAITING) return;
+                if (CamexTunnel.token() != token
+                        || CamexTunnel.state() != CamexTunnel.State.WAITING) return;
                 Log.i(TAG, "the other VPN is gone: the tunnel starts again");
                 CamexTunnel.startWhenFree(app, values);
-            };
-            MAIN.postDelayed(pending, RECHECK_MS);
-        }
+            }
+        };
+        MAIN.postDelayed(pending, RECHECK_MS);
     }
 
     @SuppressWarnings("deprecation")   // getAllNetworks(): the one call from API 21 to 36

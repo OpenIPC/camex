@@ -212,7 +212,9 @@ Since 4.4.0 the library takes the VPN only when the user asks:
   goes away, the tunnel starts by itself.
 - A tunnel whose VPN another app takes (`onRevoke`) waits in the same way and
   comes back when that app's VPN ends. A tunnel that is reconnecting never asks
-  for the VPN while another app's is up.
+  for the VPN while another app's is up, and keeps its own VPN while camex
+  reconnects or starts again (the library holds the TUN; camex gets a copy), so
+  an app waiting for the VPN does not take it in that gap.
 - `stop()` ends a wait; `start()` during a wait takes the VPN now.
 - A VPN the user turned off in the system settings, with no other VPN after
   it, is not followed by a start: the state stays `WAITING` until the app's
@@ -224,8 +226,10 @@ Since 4.4.0 the library takes the VPN only when the user asks:
 The wait lives in the app's process: an app whose process the system may end
 (no foreground service of its own) starts the tunnel again when it runs next,
 with `startWhenFree()`. Up to Android 9 the owner of a VPN is not known to
-other apps: the library tells its own VPN from another app's by whether its
-own is up (and for 3 s after it went).
+other apps: the library tells its own VPN from another app's by whether it
+holds its own; after a revoke it starts watching 3.5 s later, when its own VPN
+is off the list. A list of networks that cannot be read counts as another
+app's VPN: the tunnel waits rather than take one it cannot see.
 
 ### Android 5.0
 

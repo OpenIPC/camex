@@ -15,7 +15,9 @@ release, rebuilt from every push to `master`; this file is the change history.
   while another app's VPN is up the state is the new `WAITING`, nothing is taken, and the tunnel
   starts by itself when that VPN goes away. A tunnel whose VPN another app takes waits the same
   way instead of `NEEDS_CONSENT`, and a reconnecting tunnel no longer asks for the VPN while
-  another app's is up. `start()` stays the user's start and takes the VPN; `stop()` ends a wait;
+  another app's is up. The library holds the TUN from its `establish()` to a stop (camex gets a
+  copy), so the VPN stays while camex reconnects or starts again, and an app waiting for it does
+  not take it in that gap. `start()` stays the user's start and takes the VPN; `stop()` ends a wait;
   `otherVpnActive()` tells whether another app's VPN is up without taking it.
 - Android app: Start on boot and the start after an update use `startWhenFree()`, and no longer
   ask for the consent at boot (that took the VPN from another app); the board shows `WAITING FOR

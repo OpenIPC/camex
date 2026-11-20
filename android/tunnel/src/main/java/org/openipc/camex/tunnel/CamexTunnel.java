@@ -101,8 +101,10 @@ public final class CamexTunnel {
     // Read anywhere; written in post(), under STATE_LOCK
     private static final Object STATE_LOCK = new Object();
     private static volatile State state = State.STOPPED;
-    // The values of the latest start: a tunnel whose VPN another app takes waits with them
-    private static volatile Map<String, String> lastValues;
+    // The values of the start with the token lastValuesToken (both under START_LOCK): a tunnel
+    // whose VPN another app takes waits with the values of its own start
+    private static Map<String, String> lastValues;
+    private static long lastValuesToken;
     private static volatile String address = "";
     private static volatile String lastError = "";
 
@@ -179,33 +181,41 @@ public final class CamexTunnel {
         Context app = context.getApplicationContext();
         String[] bad = Values.check(values);
         if (bad != null || !OtherVpn.active(app)) return start(context, values);
-        waitFor(app, values, true, false, "another app's VPN is on: the tunnel waits for it to end");
+        waitFor(app, values, 0, true, false, "another app's VPN is on: the tunnel waits for it to end");
         return false;
+    }
+
+    /** From the service: WAITING with the values of its start, if that start is the latest. */
+    static void waitFor(Context app, long token, boolean sawOther, boolean ownJustWent, String why) {
+        waitFor(app, null, token, sawOther, ownJustWent, why);
     }
 
     /**
      * WAITING with these values: the running tunnel (if any) stops, and the watch starts it
      * when the other VPN goes away. Also from the service, when another app takes the VPN.
      */
-    static void waitFor(Context app, Map<String, String> values, boolean sawOther,
-                        boolean ownJustWent, String why) {
-        if (values == null) {
-            refuse(0, State.NEEDS_CONSENT, why);
-            return;
-        }
+    private static void waitFor(Context app, Map<String, String> values, long expect,
+                                boolean sawOther, boolean ownJustWent, String why) {
         long token;
-        android.util.Log.i("camex", why);
+        Map<String, String> v;
         synchronized (START_LOCK) {
+            // a newer start or a stop came: it stands (a user's start() right now)
+            if (expect != 0 && TOKEN.get() != expect) return;
+            // a copy: the caller may change its map while the tunnel waits
+            v = values != null ? new java.util.HashMap<>(values)
+                    : lastValuesToken == expect ? lastValues : null;
+            if (v == null) {
+                refuse(0, State.NEEDS_CONSENT, why);
+                return;
+            }
+            android.util.Log.i("camex", why);
             token = TOKEN.incrementAndGet();
+            lastValues = v;
+            lastValuesToken = token;
             post(State.WAITING, "", why);
             CamexVpnService.stopTunnel();
         }
-        OtherVpn.watch(app, values, token, sawOther, ownJustWent);
-    }
-
-    /** The values of the latest start, null before one. */
-    static Map<String, String> lastValues() {
-        return lastValues;
+        OtherVpn.watch(app, v, token, sawOther, ownJustWent);
     }
 
     /**
@@ -229,7 +239,7 @@ public final class CamexTunnel {
             return false;
         }
         OtherVpn.cancel();
-        lastValues = new java.util.HashMap<>(values);
+        Map<String, String> copy = new java.util.HashMap<>(values);
         if (VpnService.prepare(app) != null) {
             refuse(0, State.NEEDS_CONSENT, "VPN consent needed");
             return false;
@@ -238,6 +248,8 @@ public final class CamexTunnel {
         // the token and the state move together: a stop() meanwhile comes after both
         synchronized (START_LOCK) {
             token = TOKEN.incrementAndGet();
+            lastValues = copy;
+            lastValuesToken = token;
             post(State.CONNECTING, "", "");
         }
         Intent i = new Intent(app, CamexVpnService.class)

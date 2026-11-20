@@ -70,23 +70,31 @@ public final class CamexVpnService extends VpnService {
     }
 
     private static volatile CamexVpnService instance;
-    // This service's VPN is up: up to Android 9 the only way to tell it from another app's
+    // This service's VPN is up (it holds the TUN): up to Android 9 the only way to tell it
+    // from another app's
     private static volatile boolean vpnUp;
-    private static volatile long vpnDownAt = -60000;   // elapsedRealtime of its end
-    // Up to Android 9: the system may list the tunnel's own VPN a moment after it went
-    private static final long OWN_VPN_LINGERS_MS = 3000;
 
-    /**
-     * Whether a VPN on the list may be the tunnel's own: up now, or gone a moment ago (up to
-     * Android 9, where the VPN's owner is not known).
-     */
-    static boolean vpnMaybeOwn() {
-        return vpnUp || android.os.SystemClock.elapsedRealtime() - vpnDownAt < OWN_VPN_LINGERS_MS;
+    /** Whether the tunnel's own VPN is up now. */
+    static boolean vpnUp() {
+        return vpnUp;
     }
 
-    private static void vpnDown() {
-        if (vpnUp) vpnDownAt = android.os.SystemClock.elapsedRealtime();
-        vpnUp = false;
+    // The TUN of the VPN, held from its establish() to a stop, a revoke or the next TUN:
+    // camex gets a copy, so the VPN stays while camex reconnects or starts again, and the app
+    // that holds it does not lose it to an app waiting for it (guarded by lock)
+    private ParcelFileDescriptor heldTun;
+
+    private void holdTun(ParcelFileDescriptor pfd) {
+        ParcelFileDescriptor old = heldTun;
+        heldTun = pfd;
+        vpnUp = pfd != null;
+        if (old != null) {
+            try {
+                old.close();
+            } catch (IOException ignored) {
+                // closed anyway
+            }
+        }
     }
 
     // The worker's orders, guarded by lock: argv of the latest start, its number, and whether
@@ -219,7 +227,6 @@ public final class CamexVpnService extends VpnService {
                 } finally {
                     synchronized (lock) {
                         acquired = false;
-                        vpnDown();   // camex closes its TUN when it ends
                         nativeRelease();
                     }
                 }
@@ -287,6 +294,7 @@ public final class CamexVpnService extends VpnService {
             stopped = true;
             consentLost = true;
             if (acquired) nativeStop();
+            holdTun(null);
             lock.notifyAll();
             if (instance == this) CamexTunnel.post(State.NEEDS_CONSENT, "", "VPN consent needed");
         }
@@ -295,10 +303,13 @@ public final class CamexVpnService extends VpnService {
     // Another app's VPN is up, or took the one this run made: the tunnel stops and waits for
     // it to go away (only for the current run and start, as lostConsent)
     private void yieldVpn(boolean sawOther, boolean ownJustWent, String why) {
+        long token;
         synchronized (lock) {
             if (stopped || instance != this || runToken != CamexTunnel.token()) return;
+            token = runToken;
         }
-        CamexTunnel.waitFor(this, CamexTunnel.lastValues(), sawOther, ownJustWent, why);
+        // waitFor checks the token again in its own lock: a user's start() meanwhile stands
+        CamexTunnel.waitFor(this, token, sawOther, ownJustWent, why);
     }
 
     /** Stops camex and the reconnects; consentLost: the state is NEEDS_CONSENT. */
@@ -307,6 +318,7 @@ public final class CamexVpnService extends VpnService {
             stopped = true;
             consentLost |= lostConsent;
             if (acquired) nativeStop();
+            holdTun(null);   // the VPN goes
             lock.notifyAll();
         }
     }
@@ -445,10 +457,19 @@ public final class CamexVpnService extends VpnService {
                 }
                 upThisRun = true;
                 tunAddress = localIp;
-                vpnUp = true;
+                // camex owns a copy; this one keeps the VPN until the next TUN or a stop
+                ParcelFileDescriptor copy;
+                try {
+                    copy = pfd.dup();
+                } catch (IOException e) {
+                    holdTun(pfd);
+                    post(State.CONNECTING, "", "VPN setup failed: " + e.getClass().getSimpleName());
+                    return -1;
+                }
+                holdTun(pfd);
+                post(State.CONNECTED, localIp, "");
+                return copy.detachFd();
             }
-            post(State.CONNECTED, localIp, "");
-            return pfd.detachFd();
         } catch (RuntimeException e) {
             Log.e(TAG, "establish", e);
             post(State.CONNECTING, "", "VPN setup failed: " + e.getClass().getSimpleName());
@@ -586,7 +607,9 @@ public final class CamexVpnService extends VpnService {
         synchronized (lock) {
             current = !stopped && instance == this && runToken == CamexTunnel.token();
         }
-        vpnDown();
+        synchronized (lock) {
+            holdTun(null);   // the system has taken the VPN already
+        }
         if (current) {
             yieldVpn(false, true, "VPN taken by another app or turned off: the tunnel waits for it to end");
         } else {
@@ -603,7 +626,6 @@ public final class CamexVpnService extends VpnService {
             running = !stopped;
         }
         requestStop(false);
-        vpnDown();
         // the system ended the service with no stop(): the state says so
         if (running && instance == this) {
             CamexTunnel.post(State.STOPPED, "", "the system stopped the tunnel service");
