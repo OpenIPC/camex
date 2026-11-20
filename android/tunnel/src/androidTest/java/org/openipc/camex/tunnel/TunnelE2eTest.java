@@ -112,6 +112,42 @@ public class TunnelE2eTest {
         Log.i(TAG, "dialog " + show);
     }
 
+    /**
+     * step=yield-wait: another app (the camex app) holds the VPN — startWhenFree() waits
+     * (WAITING) and takes nothing; once the script ends that app's VPN, the tunnel comes up by
+     * itself (vpn-yield-e2e.sh).
+     */
+    @Test
+    public void yieldWait() throws Exception {
+        Assume.assumeTrue("yield-wait".equals(args.getString("step")));
+        assertTrue(CamexTunnel.otherVpnActive(context));
+        assertFalse(CamexTunnel.startWhenFree(context, values()));
+        await(CamexTunnel.State.WAITING, 5);
+        Log.i(TAG, "waiting OK");
+        await(CamexTunnel.State.CONNECTED, 90);
+        Log.i(TAG, "free OK " + CamexTunnel.address());
+        CamexTunnel.stop();
+        await(CamexTunnel.State.STOPPED, 10);
+    }
+
+    /**
+     * step=yield-taken: start() takes the VPN and connects; when the user's START of another
+     * app takes it, the tunnel waits (WAITING), and comes back by itself when that app stops.
+     */
+    @Test
+    public void yieldTaken() throws Exception {
+        Assume.assumeTrue("yield-taken".equals(args.getString("step")));
+        assertTrue(CamexTunnel.start(context, values()));
+        await(CamexTunnel.State.CONNECTED, 60);
+        Log.i(TAG, "holding OK " + CamexTunnel.address());
+        await(CamexTunnel.State.WAITING, 90);
+        Log.i(TAG, "taken OK");
+        await(CamexTunnel.State.CONNECTED, 90);
+        Log.i(TAG, "back OK " + CamexTunnel.address());
+        CamexTunnel.stop();
+        await(CamexTunnel.State.STOPPED, 10);
+    }
+
     /** step=bad: bad values — FAILED, the reason names the field, never the psk. */
     @Test
     public void badValues() throws Exception {

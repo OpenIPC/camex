@@ -79,7 +79,8 @@ v.put(CamexTunnel.PUBKEY, "<server public key>");
 v.put(CamexTunnel.PSK, "<psk>");
 
 String[] bad = CamexTunnel.check(v);            // null, or {key, reason}
-CamexTunnel.start(context, v);                  // false: see state() and lastError()
+CamexTunnel.start(context, v);                  // the user's start; false: see state() and lastError()
+CamexTunnel.startWhenFree(context, v);          // a start of the app's own: waits for another app's VPN
 ...
 CamexTunnel.stop();
 ```
@@ -92,9 +93,11 @@ CamexTunnel.stop();
 | `check(values)`                       | null when the values are fine, otherwise `{key, reason}` of the first wrong field                           |
 | `consentIntent(context)`              | the system's VPN consent dialog to show, or null when the app has the consent (`VpnService.prepare`)        |
 | `start(context, values)`              | starts the tunnel, or restarts it with new values; never throws for a missing consent or bad values         |
-| `stop()`                              | stops the tunnel and its reconnects                                                                         |
+| `startWhenFree(context, values)`      | the same, unless another app's VPN is up: then `WAITING`, and the tunnel starts when that VPN goes away     |
+| `otherVpnActive(context)`             | whether another app's VPN is up now; takes nothing from it                                                  |
+| `stop()`                              | stops the tunnel and its reconnects, or its wait                                                            |
 | `state()`, `address()`, `lastError()` | the state, the app's address in the tunnel while connected, a short reason of the last failure or reconnect |
-| `running()`                           | true while the tunnel connects or is up                                                                     |
+| `running()`                           | true while the tunnel connects or is up (not while it waits)                                                |
 | `addListener(l)`, `removeListener(l)` | `onState(state, address, lastError)` on the main thread, on every change and once when added                |
 | `setNotificationLook(title, icon)`    | the title and small icon of the library's notification                                                      |
 | `setNotification(id, factory)`        | the app's own notification (and id) instead of the library's                                                |
@@ -145,13 +148,14 @@ page, or any other server on the device, under its name.
 
 ### States
 
-| State           | Meaning                                                                                               |
-|-----------------|-------------------------------------------------------------------------------------------------------|
-| `STOPPED`       | not started, or stopped by `stop()`                                                                   |
-| `CONNECTING`    | connecting, or reconnecting after a loss; `lastError()` says why it reconnects                        |
-| `CONNECTED`     | the tunnel is up; `address()` is the app's address in it                                              |
-| `NEEDS_CONSENT` | no VPN consent (never given, revoked, or another VPN app took over): give it and call `start()` again |
-| `FAILED`        | the values were refused (`bad <key>: <reason>`), or the service could not start                       |
+| State           | Meaning                                                                                                          |
+|-----------------|------------------------------------------------------------------------------------------------------------------|
+| `STOPPED`       | not started, or stopped by `stop()`                                                                              |
+| `CONNECTING`    | connecting, or reconnecting after a loss; `lastError()` says why it reconnects                                   |
+| `CONNECTED`     | the tunnel is up; `address()` is the app's address in it                                                         |
+| `NEEDS_CONSENT` | no VPN consent (never given, or revoked): give it and call `start()` again                                       |
+| `FAILED`        | the values were refused (`bad <key>: <reason>`), or the service could not start                                  |
+| `WAITING`       | another app's VPN is up (4.4.0): the tunnel starts by itself when it goes away; `start()` takes the VPN now      |
 
 `CONNECTED` means camex has a session with its server. When camex loses the
 server and reconnects by itself (the VPN stays), the state is `CONNECTING`
@@ -189,6 +193,40 @@ nothing throws, nothing retries by itself. The app shows it (screen,
 notification, web page) and calls `start()` again later, as the consent may be
 given over adb meanwhile.
 
+### One VPN at a time
+
+Android holds one VPN on a device. An app that has the consent takes the VPN
+from the app that holds it just by asking: `VpnService.prepare()` switches the
+VPN to it at once, without a word to the user (`Vpn: Switched from <app> to
+<app>` in logcat). `start()` and `consentIntent()` ask, so two apps with a
+tunnel that start it again by themselves (a retry, a boot receiver, a
+reconnect) would take the VPN from each other in turn.
+
+Since 4.4.0 the library takes the VPN only when the user asks:
+
+- `start()` is the user's start (a START button, saving the settings with the
+  tunnel on): it takes the VPN, as before.
+- `startWhenFree()` is for the starts the app makes by itself: its service, a
+  retry, a `BOOT_COMPLETED` receiver, the start after an update. While another
+  app's VPN is up the state is `WAITING` and nothing is taken; once that VPN
+  goes away, the tunnel starts by itself.
+- A tunnel whose VPN another app takes (`onRevoke`) waits in the same way and
+  comes back when that app's VPN ends. A tunnel that is reconnecting never asks
+  for the VPN while another app's is up.
+- `stop()` ends a wait; `start()` during a wait takes the VPN now.
+- A VPN the user turned off in the system settings, with no other VPN after
+  it, is not followed by a start: the state stays `WAITING` until the app's
+  START.
+- `consentIntent()` takes the VPN too when the consent is there: call it when
+  the user turns the tunnel on, not from a screen that only shows the state.
+  `otherVpnActive()` tells, taking nothing, whether another app's VPN is up.
+
+The wait lives in the app's process: an app whose process the system may end
+(no foreground service of its own) starts the tunnel again when it runs next,
+with `startWhenFree()`. Up to Android 9 the owner of a VPN is not known to
+other apps: the library tells its own VPN from another app's by whether its
+own is up (and for 3 s after it went).
+
 ### Android 5.0
 
 Android 5.0 may apply the VPN's routing a moment after `CONNECTED`. A
@@ -201,8 +239,9 @@ new one: it goes through the tunnel
 
 ### Starting without a screen
 
-`start()` works from a `BOOT_COMPLETED` receiver and from the app's own
-foreground service once the consent is there. The library stores no values,
+`start()` and `startWhenFree()` work from a `BOOT_COMPLETED` receiver and from
+the app's own foreground service once the consent is there; such starts are
+`startWhenFree()` (see [One VPN at a time](#one-vpn-at-a-time)). The library stores no values,
 so after the process is gone the app starts the tunnel again; a start by the
 system without values (an always-on VPN set in the system settings) ends in
 `FAILED`.
@@ -255,3 +294,9 @@ Android 5.0); it lives in `src/androidTest` only and is not part of the library.
   socket must be protected, and no default route), TCP to the peer through
   the tunnel, TCP from the peer to the app's `0.0.0.0:8080`, `stop()`, and no
   psk in logcat.
+- `tests/android/vpn-yield-e2e.sh [API]` (API 34 by default): two apps with the
+  library on one emulator, the camex app (A) and the instrumented test (B), both
+  with the consent. B's `startWhenFree()` while A holds the VPN waits and takes
+  nothing, and comes up by itself once A stops; B's `start()` takes the VPN, A's
+  boot receiver then waits (A's board shows `WAITING FOR THE VPN`), A's START
+  takes the VPN back, B waits and comes back by itself after A's STOP.

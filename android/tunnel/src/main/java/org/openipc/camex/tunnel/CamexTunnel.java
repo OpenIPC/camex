@@ -29,8 +29,15 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>No Activity and no stored settings: the app keeps its settings, gets the VPN consent
  * ({@link #consentIntent}, or {@code adb shell appops set <package> ACTIVATE_VPN allow} on an
- * unattended device) and calls {@link #start} — from an Activity, a foreground service or a
- * BOOT_COMPLETED receiver. Once started, the tunnel keeps reconnecting until {@link #stop}.
+ * unattended device) and calls {@link #start} when the user asks for the tunnel, or
+ * {@link #startWhenFree} when it starts by itself (a service, a retry, a BOOT_COMPLETED
+ * receiver). Once started, the tunnel keeps reconnecting until {@link #stop}.
+ *
+ * <p>One VPN at a time: Android holds one, and an app that has the consent takes it from the
+ * app that holds it just by asking ({@code VpnService.prepare()}, which {@link #start} and
+ * {@link #consentIntent} call). So {@link #start} takes the VPN, as the user asked;
+ * {@link #startWhenFree} waits while another app's VPN is up ({@link State#WAITING}) and starts
+ * the tunnel when it goes away; a tunnel whose VPN another app takes waits the same way.
  */
 public final class CamexTunnel {
     /** camex's version (src/version.h): the library's version too. */
@@ -63,6 +70,11 @@ public final class CamexTunnel {
         NEEDS_CONSENT,
         /** the values were refused, or the VPN could not be made: {@link #lastError()} */
         FAILED,
+        /**
+         * another app's VPN is up (Android holds one): the tunnel waits and starts by itself
+         * when that VPN goes away; {@link #start} takes the VPN now, {@link #stop} ends the wait
+         */
+        WAITING,
     }
 
     /** Called on the main thread on every change, and once at once when added. */
@@ -89,6 +101,8 @@ public final class CamexTunnel {
     // Read anywhere; written in post(), under STATE_LOCK
     private static final Object STATE_LOCK = new Object();
     private static volatile State state = State.STOPPED;
+    // The values of the latest start: a tunnel whose VPN another app takes waits with them
+    private static volatile Map<String, String> lastValues;
     private static volatile String address = "";
     private static volatile String lastError = "";
 
@@ -136,10 +150,62 @@ public final class CamexTunnel {
 
     /**
      * The system's VPN consent dialog to show (startActivityForResult), or null when the app
-     * has the consent already (VpnService.prepare).
+     * has the consent already (VpnService.prepare). With the consent given, this takes the VPN
+     * from another app that holds it: call it when the user asks for the tunnel, not from a
+     * screen that only shows it (see {@link #otherVpnActive}).
      */
     public static Intent consentIntent(Context context) {
         return VpnService.prepare(context.getApplicationContext());
+    }
+
+    /**
+     * Whether another app's VPN is up now (the tunnel's own is not counted). Reading it takes
+     * nothing from that app.
+     */
+    public static boolean otherVpnActive(Context context) {
+        return OtherVpn.active(context.getApplicationContext());
+    }
+
+    /**
+     * Starts the tunnel as {@link #start} does, unless another app's VPN is up: then the state
+     * is {@link State#WAITING} and the tunnel starts by itself when that VPN goes away. For the
+     * starts the app makes by itself (its service, a retry, a BOOT_COMPLETED receiver), so two
+     * apps with a tunnel do not take the VPN from each other in turn.
+     *
+     * @return true when the tunnel service was started; false when it waits, or as
+     *         {@link #start}
+     */
+    public static boolean startWhenFree(Context context, Map<String, String> values) {
+        Context app = context.getApplicationContext();
+        String[] bad = Values.check(values);
+        if (bad != null || !OtherVpn.active(app)) return start(context, values);
+        waitFor(app, values, true, false, "another app's VPN is on: the tunnel waits for it to end");
+        return false;
+    }
+
+    /**
+     * WAITING with these values: the running tunnel (if any) stops, and the watch starts it
+     * when the other VPN goes away. Also from the service, when another app takes the VPN.
+     */
+    static void waitFor(Context app, Map<String, String> values, boolean sawOther,
+                        boolean ownJustWent, String why) {
+        if (values == null) {
+            refuse(0, State.NEEDS_CONSENT, why);
+            return;
+        }
+        long token;
+        android.util.Log.i("camex", why);
+        synchronized (START_LOCK) {
+            token = TOKEN.incrementAndGet();
+            post(State.WAITING, "", why);
+            CamexVpnService.stopTunnel();
+        }
+        OtherVpn.watch(app, values, token, sawOther, ownJustWent);
+    }
+
+    /** The values of the latest start, null before one. */
+    static Map<String, String> lastValues() {
+        return lastValues;
     }
 
     /**
@@ -147,7 +213,9 @@ public final class CamexTunnel {
      * missing consent or bad values: the state says it ({@link State#NEEDS_CONSENT},
      * {@link State#FAILED} with {@link #lastError()}) and false is returned; the app may call
      * start again later (a consent given over adb meanwhile). Nothing is stored: after the
-     * process is gone, the app starts the tunnel again.
+     * process is gone, the app starts the tunnel again. With the consent given, this takes the
+     * VPN from another app that holds it: the user's START; a start the app makes by itself is
+     * {@link #startWhenFree}.
      *
      * @return true when the tunnel service was started
      */
@@ -160,6 +228,8 @@ public final class CamexTunnel {
             refuse(0, State.FAILED, "bad " + bad[0] + ": " + bad[1]);
             return false;
         }
+        OtherVpn.cancel();
+        lastValues = new java.util.HashMap<>(values);
         if (VpnService.prepare(app) != null) {
             refuse(0, State.NEEDS_CONSENT, "VPN consent needed");
             return false;
@@ -186,7 +256,7 @@ public final class CamexTunnel {
         return true;
     }
 
-    /** Stops the tunnel and its reconnects; the state becomes STOPPED. */
+    /** Stops the tunnel and its reconnects, or its wait; the state becomes STOPPED. */
     public static void stop() {
         refuse(0, State.STOPPED, "");
     }
@@ -199,6 +269,7 @@ public final class CamexTunnel {
         synchronized (START_LOCK) {
             if (token != 0 && TOKEN.get() != token) return;   // a newer start stands
             TOKEN.incrementAndGet();
+            OtherVpn.cancel();
             post(s, "", error);
             // in the lock: a start after this one is not stopped by it
             CamexVpnService.stopTunnel();
@@ -210,7 +281,10 @@ public final class CamexTunnel {
         return TOKEN.get();
     }
 
-    /** True from {@link #start} to {@link #stop}, while the tunnel connects or is up. */
+    /**
+     * True from {@link #start} to {@link #stop}, while the tunnel connects or is up (not while
+     * it waits: {@link State#WAITING}).
+     */
     public static boolean running() {
         State s = state;
         return s == State.CONNECTING || s == State.CONNECTED;
