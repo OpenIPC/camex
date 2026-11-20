@@ -33,7 +33,7 @@ import java.util.Set;
  */
 final class OtherVpn {
     private static final String TAG = "camex";
-    // Up to Android 9 the VPN's owner is not known: after a revoke the tunnel's own VPN may
+    // Up to Android 10 the VPN's owner is not known: after a revoke the tunnel's own VPN may
     // still be on the list for a moment, so the watch starts after it
     private static final long OWN_VPN_GONE_MS = 3500;
     // While the callback has not told of a VPN on the list (gone before the watch, or not told
@@ -72,8 +72,9 @@ final class OtherVpn {
     /** A VPN network that is not the tunnel's own. */
     private static boolean foreign(NetworkCapabilities caps) {
         if (caps == null || !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return false;
-        // Android 10+ gives the owner's uid to the owner only: another app's VPN shows none
-        if (Build.VERSION.SDK_INT >= 29) return caps.getOwnerUid() != Process.myUid();
+        // Android 11+ gives the owner's uid to the owner only: another app's VPN shows none.
+        // getOwnerUid() is public from API 30; on Android 10 it is hidden (and may throw)
+        if (Build.VERSION.SDK_INT >= 30) return caps.getOwnerUid() != Process.myUid();
         return !CamexVpnService.vpnUp();
     }
 
@@ -94,7 +95,7 @@ final class OtherVpn {
             // an older wait posted late must not end a newer one's watch
             if (CamexTunnel.token() != token) return;
             unwatch();
-            if (ownJustWent && Build.VERSION.SDK_INT < 29) {
+            if (ownJustWent && Build.VERSION.SDK_INT < 30) {
                 pending = arm;
                 MAIN.postDelayed(arm, OWN_VPN_GONE_MS);
             } else {
