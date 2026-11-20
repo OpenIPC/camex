@@ -174,8 +174,10 @@ int mesh_client_start(int l2)
     }
     memset(&any, 0, sizeof(any));
     any.sin_family = AF_INET;
+    /* The direct paths carry the bulk: the same buffers as the server's
+     * socket (net_tune_udp_socket) */
     if (bind(mesh.fd, (struct sockaddr *)&any, sizeof(any)) != 0 ||
-        set_fd_nonblocking(mesh.fd) != 0) {
+        net_tune_udp_socket(mesh.fd) != 0) {
         print_errno_message(LOG_ERR, "bind(peer)");
         close(mesh.fd);
         mesh.fd = -1;

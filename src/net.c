@@ -425,10 +425,28 @@ int net_create_socket(camex_transport_t transport)
     return socket(AF_INET, type, 0);
 }
 
+/* UDP buffers: a burst of a TCP connection inside the tunnel (TSO, a
+ * window's worth at line rate) must wait in the socket while camex works
+ * through it, or the kernel drops it and TCP halves its rate. SO_RCVBUF is
+ * capped at net.core.rmem_max without a word (160 KB on cameras, about 110
+ * packets); camex runs with CAP_NET_ADMIN, so the *FORCE options go past
+ * it. 1 MB asked, 2 MB counted by the kernel: ~250 ms at 60 Mbit/s, and
+ * memory only while it is used. */
+#define CAMEX_UDP_FORCE_BUF (1024 * 1024)
+
 int net_tune_udp_socket(int fd)
 {
     int bufsize;
 
+#if defined(SO_RCVBUFFORCE) && defined(SO_SNDBUFFORCE)
+    bufsize = CAMEX_UDP_FORCE_BUF;
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVBUFFORCE, OPTVAL_CAST &bufsize,
+                   sizeof(bufsize)) == 0 &&
+        setsockopt(fd, SOL_SOCKET, SO_SNDBUFFORCE, OPTVAL_CAST &bufsize,
+                   sizeof(bufsize)) == 0) {
+        return set_fd_nonblocking(fd);
+    }
+#endif
     bufsize = 4 * 1024 * 1024;
     if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, OPTVAL_CAST &bufsize, sizeof(bufsize)) < 0) {
         print_errno_message(LOG_WARNING, "setsockopt(SO_RCVBUF)");
