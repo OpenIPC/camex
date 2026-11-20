@@ -70,7 +70,7 @@ public final class CamexVpnService extends VpnService {
     }
 
     private static volatile CamexVpnService instance;
-    // This service's VPN is up (it holds the TUN): up to Android 9 the only way to tell it
+    // This service's VPN is up (it holds the TUN): up to Android 10 the only way to tell it
     // from another app's
     private static volatile boolean vpnUp;
 

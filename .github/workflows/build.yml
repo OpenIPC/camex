@@ -260,8 +260,9 @@ jobs:
           CAMEX_KEY_PASSWORD: ${{ secrets.CAMEX_KEY_PASSWORD }}
         run: |
           cd android
-          # The link parser's unit tests (#146) on the JVM, then the APK
-          gradle testReleaseUnitTest assembleRelease
+          # The link parser's unit tests (#146) on the JVM, lint (an API above minSdk
+          # fails the apps that build the library in), then the APK
+          gradle testReleaseUnitTest lintDebug assembleRelease
           OUT=app/build/outputs/apk/release
           ls -lh "$OUT/"
           # Output is app-release.apk when signed, app-release-unsigned.apk otherwise.
