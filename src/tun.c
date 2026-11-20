@@ -172,7 +172,21 @@ static int tun_vnet = 0;
  * header and packet go in one buffer */
 static int tun_vnet_one_buffer = 0;
 static offload_seg_t tun_seg;
-static offload_gro_t tun_gro;
+/* Allocated when a device takes offloads (tun_offload_buffers()), so a
+ * camex without them carries none of it: camex locks all its memory */
+static offload_gro_t *tun_gro = NULL;
+static uint8_t *tun_raw = NULL;   /* a TSO packet with its vnet header */
+
+static int tun_offload_buffers(void)
+{
+    if (tun_gro == NULL) {
+        tun_gro = calloc(1U, sizeof(*tun_gro));
+    }
+    if (tun_raw == NULL) {
+        tun_raw = malloc(OFFLOAD_VNET_LEN + OFFLOAD_MAX);
+    }
+    return tun_gro != NULL && tun_raw != NULL ? 0 : -1;
+}
 #endif
 
 void tun_set_offload(int on)
@@ -667,6 +681,7 @@ int tun_create_device(const char *local_ip, const char *netmask,
     static const char DEV_NET_TUN[] = "/dev/net/tun";
     static const char DEV_CAMEX[]   = "/dev/camex";
     const char *p;
+    int offload_want;
 
     if (local_ip == NULL || netmask == NULL || mtu <= 0) {
         return -1;
@@ -674,6 +689,7 @@ int tun_create_device(const char *local_ip, const char *netmask,
     /* A failure before tun_disable_ipv6() must not put back a value saved
      * for an earlier interface */
     tun_ipv6_was = 0;
+    offload_want = tun_offload_ok && !tun_l2 && tun_offload_buffers() == 0;
 
     if (tun_dev_override != NULL && tun_dev_override[0] != '\0') {
         devpath_used = tun_dev_override;
@@ -688,7 +704,7 @@ int tun_create_device(const char *local_ip, const char *netmask,
         if (fd >= 0) {
             copy_ifreq_name(&ifr, tun_l2 ? "tap%d" : "tun%d");
             ifr.ifr_flags = (short)((tun_l2 ? IFF_TAP : IFF_TUN) | IFF_NO_PI |
-                                    (tun_l2 || !tun_offload_ok ? 0 : IFF_VNET_HDR));
+                                    (offload_want ? IFF_VNET_HDR : 0));
             if (ioctl(fd, TUNSETIFF, (void *)&ifr) >= 0) {
                 devpath_used  = DEV_NET_TUN;
                 use_tunsetiff = 1;
@@ -715,7 +731,7 @@ int tun_create_device(const char *local_ip, const char *netmask,
         if (strcmp(devpath_used, DEV_NET_TUN) == 0) {
             copy_ifreq_name(&ifr, tun_l2 ? "tap%d" : "tun%d");
             ifr.ifr_flags = (short)((tun_l2 ? IFF_TAP : IFF_TUN) | IFF_NO_PI |
-                                    (tun_l2 || !tun_offload_ok ? 0 : IFF_VNET_HDR));
+                                    (offload_want ? IFF_VNET_HDR : 0));
             if (ioctl(fd, TUNSETIFF, (void *)&ifr) < 0) {
                 print_errno_message(LOG_ERR, "ioctl(TUNSETIFF)");
                 close_tun_creation(-1, fd);
@@ -736,11 +752,13 @@ int tun_create_device(const char *local_ip, const char *netmask,
     /* Offloads: TCP of up to 64 KB at once both ways, checksums left to
      * camex (TSO, CSUM). The vnet header stays even if the kernel takes
      * none of them */
-    tun_vnet = use_tunsetiff && !tun_l2 && tun_offload_ok;
+    tun_vnet = use_tunsetiff && offload_want;
     tun_vnet_one_buffer = 0;
     memset(&tun_seg, 0, sizeof(tun_seg));
-    tun_gro.len = 0U;
-    if (!use_tunsetiff && !tun_l2 && tun_offload_ok) {
+    if (tun_gro != NULL) {
+        tun_gro->len = 0U;
+    }
+    if (!use_tunsetiff && offload_want) {
         /* camex.ko: the same vnet header by its own ioctl (camex-k.c);
          * a module without it answers ENOTTY and stays as it was */
         int on = 1;
@@ -953,14 +971,22 @@ static int tun_writev(const offload_vnet_t *vh, const uint8_t *pkt, size_t len)
 
     offload_vnet_write(hdr, vh);
     if (tun_vnet_one_buffer) {
-        static uint8_t one[OFFLOAD_VNET_LEN + OFFLOAD_MAX];
+        /* A joined packet has the room for its header in front (no copy, no
+         * second 64 KB buffer); another packet is at most an MTU's */
+        uint8_t one[OFFLOAD_VNET_LEN + TUN_PACKET_MAX];
+        uint8_t *start;
 
-        if (len > OFFLOAD_MAX) {
+        if (pkt == tun_gro->buf) {
+            memcpy(tun_gro->head, hdr, sizeof(hdr));
+            start = tun_gro->head;
+        } else if (len <= TUN_PACKET_MAX) {
+            memcpy(one, hdr, sizeof(hdr));
+            memcpy(one + sizeof(hdr), pkt, len);
+            start = one;
+        } else {
             return -1;
         }
-        memcpy(one, hdr, sizeof(hdr));
-        memcpy(one + sizeof(hdr), pkt, len);
-        written = write(tun_fd, one, len + sizeof(hdr));
+        written = write(tun_fd, start, len + sizeof(hdr));
         return (written < 0 || (size_t)written != len + sizeof(hdr)) ? -1 : 0;
     }
     iov[0].iov_base = hdr;
@@ -980,7 +1006,7 @@ void tun_flush(void)
     if (!tun_vnet || tun_fd < 0) {
         return;
     }
-    len = offload_gro_take(&tun_gro, &vh, &pkt);
+    len = offload_gro_take(tun_gro, &vh, &pkt);
     if (len != 0U && tun_writev(&vh, pkt, len) != 0) {
         static log_limit_t limit;
 
@@ -1000,19 +1026,19 @@ int tun_pending(void)
 static int tun_write_vnet(const uint8_t *buffer, size_t len)
 {
     offload_vnet_t none;
-    int rc = offload_gro_add(&tun_gro, buffer, len);
+    int rc = offload_gro_add(tun_gro, buffer, len);
 
     if (rc == 0) {
         tun_flush();
-        rc = offload_gro_add(&tun_gro, buffer, len);
+        rc = offload_gro_add(tun_gro, buffer, len);
     }
     if (rc == 1) {
-        if (tun_gro.closed) {
+        if (tun_gro->closed) {
             tun_flush();
         }
         return 0;
     }
-    if (offload_gro_same_flow(&tun_gro, buffer, len)) {
+    if (offload_gro_same_flow(tun_gro, buffer, len)) {
         tun_flush();
     }
     memset(&none, 0, sizeof(none));
@@ -1023,7 +1049,7 @@ static int tun_write_vnet(const uint8_t *buffer, size_t len)
  * left to the device are completed */
 static ssize_t tun_read_vnet(uint8_t *buffer, size_t size)
 {
-    static uint8_t raw[OFFLOAD_VNET_LEN + OFFLOAD_MAX];
+    uint8_t *raw = tun_raw;
 
     for (;;) {
         offload_vnet_t vh;
@@ -1039,7 +1065,7 @@ static ssize_t tun_read_vnet(uint8_t *buffer, size_t size)
             }
             continue;   /* too large for the buffer: dropped */
         }
-        len = read(tun_fd, raw, sizeof(raw));
+        len = read(tun_fd, raw, OFFLOAD_VNET_LEN + OFFLOAD_MAX);
         if (len < 0) {
             return -1;
         }

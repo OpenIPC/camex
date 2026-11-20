@@ -386,9 +386,8 @@ static int p2p_send(mesh_peer_t *p, const struct sockaddr_in *a,
                   pkt + V2_P2P_HDR);
     p->send_n++;
     p->last_tx = g_now;
-    return sendto(mesh.fd, (const char *)pkt,
-                  (int)(V2_P2P_HDR + len + NOISE_TAGLEN), 0,
-                  (const struct sockaddr *)a, sizeof(*a)) < 0 ? -1 : 0;
+    return net_sendto_wait(mesh.fd, pkt, V2_P2P_HDR + len + NOISE_TAGLEN,
+                           a) < 0 ? -1 : 0;
 }
 
 /* The first punches to the public endpoint carry a low TTL: they open

@@ -295,7 +295,7 @@ int offload_gro_add(offload_gro_t *g, const uint8_t *pkt, size_t len)
         return 1;
     }
     if (g->closed || v4 != g->v4 || hdrs != g->hdrs ||
-        payload > g->mss || g->len + payload > OFFLOAD_MAX ||
+        payload > g->mss || g->len + payload > OFFLOAD_GRO_MAX ||
         g->count >= 64U || !offload_gro_same_flow(g, pkt, len) ||
         rd32(tcp + 4) != g->next_seq) {
         return 0;

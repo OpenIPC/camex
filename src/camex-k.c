@@ -414,6 +414,15 @@ static int camex_chr_release(struct inode *inode, struct file *filp)
     atomic_set(&priv->attached, 0);
     spin_unlock_irqrestore(&priv->rx_lock, flags);
     netif_wake_queue(priv->dev);
+#ifdef CAMEX_VNET
+    /* The offload buffers go with the fd (camex_vnet_free()) */
+    mutex_lock(&priv->buf_lock);
+    vfree(priv->rbuf);
+    vfree(priv->wbuf);
+    priv->rbuf = NULL;
+    priv->wbuf = NULL;
+    mutex_unlock(&priv->buf_lock);
+#endif
 
     pr_info("camex: userspace detached\n");
     return 0;
@@ -454,6 +463,11 @@ static ssize_t camex_read_vnet(struct camex_priv *priv, struct sk_buff *skb,
         return -EMSGSIZE;
     }
     mutex_lock(&priv->buf_lock);
+    if (!priv->rbuf) {
+        mutex_unlock(&priv->buf_lock);
+        dev_kfree_skb(skb);
+        return -EAGAIN;   /* offloads turned off meanwhile */
+    }
     memcpy(priv->rbuf, &h, CAMEX_VNET_LEN);
     if (skb_copy_bits(skb, 0, priv->rbuf + CAMEX_VNET_LEN, skb->len) != 0)
         ret = -EFAULT;
@@ -481,6 +495,10 @@ static ssize_t camex_write_vnet(struct camex_priv *priv,
         return -EINVAL;
     len = count - CAMEX_VNET_LEN;
     mutex_lock(&priv->buf_lock);
+    if (!priv->wbuf) {
+        mutex_unlock(&priv->buf_lock);
+        return -EAGAIN;
+    }
     if (copy_from_user(priv->wbuf, buf, count)) {
         mutex_unlock(&priv->buf_lock);
         return -EFAULT;
@@ -541,6 +559,18 @@ static ssize_t camex_write_vnet(struct camex_priv *priv,
     return count;
 }
 
+/* The bounce buffers exist only while offloads are on: 2 x 64 KB of
+ * vmalloc memory, given back when they are turned off or the fd closed */
+static void camex_vnet_free(struct camex_priv *priv)
+{
+    mutex_lock(&priv->buf_lock);
+    vfree(priv->rbuf);
+    vfree(priv->wbuf);
+    priv->rbuf = NULL;
+    priv->wbuf = NULL;
+    mutex_unlock(&priv->buf_lock);
+}
+
 /* CAMEX_IOC_VNET: the vnet header on (1) or off (0); the interface takes
  * the offloads only while it is on */
 static long camex_chr_ioctl(struct file *filp, unsigned int cmd,
@@ -553,6 +583,20 @@ static long camex_chr_ioctl(struct file *filp, unsigned int cmd,
         return -ENOTTY;
     if (get_user(on, (int __user *)arg))
         return -EFAULT;
+    if (on && !priv->rbuf) {
+        u8 *r = vmalloc(CAMEX_VNET_MAX);
+        u8 *w = vmalloc(CAMEX_VNET_MAX);
+
+        if (!r || !w) {
+            vfree(r);
+            vfree(w);
+            return -ENOMEM;
+        }
+        mutex_lock(&priv->buf_lock);
+        priv->rbuf = r;
+        priv->wbuf = w;
+        mutex_unlock(&priv->buf_lock);
+    }
     rtnl_lock();
     if (on)
         priv->dev->wanted_features |= CAMEX_OFFLOADS;
@@ -561,6 +605,8 @@ static long camex_chr_ioctl(struct file *filp, unsigned int cmd,
     netdev_update_features(priv->dev);
     priv->vnet = on ? 1 : 0;
     rtnl_unlock();
+    if (!on)
+        camex_vnet_free(priv);
     return 0;
 }
 #endif
@@ -777,18 +823,6 @@ static int __init camex_init(void)
     mutex_init(&priv->buf_lock);
     priv->rbuf = NULL;
     priv->wbuf = NULL;
-#ifdef CAMEX_VNET
-    if (!camex_tap()) {
-        priv->rbuf = vmalloc(CAMEX_VNET_MAX);
-        priv->wbuf = vmalloc(CAMEX_VNET_MAX);
-        if (!priv->rbuf || !priv->wbuf) {
-            vfree(priv->rbuf);
-            vfree(priv->wbuf);
-            free_netdev(dev);
-            return -ENOMEM;
-        }
-    }
-#endif
     g_priv = priv;
 
     ret = register_netdev(dev);

@@ -2102,7 +2102,9 @@ typedef struct {
     uint8_t psk[32];
 } server_pake_t;
 
-static server_pake_t server_pakes[SERVER_PAKES];
+/* Allocated with the first PAKE1: a client never carries it (camex locks
+ * all its memory, mlockall) */
+static server_pake_t *server_pakes = NULL;
 static size_t server_pake_next = 0U;
 static uint8_t server_pake_secret[32];
 static int server_pake_secret_ok = 0;
@@ -2173,6 +2175,12 @@ static int server_handle_pake1(const uint8_t *buf, size_t len,
     if (server_handshake_budget(&src) < 0) {
         return -1;
     }
+    if (server_pakes == NULL) {
+        server_pakes = calloc(SERVER_PAKES, sizeof(*server_pakes));
+        if (server_pakes == NULL) {
+            return -1;
+        }
+    }
     ps = &server_pakes[server_pake_next];
     server_pake_next = (server_pake_next + 1U) % SERVER_PAKES;
     crypto_wipe(ps, sizeof(*ps));
@@ -2188,7 +2196,8 @@ static int server_handle_pake1(const uint8_t *buf, size_t len,
     out[5 + PAKE_SID_LEN] = server_db.globals.allow_new_networks
                                 ? PAKE_FLAG_OPEN : 0U;
     o = 5U + PAKE_SID_LEN + 2U;
-    for (i = 0U; i < CAMEX_NET_MAX && ps->count < PAKE_MAX_NETS; ++i) {
+    for (i = 0U; netw_table != NULL && i < CAMEX_NET_MAX &&
+                 ps->count < PAKE_MAX_NETS; ++i) {
         uint8_t k[32];
 
         if (!netw_table[i].active) {
@@ -2214,6 +2223,9 @@ static int server_handle_pake3(const uint8_t *buf,
     const camex_crypto_t *ctx = crypto_get_ctx();
     size_t i;
 
+    if (server_pakes == NULL) {
+        return -1;
+    }
     for (i = 0U; i < SERVER_PAKES; ++i) {
         server_pake_t *ps = &server_pakes[i];
         uint8_t yb[32], k[32], tag[PAKE_TAG_LEN];
@@ -2253,6 +2265,9 @@ static server_pake_t *server_pake_for(const struct sockaddr_in *from, int fd)
 {
     size_t i;
 
+    if (server_pakes == NULL) {
+        return NULL;
+    }
     for (i = 0U; i < SERVER_PAKES; ++i) {
         server_pake_t *ps = &server_pakes[i];
 
@@ -4016,7 +4031,7 @@ static void status_networks(status_buf_t *b, int json)
         sb_printf(b, "\"allow_new_networks\":%s,\"networks\":[",
                   server_db.globals.allow_new_networks ? "true" : "false");
     }
-    for (i = 0U; i < CAMEX_NET_MAX; ++i) {
+    for (i = 0U; netw_table != NULL && i < CAMEX_NET_MAX; ++i) {
         const camex_network_t *t = &netw_table[i];
         char pool[24];
         unsigned int clients = 0U;
@@ -4670,6 +4685,9 @@ void server_networks_apply(void)
 {
     size_t i;
 
+    if (netw_table == NULL) {
+        return;
+    }
     for (i = 0U; i < CAMEX_NET_MAX; ++i) {
         camex_network_t *t = &netw_table[i];
         uint32_t gw = t->active ? t->pool_net + 1U : 0U;
@@ -4714,6 +4732,9 @@ void server_networks_down(void)
 {
     size_t i;
 
+    if (netw_table == NULL) {
+        return;
+    }
     for (i = 0U; i < CAMEX_NET_MAX; ++i) {
         if (netw_table[i].alias_up) {
             tun_alias_clear((unsigned int)i);

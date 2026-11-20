@@ -39,6 +39,10 @@ typedef struct {
 
 /* The largest packet either way: 64 KB of IP */
 #define OFFLOAD_MAX            65535U
+/* Joined packets: at most 32 KB (~23 packets of 1400 bytes; a camera's
+ * receiver joins about 15), half the kernel's 64 KB to keep camex's locked
+ * memory small */
+#define OFFLOAD_GRO_MAX        32768U
 
 void offload_vnet_parse(offload_vnet_t *vh, const uint8_t in[OFFLOAD_VNET_LEN]);
 void offload_vnet_write(uint8_t out[OFFLOAD_VNET_LEN], const offload_vnet_t *vh);
@@ -71,7 +75,10 @@ ssize_t offload_seg_next(offload_seg_t *s, uint8_t *out, size_t size);
 
 /* TCP packets of one connection joined into one (GRO) */
 typedef struct {
-    uint8_t buf[OFFLOAD_MAX];
+    uint8_t head[OFFLOAD_VNET_LEN];   /* room for the vnet header: buf
+                                         follows it, so header and packet
+                                         can go in one write() */
+    uint8_t buf[OFFLOAD_GRO_MAX];
     size_t len;         /* 0: empty */
     size_t hdrs;
     size_t l4;

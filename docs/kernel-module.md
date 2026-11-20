@@ -313,9 +313,9 @@ is on:
   (`NEEDS_CSUM`, `csum_start`, `csum_offset`); camex cuts and completes them.
 - `write()` takes a packet of up to 64 KB with `gso_type` TCPV4 and
   `NEEDS_CSUM`: TCP packets camex joined, which the stack takes as GRO would
-  give them. It is built of single pages, through a buffer allocated once
-  with `vmalloc()`, so no high-order allocation is needed on a camera with
-  little memory.
+  give them. It is built of single pages, through a buffer allocated with
+  `vmalloc()` when offloads are turned on, so no high-order allocation is
+  needed on a camera with little memory.
 - Header and packet go in one `write()`: the device has no `writev()` of its
   own, and the kernel would split one into two writes.
 
@@ -378,7 +378,8 @@ the module has no offloads. Closing the descriptor turns them off again.
   the maximum queue memory footprint is approximately 96–110 KB; with
   offloads a queued TSO packet can be up to 64 KB, though the kernel's TCP
   keeps far less in flight per connection. The two offload buffers take
-  2 × 64 KB of `vmalloc` memory.
+  2 × 64 KB of `vmalloc` memory, only while offloads are on; closing the
+  descriptor gives them back.
 
 - **A `read()` with a too-small buffer destroys the packet.** If the
   buffer is smaller than the packet length, the packet is lost and

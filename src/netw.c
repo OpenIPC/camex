@@ -12,6 +12,7 @@
 
 #include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifndef _WIN32
@@ -21,7 +22,26 @@
 #include <ws2tcpip.h>
 #endif
 
-camex_network_t netw_table[CAMEX_NET_MAX];
+camex_network_t *netw_table = NULL;
+static camex_network_t *netw_next = NULL;   /* netw_sync()'s new table */
+
+int netw_alloc(void)
+{
+    if (netw_table != NULL) {
+        memset(netw_table, 0, CAMEX_NET_MAX * sizeof(*netw_table));
+        return 0;
+    }
+    netw_table = calloc(CAMEX_NET_MAX, sizeof(*netw_table));
+    netw_next = calloc(CAMEX_NET_MAX, sizeof(*netw_next));
+    if (netw_table == NULL || netw_next == NULL) {
+        free(netw_table);
+        free(netw_next);
+        netw_table = NULL;
+        netw_next = NULL;
+        return -1;
+    }
+    return 0;
+}
 
 #define NETW_ID_CONTEXT "camex network v1"
 #define NETW_HS_CONTEXT "camex network handshake v1"
@@ -77,6 +97,9 @@ int netw_find(const uint8_t id[CAMEX_NET_ID_LEN])
 {
     size_t i;
 
+    if (netw_table == NULL) {
+        return -1;
+    }
     for (i = 0U; i < CAMEX_NET_MAX; ++i) {
         if (netw_table[i].active &&
             memcmp(netw_table[i].id, id, CAMEX_NET_ID_LEN) == 0) {
@@ -143,6 +166,9 @@ int netw_of_ip(uint32_t ip_be)
     uint32_t host = ntohl(ip_be);
     size_t i;
 
+    if (netw_table == NULL) {
+        return -1;
+    }
     for (i = 0U; i < CAMEX_NET_MAX; ++i) {
         const camex_network_t *t = &netw_table[i];
 
@@ -326,7 +352,7 @@ int netw_sync(const camex_net_conf_t *conf, size_t count, int allow_new,
               uint32_t supernet, uint8_t super_prefix, uint8_t pool_prefix,
               const uint32_t *reserved, size_t reserved_count)
 {
-    static camex_network_t next[CAMEX_NET_MAX];
+    camex_network_t *next;
     int slot_of[CAMEX_NET_MAX];
     size_t i;
     size_t j;
@@ -336,7 +362,12 @@ int netw_sync(const camex_net_conf_t *conf, size_t count, int allow_new,
         log_message(LOG_ERR, "Invalid network settings");
         return -1;
     }
-    memcpy(next, netw_table, sizeof(next));
+    if (netw_table == NULL && netw_alloc() != 0) {
+        log_message(LOG_ERR, "No memory for the networks");
+        return -1;
+    }
+    next = netw_next;
+    memcpy(next, netw_table, CAMEX_NET_MAX * sizeof(*next));
     /* Every slot starts unused; listed networks take theirs back */
     for (i = 0U; i < CAMEX_NET_MAX; ++i) {
         if (next[i].active && !next[i].listed && allow_new) {
@@ -477,7 +508,7 @@ int netw_sync(const camex_net_conf_t *conf, size_t count, int allow_new,
             return -1;
         }
     }
-    memcpy(netw_table, next, sizeof(netw_table));
+    memcpy(netw_table, next, CAMEX_NET_MAX * sizeof(*netw_table));
     sync_supernet = supernet;
     sync_super_prefix = super_prefix;
     sync_pool_prefix = pool_prefix;
@@ -491,6 +522,9 @@ int netw_create(const uint8_t id[CAMEX_NET_ID_LEN])
     size_t i;
     int s = -1;
 
+    if (netw_table == NULL) {
+        return -1;
+    }
     for (i = 0U; i < CAMEX_NET_MAX && s < 0; ++i) {
         if (!netw_table[i].active && !netw_table[i].alias_up) {
             s = (int)i;

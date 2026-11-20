@@ -1027,8 +1027,14 @@ int camex_init(camex_config_t *config)
         }
     }
 
-    /* Named networks: their pools, their gateways on the tunnel */
-    memset(netw_table, 0, sizeof(netw_table));
+    /* Named networks: their pools, their gateways on the tunnel (the
+     * table only on a server) */
+    if (netw_alloc() != 0) {
+        log_message(LOG_ERR, "No memory for the networks");
+        packet_close();
+        net_close();
+        return -1;
+    }
     if (server_networks_sync() != 0) {
         packet_close();
         net_close();

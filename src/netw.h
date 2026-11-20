@@ -70,7 +70,12 @@ typedef struct {
     time_t created;
 } camex_network_t;
 
-extern camex_network_t netw_table[CAMEX_NET_MAX];
+/* The server's networks: CAMEX_NET_MAX entries from netw_alloc() (a client
+ * never has them: camex locks all its memory), NULL before */
+extern camex_network_t *netw_table;
+
+/* netw_table allocated (or emptied when it is): 0, or -1 without memory */
+int netw_alloc(void);
 
 /* ID of a network name: BLAKE2b-256("camex network v1" || name) */
 void netw_id_from_name(const char *name, uint8_t id[CAMEX_NET_ID_LEN]);

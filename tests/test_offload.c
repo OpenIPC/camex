@@ -184,7 +184,7 @@ int main(void)
     const uint8_t *pkt;
     size_t la, lb;
 
-    round_trip(1, 60000U, 1448U);
+    round_trip(1, 30000U, 1448U);
     round_trip(0, 30000U, 1428U);
     round_trip(1, 5000U, 1000U);       /* the last packet of a size */
     round_trip(1, 100U, 1448U);        /* one packet */

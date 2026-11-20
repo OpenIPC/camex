@@ -94,7 +94,10 @@ static void test_addresses(void)
     char other[32];
     int found = 0;
 
-    memset(netw_table, 0, sizeof(netw_table));
+    if (netw_alloc() != 0) {
+        fprintf(stderr, "FAIL: netw_alloc\n");
+        exit(1);
+    }
     CHECK(one_network("lab", "10.77.0.0/24") == 0, "a /24 network");
     n = netw_find(netw_table[0].id);
     CHECK(n == 0, "the network is in slot 0");
@@ -169,7 +172,10 @@ static void test_sync(void)
     uint32_t pool_a;
     size_t i;
 
-    memset(netw_table, 0, sizeof(netw_table));
+    if (netw_alloc() != 0) {
+        fprintf(stderr, "FAIL: netw_alloc\n");
+        exit(1);
+    }
     memset(c, 0, sizeof(c));
     netw_id_from_name("alpha", c[0].id);
     netw_id_from_name("beta", c[1].id);
