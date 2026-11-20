@@ -87,20 +87,33 @@ static int parse_mode(const char *value, camex_mode_t *mode)
 /* camex --bench-crypto: how fast this CPU seals tunnel packets of 1400
  * bytes (ChaCha20-Poly1305, as every DATA packet), for a few seconds.
  * Returns 1 (done, exit). */
+/* Seconds of a monotonic clock */
+static double bench_now(void)
+{
+#ifdef _WIN32
+    return (double)GetTickCount64() / 1000.0;
+#else
+    struct timespec t;
+
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)t.tv_sec + (double)t.tv_nsec / 1e9;
+#endif
+}
+
 static int bench_crypto(void)
 {
     static uint8_t plain[1400];
     static uint8_t out[1400 + 16];
     uint8_t key[32];
     uint8_t ad[17];
-    struct timespec t0, t1;
     unsigned long n = 0UL;
     double secs = 0.0;
+    double t0;
 
     memset(key, 0x42, sizeof(key));
     memset(ad, 0x17, sizeof(ad));
     memset(plain, 0x5A, sizeof(plain));
-    clock_gettime(CLOCK_MONOTONIC, &t0);
+    t0 = bench_now();
     do {
         unsigned int k;
 
@@ -108,9 +121,7 @@ static int bench_crypto(void)
             noise_encrypt(key, (uint64_t)n++, ad, sizeof(ad), plain,
                           sizeof(plain), out);
         }
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-        secs = (double)(t1.tv_sec - t0.tv_sec) +
-               (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+        secs = bench_now() - t0;
     } while (secs < 3.0);
     printf("ChaCha20-Poly1305, 1400-byte packets: %.0f packets/s, %.1f MB/s"
            " (%.0f Mbit/s)\n", (double)n / secs,

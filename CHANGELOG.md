@@ -6,6 +6,19 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 4.6.0 — 2026-11-20
+
+- CPace (`pake.c`): a client with `--network` and without `--server-pubkey` checks the server by
+  the network's name at every connection, with nothing more to give. KEYREQ, then PAKE1 (the
+  client's share on an Elligator2 point of the network's ID and session, 1200 bytes), PAKE2 (one
+  answer and tag per network the server knows, at most 24; the tags cover the server's key), PAKE3
+  (the client's tag); the shared key is the Noise PSK, and REGISTER no longer carries the network's
+  ID. A fake server cannot complete the handshake and gets nothing to test guesses offline; a
+  server's new key is proven by the name and kept (`known_servers` lines get a `pake` mark).
+  A network the server does not know but may create (`allow_new_networks`), or a server without
+  CPace, gets the ID the old way (trust on first use), and only while that server never proved
+  the network: one that did and then claims to be open is refused as an impostor.
+
 ## 4.5.0 — 2026-11-20
 
 - The full camex, `camex-<arch>-full` next to every `camex-<arch>` (`make CAMEX_L2=1

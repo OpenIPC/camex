@@ -57,6 +57,7 @@ typedef struct {
     uint8_t auto_client;  /* registered in auto mode (#15) */
     uint16_t net1;        /* its network's slot + 1 (netw.h), 0 = none */
     uint8_t mesh;         /* it can go peer to peer (REGISTER MESH=1) */
+    uint8_t pake;         /* its key came from CPace (pake.h) */
     int web_port;         /* the port of its web UI it announced (#174), 0 = none */
     time_t connected_at;  /* TCP accept time: the pre-auth deadline counts
                            * from here, not from last_seen (#9) */

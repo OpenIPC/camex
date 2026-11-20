@@ -18,6 +18,9 @@
 #include "camex.h"
 #include "tcpgate.h"
 #include "keys.h"
+#include "netw.h"
+#include "pake.h"
+#include "monocypher.h"
 #ifdef CAMEX_MESH
 #include "mesh.h"
 #endif
@@ -92,7 +95,9 @@ static const char *client_known_path(void)
  * key changed is then told how to forget the old one */
 static uint8_t client_key_from_file = 0U;
 
-int client_known_load(void)
+/* This server's line of the known servers file: its key, and whether a
+ * CPace with it ever succeeded ("pake" after the key). 0 or -1 */
+static int client_known_find(char *key, size_t key_size, int *pake_mark)
 {
     const char *path = client_known_path();
     char name[sizeof(current_config.server_host) + 8];
@@ -100,16 +105,14 @@ int client_known_load(void)
     FILE *fp;
     int found = -1;
 
-    if (path == NULL) {
-        return -1;
-    }
-    fp = fopen(path, "r");
-    if (fp == NULL) {
+    *pake_mark = 0;
+    if (path == NULL || (fp = fopen(path, "r")) == NULL) {
         return -1;
     }
     client_known_name(name, sizeof(name));
     while (fgets(line, (int)sizeof(line), fp) != NULL) {
         char *sp;
+        char *mark;
 
         trim_whitespace(line);
         sp = strchr(line, ' ');
@@ -121,20 +124,39 @@ int client_known_load(void)
             continue;
         }
         trim_whitespace(sp + 1);
-        if (crypto_set_server_pub(sp + 1) == 0) {
-            found = 0;
-            client_key_from_file = 1U;
-            log_message(LOG_INFO, "Server key of %s from %s", name, path);
+        mark = strchr(sp + 1, ' ');
+        if (mark != NULL) {
+            *mark++ = '\0';
+            trim_whitespace(mark);
+            *pake_mark = strcmp(mark, "pake") == 0;
         }
+        snprintf(key, key_size, "%s", sp + 1);
+        found = 0;
         break;
     }
     fclose(fp);
     return found;
 }
 
+int client_known_load(void)
+{
+    char key[64];
+    int mark;
+
+    if (client_known_find(key, sizeof(key), &mark) != 0 ||
+        crypto_set_server_pub(key) != 0) {
+        return -1;
+    }
+    client_key_from_file = 1U;
+    log_message(LOG_INFO, "Server key of %s:%d from %s",
+                current_config.server_host, current_config.port,
+                client_known_path());
+    return 0;
+}
+
 /* Keep the key the server gave on first contact: the file is rewritten
  * through a new one, so a power cut leaves the old or the new file */
-static void client_known_store(const char *pub_b64)
+static void client_known_store(const char *pub_b64, int pake_mark)
 {
     const char *path = client_known_path();
     char name[sizeof(current_config.server_host) + 8];
@@ -174,14 +196,14 @@ static void client_known_store(const char *pub_b64)
         }
         fclose(in);
     }
-    fprintf(out, "%s %s\n", name, pub_b64);
+    fprintf(out, "%s %s%s\n", name, pub_b64, pake_mark ? " pake" : "");
     if (fclose(out) != 0 || rename(tmp, path) != 0) {
         log_message(LOG_WARNING, "Cannot keep the server key in %s (%s)",
                     path, strerror(errno));
         (void)remove(tmp);
         return;
     }
-    log_message(LOG_NOTICE, "Server key of %s kept in %s", name, path);
+    log_message(LOG_INFO, "Server key of %s kept in %s", name, path);
 }
 
 /* First contact without the server's key: ask for it. The request is
@@ -200,6 +222,8 @@ static int client_send_keyreq(void)
 }
 
 static int client_send_init(void);
+static int client_send_init_noise(void);
+static void client_pake_new_connection(void);
 
 /* The server's key on first contact: kept (trust on first use), then the
  * handshake starts */
@@ -216,14 +240,222 @@ static int client_handle_key(const uint8_t *buffer, size_t len)
         return -1;
     }
     client_state.key_requested = 0U;
+    /* With CPace the key is checked by the network's name first */
+    if (current_config.pake) {
+        return client_send_init();
+    }
     log_message(LOG_NOTICE, "First contact with server %s:%d: its key %s "
                 "is trusted from now on", current_config.server_host,
                 current_config.port, b64);
-    client_known_store(b64);
+    client_known_store(b64, 0);
     return client_send_init();
 }
 
+/*
+ * CPace (pake.h). Each connection: the server's key (KEYREQ), PAKE1, the
+ * server's PAKE2 with one answer per network it knows; the one whose tag
+ * opens is ours, PAKE3 confirms it, and its key is the handshake's PSK.
+ * The network's ID is never sent. A server that does not know the network
+ * but takes new ones (or one that does not answer PAKE1, an older camex)
+ * gets the ID the old way, but only while this client never completed a
+ * CPace with it: then a server that claims to be open is an impostor.
+ */
+static struct {
+    uint8_t sid[PAKE_SID_LEN];
+    uint8_t secret[32];
+    uint8_t ya[32];
+    uint8_t sent;          /* PAKE1 out, no answer yet */
+    unsigned int unanswered;
+    uint8_t fallback;      /* the old way for this connection */
+    uint8_t marked;        /* the known servers file says "pake" */
+} cpace;
+
+void client_pake_load_mark(void)
+{
+    char key[64];
+    int mark = 0;
+
+    cpace.marked = client_known_find(key, sizeof(key), &mark) == 0 && mark;
+    crypto_wipe(key, sizeof(key));
+}
+
+/* A new connection: the server's key asked for again (a new one is
+ * proven by CPace too), a new CPace */
+static void client_pake_new_connection(void)
+{
+    if (current_config.pake) {
+        crypto_clear_server_pub();
+        client_pake_reset();
+    }
+}
+
+void client_pake_reset(void)
+{
+    crypto_wipe(cpace.secret, sizeof(cpace.secret));
+    cpace.sent = 0U;
+    cpace.unanswered = 0U;
+    cpace.fallback = 0U;
+    current_config.pake_ok = 0U;
+    if (current_config.pake) {
+        uint8_t k[32];
+
+        /* The fixed network key again, for a fallback */
+        netw_handshake_key(k);
+        crypto_set_psk(k);
+        crypto_wipe(k, sizeof(k));
+    }
+}
+
+/* The ID the old way: allowed only for a server never proven by CPace */
+static int client_pake_fall_back(const char *why)
+{
+    if (cpace.marked) {
+        log_message(LOG_ERR, "Server %s:%d %s, but it proved it knows this "
+                    "network before: not trusted (an impostor?)",
+                    current_config.server_host, current_config.port, why);
+        return -1;
+    }
+    log_message(LOG_WARNING, "Server %s:%d %s: joining by the network's ID, "
+                "its key trusted on first use", current_config.server_host,
+                current_config.port, why);
+    cpace.fallback = 1U;
+    {
+        char b64[KEY_B64_LEN + 1U];
+
+        key_base64_encode(crypto_get_ctx()->server_pub, KEY_LEN, b64,
+                          sizeof(b64));
+        client_known_store(b64, 0);
+    }
+    return 0;
+}
+
+static int client_send_pake1(void)
+{
+    uint8_t pkt[V2_PAKE1_LEN];
+    uint8_t g[32];
+    uint8_t id[CAMEX_NET_ID_LEN];
+
+    if (get_random_bytes(cpace.sid, sizeof(cpace.sid)) != 0 ||
+        get_random_bytes(cpace.secret, sizeof(cpace.secret)) != 0) {
+        return -1;
+    }
+    netw_id_from_name(current_config.network, id);
+    pake_generator(id, cpace.sid, g);
+    crypto_wipe(id, sizeof(id));
+    if (pake_mult(cpace.ya, cpace.secret, g) != 0) {
+        return -1;
+    }
+    memset(pkt, 0, sizeof(pkt));
+    memcpy(pkt, CAMEX_MAGIC, 4);
+    pkt[4] = V2_TYPE_PAKE1;
+    memcpy(pkt + 5, cpace.sid, PAKE_SID_LEN);
+    memcpy(pkt + 5 + PAKE_SID_LEN, cpace.ya, 32U);
+    cpace.sent = 1U;
+    client_state.hs_pending = 1U;
+    client_state.hs_sent = g_now;
+    return net_client_send(pkt, sizeof(pkt)) < 0 ? -1 : 0;
+}
+
+static int client_handle_pake2(const uint8_t *buf, size_t len)
+{
+    const camex_crypto_t *ctx = crypto_get_ctx();
+    unsigned int flags;
+    unsigned int count;
+    unsigned int i;
+    uint8_t k[32];
+    uint8_t tag[PAKE_TAG_LEN];
+
+    if (!current_config.pake || !cpace.sent || current_config.pake_ok ||
+        memcmp(buf + 5, cpace.sid, PAKE_SID_LEN) != 0) {
+        return -1;
+    }
+    flags = buf[5 + PAKE_SID_LEN];
+    count = buf[5 + PAKE_SID_LEN + 1U];
+    if (count > PAKE_MAX_NETS ||
+        len != 5U + PAKE_SID_LEN + 2U + count * PAKE_ENTRY_LEN) {
+        return -1;
+    }
+    cpace.sent = 0U;
+    cpace.unanswered = 0U;
+    for (i = 0U; i < count; ++i) {
+        const uint8_t *e = buf + 5 + PAKE_SID_LEN + 2U + i * PAKE_ENTRY_LEN;
+
+        if (pake_mult(k, cpace.secret, e) != 0) {
+            continue;
+        }
+        pake_tag(tag, 's', k, cpace.sid, cpace.ya, e, ctx->server_pub);
+        if (crypto_verify16(tag, e + 32) == 0) {
+            uint8_t p3[V2_PAKE3_LEN];
+            uint8_t psk[32];
+            char b64[KEY_B64_LEN + 1U];
+            char kept[64];
+            int mark = 0;
+
+            memcpy(p3, CAMEX_MAGIC, 4);
+            p3[4] = V2_TYPE_PAKE3;
+            memcpy(p3 + 5, cpace.sid, PAKE_SID_LEN);
+            p3[5 + PAKE_SID_LEN] = (uint8_t)i;
+            pake_tag(p3 + 5 + PAKE_SID_LEN + 1U, 'c', k, cpace.sid, cpace.ya,
+                     e, ctx->server_pub);
+            pake_psk(psk, k);
+            crypto_wipe(k, sizeof(k));
+            crypto_wipe(cpace.secret, sizeof(cpace.secret));
+            crypto_set_psk(psk);
+            crypto_wipe(psk, sizeof(psk));
+            current_config.pake_ok = 1U;
+            (void)net_client_send(p3, sizeof(p3));
+            /* The key, proven by the name, kept with the mark */
+            key_base64_encode(ctx->server_pub, KEY_LEN, b64, sizeof(b64));
+            if (client_known_find(kept, sizeof(kept), &mark) != 0 ||
+                strcmp(kept, b64) != 0 || !mark) {
+                log_message(LOG_NOTICE, "Server %s:%d proved it knows the "
+                            "network (CPace); its key %s is kept",
+                            current_config.server_host, current_config.port,
+                            b64);
+                client_known_store(b64, 1);
+            }
+            cpace.marked = 1U;
+            return client_send_init();
+        }
+    }
+    crypto_wipe(k, sizeof(k));
+    if ((flags & PAKE_FLAG_OPEN) != 0U) {
+        if (client_pake_fall_back("does not know the network but takes new "
+                                  "ones") == 0) {
+            return client_send_init();
+        }
+        return -1;
+    }
+    log_message(LOG_ERR, "Server %s:%d does not know this network (or is not "
+                "the real server)", current_config.server_host,
+                current_config.port);
+    return -1;
+}
+
 static int client_send_init(void)
+{
+    const camex_crypto_t *ctx = crypto_get_ctx();
+
+    /* CPace first (an older server never answers PAKE1: after three tries
+     * it gets the ID the old way, if allowed) */
+    if (current_config.pake && !current_config.pake_ok && !cpace.fallback) {
+        if (!ctx->has_server_pub) {
+            return client_send_keyreq();
+        }
+        if (cpace.sent && ++cpace.unanswered >= 3U) {
+            cpace.sent = 0U;
+            if (client_pake_fall_back("does not answer CPace (an older "
+                                      "camex?)") != 0) {
+                return 0;
+            }
+        } else {
+            return client_send_pake1();
+        }
+    }
+    return client_send_init_noise();
+}
+
+static int client_send_init_noise(void)
 {
     const camex_crypto_t *ctx = crypto_get_ctx();
     uint8_t payload[V2_TIMESTAMP_LEN + CAMEX_CONTROL_MAX];
@@ -410,6 +642,8 @@ int client_handle_net_packet(const uint8_t *buffer, size_t len)
     switch (v2_packet_type(buffer, len)) {
     case V2_TYPE_KEY:
         return client_handle_key(buffer, len);
+    case V2_TYPE_PAKE2:
+        return client_handle_pake2(buffer, len);
     case V2_TYPE_RESP:
         return client_handle_resp(buffer, len);
     case V2_TYPE_DATA:
@@ -501,6 +735,7 @@ static int client_wait_reconnect(void)
 
         net_close();
         memset(&client_recv_state, 0, sizeof(client_recv_state));
+        client_pake_new_connection();
         for (step = 0U; step < (unsigned int)CAMEX_RECONNECT_INTERVAL &&
                         running; ++step) {
             camex_pause_1s();
@@ -779,6 +1014,7 @@ void client_reconnect(void)
     net_close();
     memset(&client_recv_state, 0, sizeof(client_recv_state));
     client_wipe();
+    client_pake_new_connection();
     __atomic_store_n(&client_state.established, 0U, __ATOMIC_RELEASE);
 
     log_message(LOG_INFO, "Reconnecting to server %s:%d...",

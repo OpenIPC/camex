@@ -9,6 +9,7 @@
 
 #include "server.h"
 #include "netw.h"
+#include "pake.h"
 #ifdef CAMEX_MESH
 #include "mesh.h"
 
@@ -1494,7 +1495,7 @@ void server_revalidate_keys(void)
         }
         /* A network client with the network key: its network must still
          * be there, and its ID must not have a key of its own now */
-        if (server_is_net_key(c->psk_key)) {
+        if (server_is_net_key(c->psk_key) || c->pake) {
             if (c->net1 != 0U && netw_table[c->net1 - 1U].active &&
                 c->client_id[0] != '\0' &&
                 !keystore_has_owner(c->client_id)) {
@@ -2078,6 +2079,194 @@ static server_client_t *server_entry_for(const uint8_t *key,
     }
 }
 
+
+/*
+ * CPace (pake.h): PAKE1 gets one answer per network; PAKE3 confirms one,
+ * and the INIT from the same address that follows is tried with the
+ * session's key. Sessions live SERVER_PAKE_LIFE seconds.
+ */
+#define SERVER_PAKES 128U
+#define SERVER_PAKE_LIFE 60
+
+typedef struct {
+    uint8_t used;
+    uint8_t confirmed;
+    uint8_t tcp;
+    uint8_t sid[PAKE_SID_LEN];
+    uint8_t ya[32];
+    struct sockaddr_in from;
+    time_t at;
+    uint16_t slots[PAKE_MAX_NETS];
+    uint8_t count;
+    int net;
+    uint8_t psk[32];
+} server_pake_t;
+
+static server_pake_t server_pakes[SERVER_PAKES];
+static size_t server_pake_next = 0U;
+static uint8_t server_pake_secret[32];
+static int server_pake_secret_ok = 0;
+
+/* The server's scalar for a network in a session: derived, not stored */
+static void server_pake_scalar(int slot, const uint8_t sid[PAKE_SID_LEN],
+                               const uint8_t ya[32], uint8_t yb[32])
+{
+    crypto_blake2b_ctx c;
+    uint8_t s16[2];
+
+    if (!server_pake_secret_ok) {
+        if (get_random_bytes(server_pake_secret,
+                             sizeof(server_pake_secret)) != 0) {
+            memset(server_pake_secret, 0x5A, sizeof(server_pake_secret));
+        }
+        server_pake_secret_ok = 1;
+    }
+    s16[0] = (uint8_t)(slot >> 8);
+    s16[1] = (uint8_t)slot;
+    crypto_blake2b_keyed_init(&c, 32U, server_pake_secret, 32U);
+    crypto_blake2b_update(&c, sid, PAKE_SID_LEN);
+    crypto_blake2b_update(&c, ya, 32U);
+    crypto_blake2b_update(&c, s16, 2U);
+    crypto_blake2b_final(&c, yb);
+}
+
+/* K of network slot in a session; -1 for a bad point */
+static int server_pake_k(int slot, const uint8_t sid[PAKE_SID_LEN],
+                         const uint8_t ya[32], uint8_t yb_pub[32],
+                         uint8_t k[32])
+{
+    uint8_t yb[32];
+    uint8_t g[32];
+    int rc;
+
+    server_pake_scalar(slot, sid, ya, yb);
+    pake_generator(netw_table[slot].id, sid, g);
+    rc = pake_mult(yb_pub, yb, g) == 0 && pake_mult(k, yb, ya) == 0 ? 0 : -1;
+    crypto_wipe(yb, sizeof(yb));
+    return rc;
+}
+
+static int server_pake_send(int fd, const struct sockaddr_in *to,
+                            const uint8_t *p, size_t len)
+{
+    if (fd >= 0) {
+        return net_tcp_send_frame(fd, p, len) < 0 ? -1 : 0;
+    }
+    return net_send_payload(net_fd, to, p, len) < 0 ? -1 : 0;
+}
+
+static int server_handle_pake1(const uint8_t *buf, size_t len,
+                               const struct sockaddr_in *from, int fd)
+{
+    const camex_crypto_t *ctx = crypto_get_ctx();
+    uint8_t out[5U + PAKE_SID_LEN + 2U + PAKE_MAX_NETS * PAKE_ENTRY_LEN];
+    server_pake_t *ps;
+    server_source_t src;
+    size_t i;
+    size_t o;
+
+    (void)len;
+    if (!ctx->has_server_key) {
+        return -1;
+    }
+    server_source_for(from, fd >= 0, &src);
+    if (server_handshake_budget(&src) < 0) {
+        return -1;
+    }
+    ps = &server_pakes[server_pake_next];
+    server_pake_next = (server_pake_next + 1U) % SERVER_PAKES;
+    crypto_wipe(ps, sizeof(*ps));
+    memcpy(ps->sid, buf + 5, PAKE_SID_LEN);
+    memcpy(ps->ya, buf + 5 + PAKE_SID_LEN, 32U);
+    ps->from = *from;
+    ps->tcp = fd >= 0 ? 1U : 0U;
+    ps->at = g_now;
+    ps->used = 1U;
+    memcpy(out, CAMEX_MAGIC, 4);
+    out[4] = V2_TYPE_PAKE2;
+    memcpy(out + 5, ps->sid, PAKE_SID_LEN);
+    out[5 + PAKE_SID_LEN] = server_db.globals.allow_new_networks
+                                ? PAKE_FLAG_OPEN : 0U;
+    o = 5U + PAKE_SID_LEN + 2U;
+    for (i = 0U; i < CAMEX_NET_MAX && ps->count < PAKE_MAX_NETS; ++i) {
+        uint8_t k[32];
+
+        if (!netw_table[i].active) {
+            continue;
+        }
+        if (server_pake_k((int)i, ps->sid, ps->ya, out + o, k) != 0) {
+            crypto_wipe(k, sizeof(k));
+            return -1;   /* a low-order Ya: nobody's */
+        }
+        pake_tag(out + o + 32U, 's', k, ps->sid, ps->ya, out + o,
+                 ctx->server_pub);
+        crypto_wipe(k, sizeof(k));
+        ps->slots[ps->count++] = (uint16_t)i;
+        o += PAKE_ENTRY_LEN;
+    }
+    out[5 + PAKE_SID_LEN + 1U] = ps->count;
+    return server_pake_send(fd, from, out, o);
+}
+
+static int server_handle_pake3(const uint8_t *buf,
+                               const struct sockaddr_in *from, int fd)
+{
+    const camex_crypto_t *ctx = crypto_get_ctx();
+    size_t i;
+
+    for (i = 0U; i < SERVER_PAKES; ++i) {
+        server_pake_t *ps = &server_pakes[i];
+        uint8_t yb[32], k[32], tag[PAKE_TAG_LEN];
+        unsigned int idx = buf[5 + PAKE_SID_LEN];
+        int slot;
+
+        if (!ps->used || ps->confirmed ||
+            memcmp(ps->sid, buf + 5, PAKE_SID_LEN) != 0 ||
+            !net_sockaddr_equal(&ps->from, from) ||
+            ps->tcp != (fd >= 0 ? 1U : 0U) ||
+            difftime(g_now, ps->at) > (double)SERVER_PAKE_LIFE ||
+            idx >= ps->count) {
+            continue;
+        }
+        slot = ps->slots[idx];
+        if (!netw_table[slot].active ||
+            server_pake_k(slot, ps->sid, ps->ya, yb, k) != 0) {
+            return -1;
+        }
+        pake_tag(tag, 'c', k, ps->sid, ps->ya, yb, ctx->server_pub);
+        if (crypto_verify16(tag, buf + 5 + PAKE_SID_LEN + 1U) != 0) {
+            crypto_wipe(k, sizeof(k));
+            return -1;
+        }
+        pake_psk(ps->psk, k);
+        crypto_wipe(k, sizeof(k));
+        ps->confirmed = 1U;
+        ps->net = slot;
+        ps->at = g_now;
+        return 0;
+    }
+    return -1;
+}
+
+/* The confirmed session of this source, if any */
+static server_pake_t *server_pake_for(const struct sockaddr_in *from, int fd)
+{
+    size_t i;
+
+    for (i = 0U; i < SERVER_PAKES; ++i) {
+        server_pake_t *ps = &server_pakes[i];
+
+        if (ps->used && ps->confirmed &&
+            net_sockaddr_equal(&ps->from, from) &&
+            ps->tcp == (fd >= 0 ? 1U : 0U) &&
+            difftime(g_now, ps->at) <= (double)SERVER_PAKE_LIFE &&
+            netw_table[ps->net].active) {
+            return ps;
+        }
+    }
+    return NULL;
+}
+
 /* INIT: Noise message 1 with the client's REGISTER as payload */
 static int server_handle_init(const uint8_t *buffer, size_t len,
                               const struct sockaddr_in *from, int fd)
@@ -2125,6 +2314,10 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     int net = -1;
     uint16_t net1_before = 0U;
     uint8_t mesh_req = 0U;
+    int via_pake = 0;
+    uint8_t pake_before = 0U;
+    int pake_net = -1;
+    static uint8_t pake_key[32];   /* the key the INIT used (copied later) */
 
     net_sockaddr_to_string(from, peer, sizeof(peer));
     if (!ctx->has_server_key) {
@@ -2177,9 +2370,40 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     /* The global key first (entry 0 when there is one, tried free), then
      * a live client's own key (#78): its rekeys cost one trial however
      * large the keystore is; then the rest in turn */
+    /* CPace: the key of the confirmed session of this source, or of the
+     * live client there (its rekeys) */
+    {
+        server_pake_t *ps = server_pake_for(from, fd);
+        const uint8_t *cand = NULL;
+
+        if (ps != NULL) {
+            cand = ps->psk;
+            pake_net = ps->net;
+        } else if (src.known != NULL && src.known->pake &&
+                   src.known->net1 != 0U) {
+            cand = src.known->psk_key;
+            pake_net = (int)src.known->net1 - 1;
+        }
+        if (cand != NULL) {
+            hs = base;
+            if (noise_read_msg1(&hs, cand, es, buffer + V2_INIT_HDR,
+                                len - V2_INIT_HDR, payload,
+                                sizeof(payload) - 1U, &payload_len) == 0) {
+                memcpy(pake_key, cand, sizeof(pake_key));
+                used_key = pake_key;
+                via_pake = 1;
+                if (ps != NULL) {
+                    ps->used = 0U;   /* one handshake a session */
+                }
+            } else {
+                noise_wipe(&hs);
+                pake_net = -1;
+            }
+        }
+    }
     /* A client that joins a network by name: the fixed network key first,
      * tried free like the global key */
-    if (config_networks_enabled()) {
+    if (used_key == NULL && config_networks_enabled()) {
         hs = base;
         if (noise_read_msg1(&hs, server_network_key(), es,
                             buffer + V2_INIT_HDR, len - V2_INIT_HDR,
@@ -2282,7 +2506,17 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         crypto_wipe(net_id, sizeof(net_id));
         return -1;
     }
-    if (has_net) {
+    /* CPace: the network is the session's, NET is not sent */
+    if (via_pake) {
+        if (!auto_request || has_net || !netw_table[pake_net].active) {
+            log_peer(LOG_WARNING, "Rejected handshake from %s: a CPace "
+                     "client joins in auto mode", peer);
+            noise_wipe(&hs);
+            return -1;
+        }
+        has_net = 1U;
+        net = pake_net;
+    } else if (has_net) {
         net = netw_find(net_id);
         if (net < 0 && server_db.globals.allow_new_networks) {
             net = netw_create(net_id);
@@ -2380,8 +2614,10 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     first = !entry->registered;   /* also restored by a failure */
     memcpy(psk_before, entry->psk_key, sizeof(psk_before));
     net1_before = entry->net1;
+    pake_before = entry->pake;
     entry->net1 = has_net ? (uint16_t)(net + 1) : 0U;
     entry->mesh = mesh_req;
+    entry->pake = via_pake ? 1U : 0U;
     pending_before = entry->pending_ip_be;
     ip_before = entry->ip_be;
     /* --transport both (#178): a client new on TCP (not one that replaces
@@ -2574,6 +2810,7 @@ fail:
          * the session it set up: the entry keeps what it had (#77) */
         server_restore_ip(entry, ip_before, pending_before);
         entry->net1 = net1_before;
+        entry->pake = pake_before;
         if (next_saved) {
             session_wipe(&entry->next);
             entry->next = next_before;
@@ -3402,6 +3639,10 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
         return server_handle_init(buffer, len, from, fd);
     case V2_TYPE_KEYREQ:
         return server_handle_keyreq(from, fd);
+    case V2_TYPE_PAKE1:
+        return server_handle_pake1(buffer, len, from, fd);
+    case V2_TYPE_PAKE3:
+        return server_handle_pake3(buffer, from, fd);
 #ifdef CAMEX_MESH
     case V2_TYPE_ENDPOINT:
         return server_handle_endpoint(buffer, len, from, fd);

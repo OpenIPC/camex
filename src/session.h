@@ -47,6 +47,12 @@
 #define V2_TYPE_ENDPOINT 6U
 #define V2_TYPE_P2P      7U
 #define V2_P2P_HDR 18U    /* magic, type, pair 4, dir 1, counter 8 */
+/* CPace (pake.h) */
+#define V2_TYPE_PAKE1 8U
+#define V2_TYPE_PAKE2 9U
+#define V2_TYPE_PAKE3 10U
+#define V2_PAKE1_LEN 1200U
+#define V2_PAKE3_LEN (5U + 16U + 1U + 16U)
 #define V2_KEYREQ_LEN 64U
 #define V2_KEY_LEN    37U   /* magic, type, public key */
 

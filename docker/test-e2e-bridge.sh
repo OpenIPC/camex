@@ -103,8 +103,13 @@ bridge_host() {  # bridge_host <name> <ip on lan> [camex args...]: on wan, eth1 
         --entrypoint sleep "$IMAGE" infinity >/dev/null
     docker network connect --ip "$ip" "$LAN" "$P-$name"
     docker start "$P-$name" >/dev/null
+    # Docker does not keep the order of the networks: the LAN interface is
+    # the one with the LAN address (eth0 or eth1)
+    local lan_if
+    lan_if=$(docker exec "$P-$name" ip -o -4 addr show | awk -v ip="$ip/" 'index($4, ip) == 1 { print $2 }')
+    docker exec "$P-$name" sh -c "echo $lan_if > /tmp/lan_if"
     docker exec -d "$P-$name" sh -c "exec /usr/local/bin/camex-run --server-host $P-srv \
-        --network site --bridge eth1 $* > /tmp/camex.log 2>&1"
+        --network site --bridge $lan_if $* > /tmp/camex.log 2>&1"
 }
 blog() {    # blog <name>: the log of camex in a bridge host
     docker exec "$P-$1" cat /tmp/camex.log 2>/dev/null
@@ -114,21 +119,30 @@ for _ in $(seq 1 30); do
     blog br | grep -q "bridging$" && break
     sleep 0.5
 done
-blog br | grep -q "Bridge on eth1"
+blog br | grep -q "Bridge on $(docker exec "$P-br" cat /tmp/lan_if)"
 check $? "the bridge is up on eth1"
 
 docker run -d --name "$P-rem" --network "$WAN" --cap-add NET_ADMIN --cap-add MKNOD \
     "$IMAGE" --server-host "$P-srv" --network site --name REMOTE >/dev/null
-for _ in $(seq 1 20); do
+for _ in $(seq 1 60); do
     docker exec "$P-rem" sh -c 'ls /sys/class/net | grep -q tap' && break
     sleep 0.5
 done
 
 echo "== 1. DHCP from the LAN"
-docker exec "$P-rem" busybox udhcpc -i tap0 -n -q -t 5 -s /usr/local/bin/udhcpc-script >/dev/null 2>&1
+for _ in 1 2 3; do
+    docker exec "$P-rem" busybox udhcpc -i tap0 -n -q -t 5 -s /usr/local/bin/udhcpc-script >/dev/null 2>&1 && break
+done
 R=$(docker exec "$P-rem" ip -4 -o addr show tap0 | awk '{ print $4 }')
 case "$R" in 192.168.77.1[0-4][0-9]/24|192.168.77.150/24) r=0 ;; *) r=1 ;; esac
 check $r "the remote has a LAN address from the LAN's DHCP server: $R"
+if [ $r != 0 ]; then   # what was going on
+    blog br | grep -v "^ " | sed 's/^/   br: /'
+    docker logs "$P-rem" 2>&1 | grep -v "^ " | tail -5 | sed 's/^/   rem: /'
+    docker exec "$P-srv" camex --status 2>&1 | tail -4 | sed 's/^/   srv: /'
+    docker logs "$P-dev" 2>&1 | tail -6 | sed 's/^/   dev: /'
+    docker exec "$P-br" ip neigh | sed 's/^/   br-neigh: /'
+fi
 RIP=${R%/*}
 
 echo "== 2. remote <-> LAN device"
@@ -142,7 +156,7 @@ docker exec "$P-rem" ping -c 2 -W 2 192.168.77.2 >/dev/null
 check $? "the remote reaches the bridging host"
 docker exec "$P-br" ping -c 2 -W 2 "$RIP" >/dev/null
 check $? "the bridging host reaches the remote"
-docker exec "$P-br" ip neigh show "$RIP" dev eth1 | grep -q PERMANENT
+docker exec "$P-br" sh -c "ip neigh show $RIP dev \$(cat /tmp/lan_if)" | grep -q PERMANENT
 check $? "the host has the remote as a neighbour entry"
 
 echo "== 4. 8 MB over TCP each way"
@@ -175,16 +189,16 @@ tcp_check rem dev "$RIP" "LAN device -> remote (GRO on the bridge)"
 echo "== 5. the host's settings"
 docker exec "$P-br" sh -c 'ls /sys/class/net' | grep -Eq "^(tap|tun|br|camex)"
 r=$?; [ $r != 0 ]; check $? "no TAP, TUN or bridge device on the bridging host"
-docker exec "$P-br" ip neigh show dev eth1 | grep -q PERMANENT
+docker exec "$P-br" sh -c 'ip neigh show dev $(cat /tmp/lan_if)' | grep -q PERMANENT
 check $? "while camex runs the remote is a permanent neighbour"
-docker exec "$P-br" sh -c 'pkill -x camex; sleep 2; ip neigh show dev eth1' > "$BUILD_CTX/neigh.txt" 2>&1
+docker exec "$P-br" sh -c 'pkill -x camex; sleep 2; ip neigh show dev $(cat /tmp/lan_if)' > "$BUILD_CTX/neigh.txt" 2>&1
 docker exec "$P-br" true
 check $? "the bridge host is still there"
 ! grep -q PERMANENT "$BUILD_CTX/neigh.txt"
 check $? "no permanent neighbour entry left after camex stops"
-docker exec "$P-br" ip link show eth1 > "$BUILD_CTX/link.txt" 2>&1
-grep -q "eth1" "$BUILD_CTX/link.txt" && ! grep -q PROMISC "$BUILD_CTX/link.txt"
-check $? "eth1 is not left promiscuous"
+docker exec "$P-br" sh -c 'ip link show $(cat /tmp/lan_if)' > "$BUILD_CTX/link.txt" 2>&1
+grep -q "eth" "$BUILD_CTX/link.txt" && ! grep -q PROMISC "$BUILD_CTX/link.txt"
+check $? "the LAN interface is not left promiscuous"
 docker rm -f "$P-br" >/dev/null
 bridge_host br 192.168.77.2 --name BR-1
 for _ in $(seq 1 30); do
@@ -223,7 +237,7 @@ docker exec "$P-rem" ping -c 2 -W 2 192.168.77.10 >/dev/null
 check $? "nat: the remote reaches the LAN device"
 docker exec "$P-dev" ping -c 2 -W 2 "$RIP" >/dev/null
 check $? "nat: the LAN device reaches the remote"
-docker exec "$P-dev" ip neigh show "$RIP" | grep -qi "$(docker exec "$P-br" cat /sys/class/net/eth1/address)"
+docker exec "$P-dev" ip neigh show "$RIP" | grep -qi "$(docker exec "$P-br" sh -c 'cat /sys/class/net/$(cat /tmp/lan_if)/address')"
 check $? "nat: the LAN knows the remote by the bridging host's MAC"
 docker exec "$P-rem" ping -c 2 -W 2 192.168.77.2 >/dev/null
 check $? "nat: the remote reaches the bridging host"

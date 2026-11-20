@@ -783,6 +783,10 @@ int camex_init(camex_config_t *config)
     if (client_mode && current_config.network[0] != '\0' &&
         current_config.psk[0] == '\0') {
         uint8_t k[32];
+
+        /* Without --server-pubkey: CPace proves the server knows the
+         * network's name before the name's ID goes anywhere */
+        current_config.pake = current_config.server_pubkey[0] == '\0';
         char hex[65];
 
         netw_handshake_key(k);
@@ -809,8 +813,11 @@ int camex_init(camex_config_t *config)
         }
         /* Without --server-pubkey: the key kept from the first contact,
          * else the server is asked for it (trust on first use) */
-        if (keys_ok && client_mode && !crypto_get_ctx()->has_server_pub &&
-            client_known_load() != 0) {
+        if (keys_ok && client_mode && current_config.pake) {
+            client_pake_load_mark();
+        } else if (keys_ok && client_mode &&
+                   !crypto_get_ctx()->has_server_pub &&
+                   client_known_load() != 0) {
             log_message(LOG_NOTICE, "No --server-pubkey: the key server "
                         "%s:%d gives on first contact is trusted",
                         current_config.server_host, current_config.port);

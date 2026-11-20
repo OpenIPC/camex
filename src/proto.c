@@ -62,7 +62,8 @@ int proto_build_register(const camex_config_t *config,
             return -1;
         }
         /* The network the client joins: its ID, never the name */
-        if (config->network[0] != '\0') {
+        /* After CPace the server knows the network: no NET */
+        if (config->network[0] != '\0' && !config->pake_ok) {
             uint8_t id[CAMEX_NET_ID_LEN];
             char b64[CAMEX_NET_ID_B64_LEN + 1U];
 

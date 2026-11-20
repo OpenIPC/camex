@@ -76,6 +76,11 @@ int client_socket_create(const char *host, int port,
  * -1 when the file has none for this server */
 int client_known_load(void);
 
+/* CPace: read this server's "pake" mark (camex_init), and start over
+ * for a new connection */
+void client_pake_load_mark(void);
+void client_pake_reset(void);
+
 /* 1 when the key in use came from that file */
 int client_key_is_pinned(void);
 

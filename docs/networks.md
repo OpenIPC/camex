@@ -21,9 +21,11 @@ contact (see [The server's key](#the-servers-key)).
 The network's name is its secret: whoever knows it can join. Choose a name
 that is hard to guess, like a password.
 
-- The client never sends the name. It sends the network's ID, BLAKE2b-256 of
-  the name, inside Noise message 1. Only the server's private key opens that
-  message, so someone watching the traffic sees neither the name nor the ID.
+- The client never sends the name, nor anything an attacker could test
+  guesses against offline. It and the server run CPace first: a
+  password-authenticated key exchange on the name (see [The server's
+  key](#the-servers-key)). The key CPace gives is the pre-shared key of the
+  Noise handshake that follows.
 - The server never logs the name. Logs and `camex --status` show `label=`
   or `net-` plus the first 4 bytes of the ID in hex.
 - The client hides `--network` from `ps` by overwriting it in its argument
@@ -33,7 +35,7 @@ Extra protection on top of the name, all optional:
 
 | What                                    | Stops                                                                      |
 |-----------------------------------------|----------------------------------------------------------------------------|
-| `--server-pubkey` on the client         | a fake server on the very first contact                                    |
+| `--server-pubkey` on the client         | a fake server at the very first contact with a server that takes new networks (see below) |
 | `psk=` in the client's `[client ID]`    | someone who knows the name posing as that client ID; the client then needs `--psk` with that key besides `--network` |
 | `client_isolation = yes` in `[network]` | clients of the network reaching each other                                 |
 | `allow_unknown_clients = no`            | client IDs without a `[client ID]` block                                   |
@@ -135,23 +137,51 @@ only on a server meant to be open.
 
 ## The server's key
 
-A client without `--server-pubkey` asks the server for its public key on
-first contact (a `KEYREQ`, 64 bytes, answered with 37). It trusts that key
-from then on and keeps it in the known servers file:
+A client with `--network` and without `--server-pubkey` (or `--psk`) checks
+the server by the network's name at every connection:
+
+1. **KEYREQ.** It asks for the server's public key: 64 bytes, answered with
+   37.
+2. **CPace.** `PAKE1` (1200 bytes, padded so no answer is larger) carries the
+   client's share, made on a point derived from the network's ID. `PAKE2` has
+   one answer for each network the server knows (at most 24), each with a tag
+   that only the right name opens. That tag also covers the server's key.
+3. **Confirm.** The client takes the answer whose tag opens, confirms with
+   `PAKE3`, and uses the shared key as the Noise pre-shared key. Its REGISTER
+   carries no network ID: the server knows the network from CPace.
+
+So a server that does not know the name cannot complete the handshake,
+whatever key it shows. An attacker in the middle gets one guess per
+connection at most, and nothing to test guesses against offline.
+
+The key, once proven this way, is kept in the known servers file with a
+`pake` mark:
 
 - `/etc/camex/known_servers` by default; `--known-servers <path>` sets
   another path, `--known-servers none` keeps nothing;
-- one `<host>:<port> <base64 key>` line per server, rewritten through a new
-  file so a power cut leaves either the old or the new one.
+- one `<host>:<port> <base64 key> pake` line per server, rewritten through
+  a new file so a power cut leaves either the old or the new one.
 
-The kept key is used from then on, and never replaced on its own. When a server
-gets a new key, its clients' handshakes fail; after two silent rounds the
-client says `The server's key came from <file>: if the server got a new key,
-remove its line there (or give --server-pubkey)`.
+When the server gets a new key, its clients prove it by the name at their next
+connection and keep the new one (`proved it knows the network (CPace); its
+key ... is kept`). Nobody has to remove anything.
 
-Without a writable file, the key is asked for again at every start. This
-works, but every start is then a first contact. On OpenIPC, `/etc` is on the
-overlay and keeps the file.
+**Networks the server does not know yet** (`allow_new_networks = yes`) are the
+exception. The server cannot know a name it never heard, so a new network is
+still created the old way: the network's ID goes inside Noise message 1, and
+the server's key is trusted on first use (kept without the mark). The same
+fallback applies to a server too old for CPace, after three unanswered
+`PAKE1`. Both fallbacks happen only while the file has no `pake` mark for that
+server. A server that once proved it knows the network and then says it does
+not know it but takes new ones is refused as an impostor (`not trusted (an
+impostor?)`).
+
+In short:
+
+- listed networks are protected at every contact, the first one included;
+- creating a new network on an open server is protected only by trust on first
+  use;
+- `--server-pubkey` closes that gap too.
 
 ## Status
 

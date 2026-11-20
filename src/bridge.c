@@ -977,6 +977,7 @@ void bridge_tick(void)
     if (!br.open) {
         return;
     }
+    (void)bridge_paused();   /* the end of listening, a peer gone */
     if (difftime(now, br.last_probe) >= (double)BRIDGE_PROBE_EVERY) {
         br.last_probe = now;
         probe_send();

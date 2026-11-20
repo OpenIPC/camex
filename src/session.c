@@ -70,6 +70,13 @@ uint8_t v2_packet_type(const uint8_t *pkt, size_t len)
         return len >= V2_KEYREQ_LEN ? V2_TYPE_KEYREQ : 0U;
     case V2_TYPE_KEY:
         return len == V2_KEY_LEN ? V2_TYPE_KEY : 0U;
+    case V2_TYPE_PAKE1:
+        return len >= V2_PAKE1_LEN ? V2_TYPE_PAKE1 : 0U;
+    case V2_TYPE_PAKE2:
+        return len >= 5U + 16U + 2U && len <= 5U + 16U + 2U + 24U * 48U
+                   ? V2_TYPE_PAKE2 : 0U;
+    case V2_TYPE_PAKE3:
+        return len == V2_PAKE3_LEN ? V2_TYPE_PAKE3 : 0U;
     case V2_TYPE_ENDPOINT:
         return len >= V2_OVERHEAD ? V2_TYPE_ENDPOINT : 0U;
     case V2_TYPE_P2P:

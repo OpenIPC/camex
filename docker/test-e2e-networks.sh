@@ -146,10 +146,10 @@ A=$(addr_of "$P-a")
 check $? "client A has an address: $A"
 case "$A" in 10.*/16) r=0 ;; *) r=1 ;; esac
 check $r "A's address is in a derived /16 of 10/8 ($A)"
-docker exec "$P-a" grep -q "^$P-srv:5800 $SERVER_PUBKEY\$" /etc/camex/known_servers
-check $? "the server's key is kept in /etc/camex/known_servers"
-docker logs "$P-a" 2>&1 | grep -q "First contact with server"
-check $? "the client says it trusts the key on first contact"
+docker exec "$P-a" grep -q "^$P-srv:5800 $SERVER_PUBKEY pake\$" /etc/camex/known_servers
+check $? "the server's key is kept in /etc/camex/known_servers, marked pake"
+docker logs "$P-a" 2>&1 | grep -q "proved it knows the network (CPace)"
+check $? "the server proved it knows the network's name (CPace)"
 GW=$(echo "$A" | awk -F'[./]' '{ print $1"."$2".0.1" }')
 docker exec "$P-a" ping -c 2 -W 2 "$GW" >/dev/null
 check $? "A reaches its network's gateway $GW"
@@ -158,12 +158,12 @@ r=$?; [ $r != 0 ]; check $? "the server never logs the network's name"
 docker exec "$P-a" ps -o args= -C camex 2>/dev/null | grep -q "field cameras"
 r=$?; [ $r != 0 ]; check $? "the network's name is not in the client's command line"
 
-echo "== 2. the kept key at the next start"
+echo "== 2. the next start"
 docker restart "$P-a" >/dev/null
 A2=$(addr_of "$P-a")
-wait_log "$P-a" "Server key of $P-srv:5800 from /etc/camex/known_servers" 5
-check $? "the client takes the kept key"
 [ "$A2" = "$A" ]; check $? "client restart: the same address ($A2)"
+[ "$(docker logs "$P-a" 2>&1 | grep -c "proved it knows the network")" = 1 ]
+check $? "the same key: kept as it was, nothing new said"
 
 echo "== 3. server restart: the same address"
 docker restart "$P-srv" >/dev/null
@@ -202,8 +202,8 @@ check $? "the server drops it (isolation_drops of LAB-C)"
 echo "== 6. an unknown network"
 client d srv "no such network" --name CAM-D
 sleep 4
-docker logs "$P-srv" 2>&1 | grep -q "client CAM-D.*unknown network"
-check $? "the server rejects an unknown network"
+docker logs "$P-d" 2>&1 | grep -q "does not know this network"
+check $? "the client finds the server does not know the network (CPace)"
 docker logs "$P-srv" 2>&1 | grep -q "no such network"
 r=$?; [ $r != 0 ]; check $? "the unknown name is not logged"
 docker rm -f "$P-d" >/dev/null
@@ -268,6 +268,7 @@ wait_log "$P-srv" "Keeping previous server configuration" 6
 check $? "a broken file keeps the configuration"
 docker exec "$P-e" ping -c 1 -W 2 10.88.0.1 >/dev/null
 check $? "the new network still works"
+docker cp "$BUILD_CTX/new.conf" "$P-srv:/etc/camex.conf" >/dev/null   # good again
 
 echo "== 9. allow_new_networks=yes"
 printf '[server]\nlocal_cidr = 10.200.0.1/24\nallow_new_networks = yes\n' > "$BUILD_CTX/open.conf"
@@ -278,6 +279,8 @@ F=$(addr_of "$P-f")
 check $? "a client of a name the server never heard of gets an address ($F)"
 wait_log "$P-open" "New network net-[0-9a-f]{8} \\(pool 10\\.[0-9]+\\.0\\.0/16\\), created by client ANY-F" 2
 check $? "the server makes the new network"
+docker logs "$P-f" 2>&1 | grep -q "does not know the network but takes new ones: joining by the network's ID"
+check $? "the client joins a new network the old way, and says so"
 
 echo "== 10. camex --top"
 docker exec "$P-srv" sh -c 'timeout 3 camex --top --interval 1 </dev/null' > "$BUILD_CTX/top.txt" 2>&1
@@ -293,20 +296,35 @@ assert c["network"] == "cams" and "rx_rate" in c
 ' 2>/dev/null
 check $? "--status --json has the networks, each client's network and rates"
 
-echo "== 11. a server with a new key"
-docker rm -f "$P-open" >/dev/null
+echo "== 11. the server gets a new key; an impostor"
 KEYS=$("$CAMEX_BINARY" --genkey)
 printf '%s\n' "$KEYS" | sed -n 's/^server_key=/server_key=/p' > "$BUILD_CTX/other.key"
-printf '[server]\nlocal_cidr = 10.200.0.1/24\nallow_new_networks = yes\n' > "$BUILD_CTX/open.conf"
-docker create --name "$P-open" --network "$NET_NAME" --cap-add NET_ADMIN \
-    --cap-add MKNOD "$IMAGE" --mode server --port 5800 \
-    --server-key-file /etc/camex/other.key --config /etc/camex.conf >/dev/null
-docker cp "$BUILD_CTX/open.conf" "$P-open:/etc/camex.conf" >/dev/null
-docker cp "$BUILD_CTX/other.key" "$P-open:/etc/camex/other.key" >/dev/null
-docker start "$P-open" >/dev/null
-docker restart "$P-f" >/dev/null
-wait_log "$P-f" "remove its line there" 75
-check $? "the client says how to forget the old key"
+NEWPUB=$(printf '%s\n' "$KEYS" | sed -n 's/^public_key=//p')
+chmod 600 "$BUILD_CTX/other.key"
+docker cp "$BUILD_CTX/other.key" "$P-srv:/etc/camex/server.key" >/dev/null
+docker restart "$P-srv" >/dev/null
+docker exec "$P-a" sh -c 'pkill -x camex' 2>/dev/null
+docker restart "$P-a" >/dev/null
+A4=$(addr_of "$P-a")
+[ "$A4" = "$A" ]; check $? "with the server's new key: back, the same address ($A4)"
+docker exec "$P-a" grep -q "^$P-srv:5800 $NEWPUB pake\$" /etc/camex/known_servers
+check $? "the new key, proven by the name, replaced the old one"
+# An impostor at the server's name: its own key, takes any network
+docker rm -f "$P-srv" >/dev/null
+printf '[server]\nlocal_cidr = 10.200.0.1/24\nallow_new_networks = yes\n' > "$BUILD_CTX/imp.conf"
+"$CAMEX_BINARY" --genkey | sed -n 's/^server_key=/server_key=/p' > "$BUILD_CTX/imp.key"
+chmod 600 "$BUILD_CTX/imp.key"
+docker create --name "$P-srv" --network "$NET_NAME" --cap-add NET_ADMIN \
+    --cap-add MKNOD "$IMAGE" --mode server --port 5800 $SERVER_KEY_ARGS \
+    --config /etc/camex.conf >/dev/null
+docker cp "$BUILD_CTX/imp.conf" "$P-srv:/etc/camex.conf" >/dev/null
+docker cp "$BUILD_CTX/imp.key" "$P-srv:/etc/camex/server.key" >/dev/null
+docker start "$P-srv" >/dev/null
+docker restart "$P-a" >/dev/null
+wait_log "$P-a" "proved it knows this network before: not trusted" 20
+check $? "the client does not take an impostor that claims to be open"
+docker logs "$P-srv" 2>&1 | grep -q "New network"
+r=$?; [ $r != 0 ]; check $? "the impostor learned no network"
 
 echo
 if [ "$FAILS" = 0 ]; then
