@@ -214,6 +214,11 @@ public class MainActivity extends Activity {
                 lamp = R.color.amber;
                 text = "VPN CONSENT NEEDED";
                 break;
+            case WAITING:
+                // another app's VPN: back by itself when it ends, START takes the VPN now
+                lamp = R.color.amber;
+                text = "WAITING FOR THE VPN";
+                break;
             case FAILED:
                 lamp = R.color.red;
                 text = "FAILED";
@@ -233,8 +238,9 @@ public class MainActivity extends Activity {
         rowProto.set(0, v.get(CamexTunnel.TRANSPORT) + (mtu.isEmpty() ? "" : " · MTU " + mtu));
 
         startButton.setEnabled(!on);
-        stopButton.setEnabled(on);
-        // Settings only editable while disconnected
-        settingsButton.setEnabled(!on);
+        // STOP ends a wait as well: the tunnel does not come back by itself then
+        stopButton.setEnabled(on || state == CamexTunnel.State.WAITING);
+        // Settings only editable while disconnected (a wait would start with the old values)
+        settingsButton.setEnabled(!on && state != CamexTunnel.State.WAITING);
     }
 }

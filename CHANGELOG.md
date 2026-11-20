@@ -6,6 +6,24 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 4.4.0 — 2026-11-20
+
+- Android library: one VPN at a time without apps taking it from each other. Android holds one
+  VPN, and `VpnService.prepare()` of an app that has the consent switches the VPN to it at once,
+  so two apps with a tunnel that start it by themselves (a retry, a boot receiver, a reconnect)
+  took it from each other in turn. New `startWhenFree()` for the starts an app makes by itself:
+  while another app's VPN is up the state is the new `WAITING`, nothing is taken, and the tunnel
+  starts by itself when that VPN goes away. A tunnel whose VPN another app takes waits the same
+  way instead of `NEEDS_CONSENT`, and a reconnecting tunnel no longer asks for the VPN while
+  another app's is up. The library holds the TUN from its `establish()` to a stop (camex gets a
+  copy), so the VPN stays while camex reconnects or starts again, and an app waiting for it does
+  not take it in that gap. `start()` stays the user's start and takes the VPN; `stop()` ends a wait;
+  `otherVpnActive()` tells whether another app's VPN is up without taking it.
+- Android app: Start on boot and the start after an update use `startWhenFree()`, and no longer
+  ask for the consent at boot (that took the VPN from another app); the board shows `WAITING FOR
+  THE VPN` (amber), STOP ends the wait, SETTINGS is closed while waiting.
+- Tests: `tests/android/vpn-yield-e2e.sh`, two apps with the library on one emulator.
+
 ## 4.3.1 — 2026-11-19
 
 - Android app, the Show log window (brand brass 1.3.1): the oldest line at the top, a fixed height

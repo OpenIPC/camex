@@ -32,14 +32,16 @@ public class BootReceiver extends BroadcastReceiver {
             return;
         }
         Map<String, String> v = Prefs.load(context);
-        // Saved settings and the VPN consent given before: nothing to ask in the background
-        if (CamexTunnel.check(v) != null || CamexTunnel.consentIntent(context) != null) {
-            Log.i("camex", why + ": no settings or no VPN consent yet");
+        // Saved settings only: nothing to ask in the background. No consentIntent() here: with
+        // the consent given it would take the VPN from another app; startWhenFree() waits for
+        // that VPN instead, and without the consent the state is NEEDS_CONSENT
+        if (CamexTunnel.check(v) != null) {
+            Log.i("camex", why + ": no settings yet");
             return;
         }
         TunnelLog.listen();
         TunnelLog.add(why);
         p.edit().putBoolean(Prefs.RUNNING, true).apply();
-        CamexTunnel.start(context, v);
+        CamexTunnel.startWhenFree(context, v);
     }
 }
