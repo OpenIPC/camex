@@ -178,10 +178,64 @@ impostor?)`).
 
 In short:
 
-- listed networks are protected at every contact, the first one included;
+- listed networks are protected at every contact once the client has kept the
+  server's key with the `pake` mark;
+- at the first contact, a fake server can force the fallback: it ignores
+  `PAKE1` (posing as an older camex) or says it does not know the network but
+  takes new ones, and is then trusted on first use;
 - creating a new network on an open server is protected only by trust on first
   use;
-- `--server-pubkey` closes that gap too.
+- `--server-pubkey` closes these gaps.
+
+### Why trust on first use, and what it leaves open
+
+A camera has no screen and no keyboard. Typing a 44-character key into each
+one is where setups fail. `camex --server-host H --network NAME` is meant to be
+the whole setup. Trust on first use (TOFU) makes that possible where CPace
+cannot help. This is the SSH model: the first contact is believed, and every
+later one is checked against it.
+
+What each setup stops, at the first contact and after it:
+
+| The client has                                    | A fake server at the first contact                                                                                                                                                                   | Later contacts                                                        |
+|---------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------|
+| `--server-pubkey`                                 | fails: the key is not its own                                                                                                                                                                        | the same                                                              |
+| `--network`, a network the server lists           | fails: it cannot answer CPace without the name; one online guess per connection. **But** a fake server that ignores CPace or claims to take new networks forces the fallback: **believed**, as below | the same (CPace at every connection) once the key is kept with `pake` |
+| `--network`, a new network (`allow_new_networks`) | **believed**: the client joins the attacker's server, which gets the network's ID and can guess the name **offline**                                                                                 | pinned: a server with another key is refused                          |
+| `--network`, a server too old for CPace           | **believed**, as above                                                                                                                                                                               | pinned                                                                |
+| `--psk` without `--server-pubkey`                 | cannot finish the handshake, but gets the first message to test **psk guesses offline**                                                                                                              | pinned                                                                |
+
+The offline guess is the cost of the "believed" rows. The network's ID is a
+BLAKE2b hash of its name. A server that holds it can test names as fast as it
+can hash. A passphrase psk is stretched with Argon2id, so testing it is much
+slower. A random psk (`hex:`, `base64:`) cannot be guessed at all.
+
+TOFU is a reasonable default here, for these reasons:
+
+- **Only the first contact is exposed, and only on the path.** The attacker
+  has to sit between this client and the server at that very moment, before
+  the key is kept. Later contacts are checked against the kept key.
+- **A listed network does not use it, unless an attacker forces the fallback.**
+  The default `install.sh` setup lists one network with a random 20-character
+  name, so its clients take the CPace path from the first contact on. An
+  attacker on the path at that moment can still force the fallback (see
+  above).
+- **The name defeats offline guessing.** The name `install.sh` makes has 20
+  lowercase letters and digits, about 103 bits, and cannot be guessed offline.
+  A short or common name can.
+
+When this is not good enough:
+
+- **Pin the key.** Give `--server-pubkey` (`install.sh` prints it, and the
+  connect link carries it), or ship `/etc/camex/known_servers` in the
+  firmware.
+- **Prefer listed networks** to `allow_new_networks = yes`.
+- **Use random names and random psks.** Never use a word or a short phrase.
+- **Watch the first contact.** The client logs the key it kept
+  (`First contact with server ...`). Check it against the server's
+  `public_key` before trusting the client's traffic.
+
+Proposals to narrow it further: [#199](https://github.com/OpenIPC/camex/issues/199).
 
 ## Status
 
@@ -196,7 +250,7 @@ interval; `q` quits). A summary first, then a block for each network: its
 clients, the busiest first, and its mesh pairs.
 
 ```
-camex 4.6.0 server   up 49s   UDP+TCP port 5800   tunnel 10.201.0.1/24   19:19:17
+camex 5.0.0 server   up 49s   UDP+TCP port 5800   tunnel 10.201.0.1/24   19:19:17
 Clients 3 of 256   In 0.7 Mbit/s   Out 0.7 Mbit/s   Relayed 0.0 Mbit/s
 
 NETWORK cams  10.77.0.0/24, mesh

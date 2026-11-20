@@ -166,7 +166,7 @@ On the console each line starts with the time and its level, then a plain
 sentence:
 
 ```
-18:31:02 [INFO]  camex 4.6.0, client CAM-a
+18:31:02 [INFO]  camex 5.0.0, client CAM-a
 18:31:02 [INFO]  Server 172.28.0.2:5800 proved it knows the network (CPace); its key ... is kept
 18:31:02 [INFO]  Received config from server: 10.77.0.148/24, gateway 10.77.0.1, MTU 1420
 18:31:02 [INFO]  Connection to server 172.28.0.2:5800 established (UDP)

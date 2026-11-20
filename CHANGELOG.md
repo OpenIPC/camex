@@ -6,7 +6,13 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
-## 4.6.0 — 2026-11-20
+## 5.0.0 — 2026-11-20
+
+A major version: the default tunnel MTU is 1420 (was 1500), and a server gives its MTU to its
+clients (see the MTU item below; whether it stays the global default is
+[#198](https://github.com/OpenIPC/camex/issues/198)). Everything else is compatible: a 4.x client
+or server works with a 5.0.0 one as before.
+
 
 - `camex --top` grouped by network: a summary (`Clients 3 of 256   In 0.7 Mbit/s   Out 0.7 Mbit/s
   Relayed 0.0 Mbit/s`), then each network's clients (rates in Mbit/s, `-` when idle, UDP/TCP)
@@ -18,7 +24,7 @@ release, rebuilt from every push to `master`; this file is the change history.
   `test-e2e-mesh.sh` pauses the server and pings over a TUN and a TAP direct path.
 - The console log: every line starts with the time and its level (`18:31:02 [INFO]  ...`,
   `[WARN]`, `[ERROR]`, `[DEBUG]`); syslog and logcat get the plain sentence. The start is shorter:
-  `camex 4.6.0, client CAM-a`, one `Tunnel up: tun0 10.77.0.148/24, MTU 1420, server ... (UDP)`
+  `camex 5.0.0, client CAM-a`, one `Tunnel up: tun0 10.77.0.148/24, MTU 1420, server ... (UDP)`
   line instead of an eight-line block, one `TUN backend: ..., offloads on` line, `Received config
   from server: 10.77.0.148/24, gateway 10.77.0.1, MTU 1420`; the encryption fingerprint, the
   protocol, the known-servers file and other details only with `--verbose` (`--quiet`: warnings
@@ -80,7 +86,7 @@ release, rebuilt from every push to `master`; this file is the change history.
   ~24 Mbit/s of plain TCP, the default MTU of 1500 makes every full packet two IP fragments, and
   the camera's CPU was saturated (`top` showed idle time it did not have).
 
-## 4.5.0 — 2026-11-20
+## 4.6.0 — 2026-11-20
 
 - The full camex, `camex-<arch>-full` next to every `camex-<arch>` (`make CAMEX_L2=1
   CAMEX_MESH=1`); without the flags the build is the core camex as before. A core camex refuses
@@ -111,7 +117,7 @@ release, rebuilt from every push to `master`; this file is the change history.
   CPU has NEON (AT_HWCAP), so one `camex-arm` still runs on ARMv5/ARMv6; `CAMEX_NEON=0` leaves it
   out. `camex --bench-crypto`: packets a second of 1400 bytes, and whether NEON is used.
 
-## 4.4.0 — 2026-11-20
+## 4.5.0 — 2026-11-20
 
 - Named networks ([docs/networks.md](docs/networks.md)): a client joins with the server's address
   and the network's name, `camex --server-host <host> --network <name>` (client and auto mode and
@@ -135,6 +141,23 @@ release, rebuilt from every push to `master`; this file is the change history.
 - `camex --top`: a live view of the clients, busiest first, with RX/s and TX/s (`--interval`);
   `camex --status` lists the networks, `--json` adds `networks`, and per client `network`,
   `rx_rate` and `tx_rate`.
+## 4.4.0 — 2026-11-20
+
+- Android library: one VPN at a time without apps taking it from each other. Android holds one
+  VPN, and `VpnService.prepare()` of an app that has the consent switches the VPN to it at once,
+  so two apps with a tunnel that start it by themselves (a retry, a boot receiver, a reconnect)
+  took it from each other in turn. New `startWhenFree()` for the starts an app makes by itself:
+  while another app's VPN is up the state is the new `WAITING`, nothing is taken, and the tunnel
+  starts by itself when that VPN goes away. A tunnel whose VPN another app takes waits the same
+  way instead of `NEEDS_CONSENT`, and a reconnecting tunnel no longer asks for the VPN while
+  another app's is up. The library holds the TUN from its `establish()` to a stop (camex gets a
+  copy), so the VPN stays while camex reconnects or starts again, and an app waiting for it does
+  not take it in that gap. `start()` stays the user's start and takes the VPN; `stop()` ends a wait;
+  `otherVpnActive()` tells whether another app's VPN is up without taking it.
+- Android app: Start on boot and the start after an update use `startWhenFree()`, and no longer
+  ask for the consent at boot (that took the VPN from another app); the board shows `WAITING FOR
+  THE VPN` (amber), STOP ends the wait, SETTINGS is closed while waiting.
+- Tests: `tests/android/vpn-yield-e2e.sh`, two apps with the library on one emulator.
 
 ## 4.3.1 — 2026-11-19
 

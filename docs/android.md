@@ -17,6 +17,13 @@ first, in a window of 12 lines that follows the last one unless scrolled up); bo
 are off at first. After an update of the app the tunnel comes back by itself if it
 was running (started and not stopped with **STOP**).
 
+Android holds one VPN at a time (4.4.0, [library](android-library.md#one-vpn-at-a-time)).
+**START** takes the VPN from another app that holds it. A start of the app's own
+(**Start on boot**, after an update) takes nothing: while another app's VPN is up the
+board shows **WAITING FOR THE VPN** (amber), and the tunnel comes up by itself when
+that VPN ends. The same when another app takes the VPN from camex. **STOP** ends the
+wait.
+
 | Main screen                             | Settings (opened by a link)              |
 |-----------------------------------------|------------------------------------------|
 | ![Main screen](images/android-main.png) | ![Settings](images/android-settings.png) |

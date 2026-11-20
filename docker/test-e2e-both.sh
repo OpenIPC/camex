@@ -75,9 +75,18 @@ docker build -q -t "$IMAGE" "$BUILD_CTX" >/dev/null 2>&1
 docker network create "$NET_NAME" >/dev/null
 set +e   # checks below report failures themselves
 
-client() {  # client <container> <ID> <udp|tcp> [camex args...]
-    local name="$1" id="$2" tr="$3"; shift 3
-    docker run -d --name "$P-$name" --network "$NET_NAME" --cap-add NET_ADMIN \
+client() {  # client <container> <ID> <udp|tcp> [camex args...]: started
+    client_as "run -d" "$@"
+}
+
+client_created() {  # client_created <container> <ID> <udp|tcp>: created, not started
+    client_as create "$@"
+}
+
+client_as() {  # client_as <"run -d"|create> <container> <ID> <udp|tcp> [camex args...]
+    local verb="$1" name="$2" id="$3" tr="$4"; shift 4
+    # shellcheck disable=SC2086  # the verb is one or two words
+    docker $verb --name "$P-$name" --network "$NET_NAME" --cap-add NET_ADMIN \
         --cap-add MKNOD "$IMAGE" --mode client --auto --name "$id" \
         --server-host "$P-srv" --port 5800 --transport "$tr" \
         --server-pubkey "$SERVER_PUBKEY" --psk "$PSK" --keepalive 2 "$@" >/dev/null
@@ -175,9 +184,13 @@ wait_for 10 sh -c "[ \"\$(docker exec $P-S2 ip -4 -o addr show 2>/dev/null | gre
 check $? "with the same address $s_ip"
 docker exec "$P-S2" ping -c 2 -W 2 10.200.0.1 >/dev/null 2>&1
 check $? "and reaches the server over TCP"
-# Cut off: the TCP connection is not closed, the server's entry stays live
+# Cut off: the TCP connection is not closed, the server's entry stays live.
+# It stays live only for the client timeout (6 s here), so S3 is created
+# beforehand and only started after the cut: a slow docker run would let
+# the entry expire, and S3 would then register anew, not move it (#195).
+client_created S3 CAM-S udp
 docker network disconnect "$NET_NAME" "$P-S2" >/dev/null 2>&1
-client S3 CAM-S udp
+docker start "$P-S3" >/dev/null
 wait_for 20 has_transport CAM-S udp
 check $? "the live TCP entry moves to UDP when CAM-S comes back over UDP"
 wait_for 10 sh -c "[ \"\$(docker exec $P-S3 ip -4 -o addr show 2>/dev/null | grep -c ' $s_ip/')\" = 1 ]"
