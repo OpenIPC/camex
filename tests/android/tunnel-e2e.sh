@@ -74,7 +74,8 @@ mkdir -p "$OUT/w"
 echo "== camex (static)"
 docker run --rm --pull never -u "$UID_GID" -v "$ROOT:/src" -w /src "$CROSS_IMAGE" sh -c '
     rm -rf build/tunnel-e2e/camex && mkdir -p build/tunnel-e2e/camex &&
-    cp -a Makefile src build/tunnel-e2e/camex/ && cd build/tunnel-e2e/camex && make -s LDFLAGS=-static' \
+    cp -a Makefile src build/tunnel-e2e/camex/ && cd build/tunnel-e2e/camex &&
+    rm -rf src/obj src/camex && make -s LDFLAGS=-static' \
     > "$OUT/camex.log" 2>&1 || { tail -30 "$OUT/camex.log"; exit 1; }
 cp "$OUT/camex/camex" "$OUT/w/"
 KEYS=$("$OUT/w/camex" --genkey)
@@ -296,6 +297,19 @@ echo "$L" | grep -q "start after stop OK" && ok "start() after stop(): CONNECTED
     || bad "start() after stop()"
 echo "$L" | grep -q "quick stop OK" && ok "stop() right after start(): stays STOPPED" || bad "stop() right after start()"
 if passed "$(cat "$OUT/run.log")"; then ok "the run step passed"; else bad "the run step"; tail -30 "$OUT/run.log"; fi
+
+# camex 4.6: the server's address and a network's name alone (CPace, no key, no psk)
+printf '\n[network e2e-net]\npool = 10.77.0.0/24\n' >> "$OUT/w/camex.conf"
+for _ in $(seq 1 10); do
+    grep -q "Network .*10.77.0.0/24" "$OUT/w/server.log" && break
+    sleep 1
+done
+R=$(instrument network -e network e2e-net -e pool 10.77.0.)
+if passed "$R"; then
+    ok "the server's address and the network's name only: CONNECTED in the network's pool"
+else
+    bad "joining by the network's name"; echo "$R" | tail -20
+fi
 grep -q 'FATAL EXCEPTION' "$OUT/logcat.txt" && bad "a crash in logcat ($OUT/logcat.txt)" || ok "no crash"
 # the psk never reaches logcat (the test runner logs its own arguments: not the library)
 grep -v -E 'AndroidJUnitRunner|TestRunner' "$OUT/logcat.txt" | grep -q "$PSK" &&
