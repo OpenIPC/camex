@@ -38,7 +38,8 @@ the client's own block wins, then the port the client announced itself
 (`--web-port`, for example an Android app that serves its page on 8080), then
 `[defaults]`, then `--upstream-port` of the map (80).
 
-After a change to the file, `kill -HUP` the server. A running auto-mode client
+The server reads the file again when it changes (it checks every 2 seconds);
+`kill -HUP` does the same at once. A running auto-mode client
 picks up a changed address, gateway, MTU or routes with its next handshake (a
 key renewal, at most 10 minutes later, or a reconnect): it reopens its tunnel
 with the new settings and replaces its routes, without a restart. Its old
@@ -54,6 +55,8 @@ Three kinds of blocks; lines starting with `#` are comments:
 - `[defaults]` — the profile of every auto-mode client without its own block.
 - `[client ID]` — one client's profile; the ID is its MAC address or any unique
   string. Its keys override `[defaults]`.
+- `[network NAME]` — a named network clients join by its name, with addresses
+  derived from their IDs; see [networks.md](networks.md).
 
 `[server]`:
 

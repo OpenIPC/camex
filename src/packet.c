@@ -19,6 +19,12 @@ static int tun_backend_open(const camex_packet_open_t *p)
     /* TUN from the host application (Android VpnService): through the
      * provider, which gets the final address and routes, or as a ready fd
      * in CAMEX_TUN_FD; otherwise create the device here. */
+    tun_set_l2(p->l2, p->mac);
+    if (p->l2) {
+        /* A provider or an fd from outside is a TUN device: Ethernet
+         * frames need one camex makes itself */
+        return tun_create_device(p->local_ip, p->netmask, p->mtu, p->device);
+    }
     if (p->use_provider &&
         tun_open_provided(p->local_ip, p->netmask, p->mtu, p->routes,
                           p->route_count) >= 0) {

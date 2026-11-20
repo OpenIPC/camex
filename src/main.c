@@ -10,6 +10,7 @@
 #include "client.h"
 #include "server.h"
 #include "main.h"
+#include "netw.h"
 #include "config.h"
 #include "crypto.h"
 #include "keys.h"
@@ -118,6 +119,10 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         { "wait-timeout", required_argument, NULL, 'x' },
         { "http-port", required_argument, NULL, 'z' },
         { "web-port", required_argument, NULL, 'y' },
+        { "network", required_argument, NULL, 1001 },
+        { "known-servers", required_argument, NULL, 1002 },
+        { "top", no_argument, NULL, 1003 },
+        { "interval", required_argument, NULL, 1004 },
         { NULL, 0, NULL, 0 }
     };
     int opt;
@@ -226,6 +231,42 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
                             sizeof(config->server_key_file), optarg,
                             "server key file") != 0) {
                 return -1;
+            }
+            break;
+        case 1001:
+            if (!netw_name_valid(optarg)) {
+                log_message(LOG_ERR, "Invalid --network: 1 to %u bytes "
+                            "without control characters",
+                            (unsigned)CAMEX_NET_NAME_MAX);
+                return -1;
+            }
+            snprintf(config->network, sizeof(config->network), "%s", optarg);
+            /* The name is the network's key: not left in argv for ps */
+            memset(optarg, 'x', strlen(optarg));
+            config->auto_config = 1U;
+            break;
+        case 1002:
+            if (copy_option(config->known_servers,
+                            sizeof(config->known_servers), optarg,
+                            "known servers file") != 0) {
+                return -1;
+            }
+            break;
+        case 1003:
+            config->top = 1U;
+            config->status_query = 1U;
+            break;
+        case 1004:
+            {
+                char *end = NULL;
+                long val = strtol(optarg, &end, 10);
+
+                if (end == optarg || *end != '\0' || val < 1 || val > 60) {
+                    log_message(LOG_ERR, "--interval must be 1..60 seconds, "
+                                "got: %s", optarg);
+                    return -1;
+                }
+                config->top_interval = (int)val;
             }
             break;
         case 'Y':
@@ -457,11 +498,25 @@ int validate_config(camex_config_t *config)
         return -1;
     }
 
-    /* Protocol v2 is always encrypted: a client needs its key. A server
-     * may do without a global key when every client has its own psk=. */
-    if (config->mode == CAMEX_MODE_CLIENT && config->psk[0] == '\0') {
-        log_message(LOG_ERR, "The client needs a key: --psk");
+    /* Protocol v2 is always encrypted: a client needs its key, or the
+     * name of its network (which is the key then). A server may do
+     * without a global key when every client has its own psk=. */
+    if (config->mode == CAMEX_MODE_CLIENT && config->psk[0] == '\0' &&
+        config->network[0] == '\0') {
+        log_message(LOG_ERR, "The client needs a network (--network) or a "
+                    "key (--psk)");
         return -1;
+    }
+    if (config->mode == CAMEX_MODE_SERVER &&
+        (config->network[0] != '\0' || config->known_servers[0] != '\0')) {
+        log_message(LOG_ERR, "--network and --known-servers are for the "
+                    "client; a server lists its networks in [network NAME] "
+                    "blocks");
+        return -1;
+    }
+    /* A client without --port talks to the default one */
+    if (config->mode == CAMEX_MODE_CLIENT && config->port <= 0) {
+        config->port = CAMEX_DEFAULT_PORT;
     }
 
     /* Each side has its own key option: a misplaced one is a mistake */
@@ -597,6 +652,14 @@ void print_usage(const char *progname)
     printf("Client options:\n");
     printf("  -a, --auto              "
            "Fetch tunnel parameters from the server\n");
+    printf("      --network <name>    Join the server's network of this name"
+           " (the name is its key;\n"
+           "                          implies --auto; with --psk: the"
+           " client's own key too)\n");
+    printf("      --known-servers <path> Keys of servers first met without"
+           " --server-pubkey\n"
+           "                          (default: %s; none = not kept)\n",
+           CAMEX_KNOWN_SERVERS_PATH);
     printf("  -n, --name <id>         Client ID (auto mode; optional in manual mode)\n");
     printf("      --web-port <port>   Auto client: the port of its web UI, for nginx\n"
            "                          on the server (#174; needs a server 3.19.0+)\n");
@@ -629,6 +692,10 @@ void print_usage(const char *progname)
     printf("      --status         List the connected clients of every"
            " server on this host\n");
     printf("      --json           The same as JSON, for scripts\n");
+    printf("      --top            A live view of the clients and their"
+           " traffic (q quits)\n");
+    printf("      --interval <s>   With --top: seconds between updates"
+           " (default 1)\n");
     printf("      --control <path> Ask only the server at this socket\n");
     printf("      --format nginx-map  An nginx map of the clients"
            " (<id>[.<domain>] -> <address>:<port>)\n");
@@ -671,7 +738,10 @@ void print_usage(const char *progname)
     printf("      --genkey         Print a new server key pair and exit\n");
     printf("      --server-key-file <path> Server: file with its private key\n"
            "                       (or server_key= in [server])\n");
-    printf("      --server-pubkey <key> Client: the server's public key\n");
+    printf("      --server-pubkey <key> Client: the server's public key"
+           " (without it the key\n"
+           "                       the server gives on first contact is"
+           " kept, --known-servers)\n");
     printf("  -W, --server-timeout <s> Connection timeout in seconds"
            " (default: 20)\n");
     printf("  -v, --version        Show version and exit\n");
@@ -690,6 +760,10 @@ void print_usage(const char *progname)
     printf("  %s --mode server --port 5800 --transport tcp"
            " --config /etc/camex/camex.conf"
            " --server-key-file /etc/camex/server.key --psk secret\n\n",
+           progname);
+    printf("  # Client joining a network: the server, the network's name;"
+           " the ID is the MAC\n");
+    printf("  %s --server-host cloud.openipc.org --network my-cams\n\n",
            progname);
     printf("  # Client (auto-config, UDP)\n");
     printf("  %s --mode client --auto --name 0203A104B5AE"
@@ -749,7 +823,9 @@ int main(int argc, char *argv[])
     parse_result = parse_arguments(argc, argv, &config);
     if (parse_result == 0 && config.status_query) {
         /* camex --status (#82): ask the running server(s), nothing else */
-        int rc = config.status_wait != NULL
+        int rc = config.top
+                     ? control_top(config.control_path, config.top_interval)
+                 : config.status_wait != NULL
                      ? control_wait(config.control_path, config.status_wait,
                                     config.status_wait_timeout > 0
                                         ? config.status_wait_timeout : 60)

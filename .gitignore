@@ -36,3 +36,5 @@ _DOCKER.md
 _NOTES.md
 _PLAN.md
 
+tests/test_netw
+tests/test_tcpgate

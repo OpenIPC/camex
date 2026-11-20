@@ -66,6 +66,10 @@ uint8_t v2_packet_type(const uint8_t *pkt, size_t len)
         return len >= V2_RESP_HDR + NOISE_MSG2_OVERHEAD ? V2_TYPE_RESP : 0U;
     case V2_TYPE_DATA:
         return len >= V2_OVERHEAD ? V2_TYPE_DATA : 0U;
+    case V2_TYPE_KEYREQ:
+        return len >= V2_KEYREQ_LEN ? V2_TYPE_KEYREQ : 0U;
+    case V2_TYPE_KEY:
+        return len == V2_KEY_LEN ? V2_TYPE_KEY : 0U;
     default:
         return 0U;
     }

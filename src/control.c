@@ -34,6 +34,8 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <signal.h>
+#include <termios.h>
 #include <unistd.h>
 #endif
 
@@ -349,7 +351,7 @@ static void control_finish(control_conn_t *c, size_t len);
 static void control_bad_command(control_conn_t *c, size_t *len)
 {
     static const char err[] = "ERROR unknown command (STATUS, "
-                              "STATUS JSON, CLIENTS, CLIENTS WEB, "
+                              "STATUS JSON, STATUS TOP, CLIENTS, CLIENTS WEB, "
                               "CLIENTS NAMES, "
                               "CLIENTS INDEX, CLIENTS INDEX VIA, DOMAIN, "
                               "WAIT <hash|-> <seconds>)\n";
@@ -474,6 +476,8 @@ static void control_answer(control_conn_t *c)
         c->out = server_status(0, &len);
     } else if (strcmp(c->cmd, "STATUS JSON") == 0) {
         c->out = server_status(1, &len);
+    } else if (strcmp(c->cmd, "STATUS TOP") == 0) {
+        c->out = server_status(2, &len);
     } else if (strcmp(c->cmd, "CLIENTS") == 0) {
         c->out = server_clients_list(0, 0, &len);
     } else if (strcmp(c->cmd, "CLIENTS WEB") == 0) {
@@ -871,6 +875,110 @@ int control_status(const char *path, int json)
     fflush(stdout);
     free(listed);
     return ok == n ? 0 : 1;
+}
+
+static volatile sig_atomic_t top_stop = 0;
+
+static void top_signal(int sig)
+{
+    (void)sig;
+    top_stop = 1;
+}
+
+int control_top(const char *path, int interval)
+{
+    struct termios saved;
+    int tty = isatty(STDIN_FILENO);
+    int rc = 0;
+
+    if (interval <= 0) {
+        interval = 1;
+    }
+    if (tty && tcgetattr(STDIN_FILENO, &saved) == 0) {
+        struct termios raw = saved;
+
+        raw.c_lflag &= (tcflag_t)~(ICANON | ECHO);
+        raw.c_cc[VMIN] = 0;
+        raw.c_cc[VTIME] = 0;
+        (void)tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+    } else {
+        tty = 0;
+    }
+    signal(SIGINT, top_signal);
+    signal(SIGTERM, top_signal);
+    fputs("\033[?25l", stdout);   /* no cursor while it redraws */
+    while (!top_stop) {
+        control_path_t one;
+        control_path_t *paths = &one;
+        control_path_t *listed = NULL;
+        int n, i;
+        fd_set rs;
+        struct timeval tv;
+        time_t now = time(NULL);
+        char when[32];
+
+        if (path != NULL && path[0] != '\0') {
+            n = 1;
+            snprintf(one, sizeof(one), "%s", path);
+        } else {
+            n = control_list(&listed);
+            paths = listed;
+        }
+        strftime(when, sizeof(when), "%H:%M:%S", localtime(&now));
+        fputs("\033[H\033[2J", stdout);
+        printf("camex --top  %s  every %ds, q quits\n\n", when, interval);
+        if (n <= 0) {
+            printf("no server control socket in %s\n", CAMEX_CONTROL_DIR);
+        }
+        for (i = 0; i < n; ++i) {
+            char *buf = NULL;
+            size_t len = 0U;
+            int r;
+
+            if (n > 1) {
+                printf("%s== %s\n", i > 0 ? "\n" : "", paths[i]);
+            }
+            control_quiet = 1;
+            r = control_ask(paths[i], "STATUS TOP\n", &buf, &len);
+            control_quiet = 0;
+            if (r == 0) {
+                fwrite(buf, 1U, len, stdout);
+            } else if (r == -3) {
+                /* A server before --top: its plain table */
+                free(buf);
+                buf = NULL;
+                len = 0U;
+                if (control_ask(paths[i], "STATUS\n", &buf, &len) == 0) {
+                    fwrite(buf, 1U, len, stdout);
+                }
+            } else {
+                printf("(no answer)\n");
+            }
+            free(buf);
+        }
+        free(listed);
+        fflush(stdout);
+        FD_ZERO(&rs);
+        if (tty) {
+            FD_SET(STDIN_FILENO, &rs);
+        }
+        tv.tv_sec = interval;
+        tv.tv_usec = 0;
+        if (select(tty ? STDIN_FILENO + 1 : 0, tty ? &rs : NULL, NULL, NULL,
+                   &tv) > 0 && FD_ISSET(STDIN_FILENO, &rs)) {
+            char ch;
+
+            if (read(STDIN_FILENO, &ch, 1) == 1 && (ch == 'q' || ch == 'Q')) {
+                break;
+            }
+        }
+    }
+    fputs("\033[?25h", stdout);
+    fflush(stdout);
+    if (tty) {
+        (void)tcsetattr(STDIN_FILENO, TCSANOW, &saved);
+    }
+    return rc;
 }
 
 /* text to stdout, whole: 0, or 1 with a message (a full disk, say), so a
@@ -1650,6 +1758,14 @@ int control_status(const char *path, int json)
     (void)path;
     (void)json;
     fprintf(stderr, "camex: --status is not available on Windows\n");
+    return 1;
+}
+
+int control_top(const char *path, int interval)
+{
+    (void)path;
+    (void)interval;
+    fprintf(stderr, "camex: --top is not available on Windows\n");
     return 1;
 }
 

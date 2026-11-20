@@ -6,6 +6,31 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 4.4.0 — 2026-11-20
+
+- Named networks ([docs/networks.md](docs/networks.md)): a client joins with the server's address
+  and the network's name, `camex --server-host <host> --network <name>` (client and auto mode and
+  port 5800 are the defaults; the ID is the MAC unless `--name`). The name is the key: the client
+  sends its ID (BLAKE2b-256) inside Noise message 1 with a fixed network key, so only the
+  server's private key opens it; the name is never logged nor left in the client's command line.
+  `[network NAME]` blocks list them (`pool=`, `client_isolation=`, `label=`);
+  `allow_new_networks=yes` takes any name as a new network.
+- Stable addresses: a client's address comes from the network's ID and its client ID (BLAKE2b,
+  modulo the pool), the same after a client or server restart; another client ID on it moves
+  the later one to +1, −1, +2 …; the same client ID coming back always gets its own address, also
+  while its old session still looks live. Derived pools are /16 of 10.0.0.0/8 by default
+  (`network_supernet=`, `network_prefix=`); each network's gateway is an alias on the server's
+  tunnel. Networks never meet: packets between them, or into the auto pool, are dropped.
+- The server's key on first contact: a client without `--server-pubkey` asks for it (KEYREQ, 64
+  bytes, answered with 37), trusts it and keeps it in `/etc/camex/known_servers`
+  (`--known-servers`); a kept key is used from then on and never replaced on its own, and the
+  client says how to forget it when the server's key changed.
+- The server reads its file again when it changes (every 2 s; `kill -HUP` still works); a file
+  that does not parse keeps the configuration.
+- `camex --top`: a live view of the clients, busiest first, with RX/s and TX/s (`--interval`);
+  `camex --status` lists the networks, `--json` adds `networks`, and per client `network`,
+  `rx_rate` and `tx_rate`.
+
 ## 4.3.1 — 2026-11-19
 
 - Android app, the Show log window (brand brass 1.3.1): the oldest line at the top, a fixed height

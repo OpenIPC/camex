@@ -41,10 +41,13 @@ int proto_build_register(const camex_config_t *config,
                          char *buffer, size_t size);
 
 /* Parse REGISTER text message */
+/* NET (the ID of the network the client joins) fills net_id[32] and sets
+ * *has_net; both may be NULL */
 int proto_parse_register(char *message,
                          char *client_id, size_t client_id_size,
                          char *local_ip, size_t local_ip_size,
-                         uint8_t *auto_request, int *web_port);
+                         uint8_t *auto_request, int *web_port,
+                         uint8_t *net_id, uint8_t *has_net);
 
 /* Build CONFIG text message */
 int proto_build_config(const char *client_id,

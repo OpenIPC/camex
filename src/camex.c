@@ -8,6 +8,7 @@
 
 #include "camex.h"
 #include "client.h"
+#include "netw.h"
 #include "server.h"
 #include "control.h"
 #include "config.h"
@@ -769,6 +770,20 @@ int camex_init(camex_config_t *config)
         }
     }
 
+    /* A client that joins a network by name without --psk: the fixed
+     * network handshake key (the name travels inside message 1) */
+    if (client_mode && current_config.network[0] != '\0' &&
+        current_config.psk[0] == '\0') {
+        uint8_t k[32];
+        char hex[65];
+
+        netw_handshake_key(k);
+        hex_encode(k, sizeof(k), hex, sizeof(hex));
+        snprintf(current_config.psk, sizeof(current_config.psk), "hex:%s",
+                 hex);
+        crypto_wipe(k, sizeof(k));
+    }
+
     /* Protocol v2 is always encrypted (#17) */
     {
         int keys_ok = crypto_init(current_config.psk) == 0 &&
@@ -780,11 +795,17 @@ int camex_init(camex_config_t *config)
                         "(create one with --genkey)");
             keys_ok = 0;
         }
-        if (keys_ok && client_mode && (!crypto_get_ctx()->has_server_pub ||
-                                       !crypto_get_ctx()->has_global)) {
-            log_message(LOG_ERR, "The client needs --psk and the server's "
-                        "public key (--server-pubkey)");
+        if (keys_ok && client_mode && !crypto_get_ctx()->has_global) {
+            log_message(LOG_ERR, "The client needs --network or --psk");
             keys_ok = 0;
+        }
+        /* Without --server-pubkey: the key kept from the first contact,
+         * else the server is asked for it (trust on first use) */
+        if (keys_ok && client_mode && !crypto_get_ctx()->has_server_pub &&
+            client_known_load() != 0) {
+            log_message(LOG_NOTICE, "No --server-pubkey: the key server "
+                        "%s:%d gives on first contact is trusted",
+                        current_config.server_host, current_config.port);
         }
         /* The key texts are not needed any more; on failure the derived
          * keys go too (on Android the process outlives this start) */
@@ -883,6 +904,8 @@ int camex_init(camex_config_t *config)
             open_params.route_count = current_config.route_count;
             open_params.device = current_config.tun_dev;
             open_params.use_provider = 1U;
+            open_params.l2 = current_config.l2;
+            open_params.mac = current_config.l2_mac;
             if (packet_open(&open_params) != 0) {
                 net_close();
                 return -1;
@@ -949,6 +972,16 @@ int camex_init(camex_config_t *config)
             }
         }
     }
+
+    /* Named networks: their pools, their gateways on the tunnel */
+    memset(netw_table, 0, sizeof(netw_table));
+    if (server_networks_sync() != 0) {
+        packet_close();
+        net_close();
+        return -1;
+    }
+    server_networks_apply();
+    camex_config_watch();
 
     log_message(LOG_INFO, "Tunnel initialized");
     log_message(LOG_INFO, "  Mode: %s", mode_to_string(current_config.mode));
@@ -1363,6 +1396,49 @@ static void handle_tun_packet(void)
     }
 }
 
+/* The server's file is read again when it changes (its time, size or
+ * inode), checked every CAMEX_CONFIG_WATCH seconds; a file that does not
+ * parse leaves the configuration as it was. kill -HUP still works. */
+#define CAMEX_CONFIG_WATCH 2
+void camex_config_watch(void)
+{
+    static time_t last_check = 0;
+    static int have = 0;
+    static time_t seen_mtime = 0;
+    static off_t seen_size = 0;
+    static unsigned long seen_ino = 0UL;
+    struct stat st;
+    time_t now = time(NULL);
+    int exists;
+
+    if (current_config.config_path[0] == '\0') {
+        return;
+    }
+    if (have && difftime(now, last_check) < (double)CAMEX_CONFIG_WATCH) {
+        return;
+    }
+    last_check = now;
+    exists = stat(current_config.config_path, &st) == 0;
+    if (!have) {
+        have = 1;
+        seen_mtime = exists ? st.st_mtime : 0;
+        seen_size = exists ? st.st_size : 0;
+        seen_ino = exists ? (unsigned long)st.st_ino : 0UL;
+        return;
+    }
+    if (!exists) {
+        return;   /* being replaced: the new one is seen next time */
+    }
+    if (st.st_mtime != seen_mtime || st.st_size != seen_size ||
+        (unsigned long)st.st_ino != seen_ino) {
+        seen_mtime = st.st_mtime;
+        seen_size = st.st_size;
+        seen_ino = (unsigned long)st.st_ino;
+        log_message(LOG_INFO, "Config file changed");
+        reload_config = 1;
+    }
+}
+
 void camex_run(void)
 {
     fd_set readset;
@@ -1464,7 +1540,9 @@ void camex_run(void)
             }
 
             server_expire_clients();
+            server_rates_tick();
             log_limit_tick();
+            camex_config_watch();
             if (reload_config) {
                 /* The previous configuration stays allocated until the new
                  * one is in place: a failed reload switches back to it */
@@ -1525,7 +1603,13 @@ void camex_run(void)
                     if (!restore && config_build_keystore() != 0) {
                         restore = 1;
                     }
+                    /* The networks of the new file (their table changes
+                     * only when it succeeds) */
+                    if (!restore && server_networks_sync() != 0) {
+                        restore = 1;
+                    }
                     if (!restore) {
+                        server_networks_apply();
                         server_revalidate_keys();
                         server_revalidate_unknown_clients();
                         server_revalidate_profile_addresses();
@@ -1672,6 +1756,9 @@ void camex_stop(void)
 
 void camex_cleanup(void)
 {
+    if (server_mode) {
+        server_networks_down();
+    }
     /* Wipe all key material from memory */
     crypto_wipe_ctx();
     {
@@ -1851,6 +1938,8 @@ static int client_open_tunnel(const camex_config_t *cfg)
     open_params.route_count = cfg->route_count;
     open_params.device = cfg->tun_dev;
     open_params.use_provider = 1U;
+    open_params.l2 = cfg->l2;
+    open_params.mac = cfg->l2_mac;
     return packet_open(&open_params);
 }
 
@@ -1901,7 +1990,8 @@ static int client_config_same(const camex_config_t *a,
            strcmp(a->gateway_ip, b->gateway_ip) == 0 &&
            a->mtu == b->mtu && a->route_count == b->route_count &&
            memcmp(a->route_cidrs, b->route_cidrs,
-                  sizeof(a->route_cidrs)) == 0;
+                  sizeof(a->route_cidrs)) == 0 &&
+           a->l2 == b->l2 && memcmp(a->l2_mac, b->l2_mac, 6) == 0;
 }
 
 int camex_client_reconfigure(const camex_config_t *next)

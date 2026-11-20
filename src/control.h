@@ -62,6 +62,10 @@ void control_handle(const fd_set *readset, const fd_set *writeset);
  * server, or of every server in CAMEX_CONTROL_DIR. Exit code: 0, or 1. */
 int control_status(const char *path, int json);
 
+/* camex --top: the clients of one server, or of every server, redrawn
+ * every interval seconds, busiest first, until q or Ctrl+C */
+int control_top(const char *path, int interval);
+
 /* camex --status --format nginx-map (#84): the clients of one server, or
  * of every server in CAMEX_CONTROL_DIR, as an nginx map (nginxmap.h).
  * Exit code 1, and no map, when a server does not answer. */

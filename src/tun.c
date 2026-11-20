@@ -150,6 +150,17 @@ int tun_is_inherited(void)
     return tun_inherited;
 }
 
+static int tun_l2 = 0;
+static uint8_t tun_l2_mac[6];
+
+void tun_set_l2(int l2, const uint8_t *mac)
+{
+    tun_l2 = l2 ? 1 : 0;
+    if (l2 && mac != NULL) {
+        memcpy(tun_l2_mac, mac, sizeof(tun_l2_mac));
+    }
+}
+
 #if !defined(_WIN32)
 static void copy_ifreq_name(struct ifreq *req, const char *name)
 {
@@ -466,6 +477,12 @@ static int set_ip_windows(const char *adapter_name,
 int tun_create_device(const char *local_ip, const char *netmask,
                       int mtu, const char *tun_dev_override)
 {
+#if defined(_WIN32) || defined(__APPLE__)
+    if (tun_l2) {
+        log_message(LOG_ERR, "TAP networks need a Linux client");
+        return -1;
+    }
+#endif
     (void)local_ip;
     (void)netmask;
     (void)mtu;
@@ -650,8 +667,8 @@ int tun_create_device(const char *local_ip, const char *netmask,
     } else {
         fd = open(DEV_NET_TUN, O_RDWR | TUN_OPEN_CLOEXEC);
         if (fd >= 0) {
-            copy_ifreq_name(&ifr, "tun%d");
-            ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
+            copy_ifreq_name(&ifr, tun_l2 ? "tap%d" : "tun%d");
+            ifr.ifr_flags = (short)((tun_l2 ? IFF_TAP : IFF_TUN) | IFF_NO_PI);
             if (ioctl(fd, TUNSETIFF, (void *)&ifr) >= 0) {
                 devpath_used  = DEV_NET_TUN;
                 use_tunsetiff = 1;
@@ -676,8 +693,8 @@ int tun_create_device(const char *local_ip, const char *netmask,
 
     if (!use_tunsetiff) {
         if (strcmp(devpath_used, DEV_NET_TUN) == 0) {
-            copy_ifreq_name(&ifr, "tun%d");
-            ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
+            copy_ifreq_name(&ifr, tun_l2 ? "tap%d" : "tun%d");
+            ifr.ifr_flags = (short)((tun_l2 ? IFF_TAP : IFF_TUN) | IFF_NO_PI);
             if (ioctl(fd, TUNSETIFF, (void *)&ifr) < 0) {
                 print_errno_message(LOG_ERR, "ioctl(TUNSETIFF)");
                 close_tun_creation(-1, fd);
@@ -692,13 +709,36 @@ int tun_create_device(const char *local_ip, const char *netmask,
         }
     }
 
-    log_message(LOG_INFO, "TUN backend: %s (%s)", tun_name, devpath_used);
+    log_message(LOG_INFO, "%s backend: %s (%s)", tun_l2 ? "TAP" : "TUN",
+                tun_name, devpath_used);
 
     sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         print_errno_message(LOG_ERR, "socket(AF_INET, SOCK_DGRAM)");
         close_tun_creation(-1, fd);
         return -1;
+    }
+
+    /* A TAP device: an Ethernet interface (camex.ko only when loaded with
+     * mode=tap), and the MAC the server gave */
+    if (tun_l2) {
+        copy_ifreq_name(&cfg, tun_name);
+        if (ioctl(sock, SIOCGIFHWADDR, &cfg) < 0 ||
+            cfg.ifr_hwaddr.sa_family != ARPHRD_ETHER) {
+            log_message(LOG_ERR, "%s is not an Ethernet device: a TAP "
+                        "network needs /dev/net/tun, or camex.ko loaded "
+                        "with mode=tap", tun_name);
+            close_tun_creation(sock, fd);
+            return -1;
+        }
+        copy_ifreq_name(&cfg, tun_name);
+        cfg.ifr_hwaddr.sa_family = ARPHRD_ETHER;
+        memcpy(cfg.ifr_hwaddr.sa_data, tun_l2_mac, 6);
+        if (ioctl(sock, SIOCSIFHWADDR, &cfg) < 0) {
+            print_errno_message(LOG_ERR, "ioctl(SIOCSIFHWADDR)");
+            close_tun_creation(sock, fd);
+            return -1;
+        }
     }
 
     copy_ifreq_name(&cfg, tun_name);
@@ -951,3 +991,93 @@ int tun_write_packet(const uint8_t *buffer, size_t len)
 
     return 0;
 }
+
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+static int tun_alias_name(char *buf, size_t size, unsigned int slot)
+{
+    int n = snprintf(buf, size, "%s:%u", tun_name, slot);
+
+    return n > 0 && (size_t)n < size ? 0 : -1;
+}
+
+int tun_alias_set(unsigned int slot, uint32_t ip_host, uint8_t prefix)
+{
+    struct ifreq cfg;
+    struct sockaddr_in *sin;
+    char name[IFNAMSIZ];
+    int sock;
+    uint32_t mask = prefix == 0U ? 0U : 0xFFFFFFFFU << (32U - prefix);
+
+    if (tun_name[0] == '\0' || tun_alias_name(name, sizeof(name), slot) != 0) {
+        log_message(LOG_ERR, "No address alias on tunnel %s: name too long",
+                    tun_name);
+        return -1;
+    }
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        print_errno_message(LOG_ERR, "socket for the tunnel alias");
+        return -1;
+    }
+    memset(&cfg, 0, sizeof(cfg));
+    copy_ifreq_name(&cfg, name);
+    sin = (struct sockaddr_in *)&cfg.ifr_addr;
+    sin->sin_family = AF_INET;
+    sin->sin_addr.s_addr = htonl(ip_host);
+    if (ioctl(sock, SIOCSIFADDR, &cfg) < 0) {
+        print_errno_message(LOG_ERR, "ioctl(SIOCSIFADDR alias)");
+        close(sock);
+        return -1;
+    }
+    memset(&cfg, 0, sizeof(cfg));
+    copy_ifreq_name(&cfg, name);
+    sin = (struct sockaddr_in *)&cfg.ifr_netmask;
+    sin->sin_family = AF_INET;
+    sin->sin_addr.s_addr = htonl(mask);
+    if (ioctl(sock, SIOCSIFNETMASK, &cfg) < 0) {
+        print_errno_message(LOG_ERR, "ioctl(SIOCSIFNETMASK alias)");
+        close(sock);
+        tun_alias_clear(slot);
+        return -1;
+    }
+    close(sock);
+    return 0;
+}
+
+void tun_alias_clear(unsigned int slot)
+{
+    struct ifreq cfg;
+    char name[IFNAMSIZ];
+    int sock;
+
+    if (tun_name[0] == '\0' || tun_alias_name(name, sizeof(name), slot) != 0) {
+        return;
+    }
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        return;
+    }
+    memset(&cfg, 0, sizeof(cfg));
+    copy_ifreq_name(&cfg, name);
+    /* An alias that is put down loses its address */
+    if (ioctl(sock, SIOCGIFFLAGS, &cfg) == 0) {
+        cfg.ifr_flags &= ~IFF_UP;
+        (void)ioctl(sock, SIOCSIFFLAGS, &cfg);
+    }
+    close(sock);
+}
+#else
+int tun_alias_set(unsigned int slot, uint32_t ip_host, uint8_t prefix)
+{
+    (void)slot;
+    (void)ip_host;
+    (void)prefix;
+    log_message(LOG_ERR, "Named networks need a Linux server");
+    return -1;
+}
+
+void tun_alias_clear(unsigned int slot)
+{
+    (void)slot;
+}
+#endif

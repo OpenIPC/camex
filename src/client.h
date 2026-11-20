@@ -33,6 +33,7 @@ typedef struct {
     uint8_t established;      /* a session has been set up since connect */
     uint8_t confirm_pending;  /* the server has not answered on cur yet:
                                * keepalives repeat until it does */
+    uint8_t key_requested;    /* KEYREQ sent: a KEY answer is taken */
 } client_state_t;
 
 extern client_state_t client_state;
@@ -70,6 +71,13 @@ void client_tick(void);
 /* Client socket creation */
 int client_socket_create(const char *host, int port,
                          const char *bind_dev);
+
+/* The server's key from the known servers file (--known-servers); 0, or
+ * -1 when the file has none for this server */
+int client_known_load(void);
+
+/* 1 when the key in use came from that file */
+int client_key_is_pinned(void);
 
 /* Wipe sessions and handshake state */
 void client_wipe(void);

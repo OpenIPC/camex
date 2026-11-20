@@ -9,6 +9,6 @@ get_filename_component(CAMEX_SRC_DIR "${CMAKE_CURRENT_LIST_DIR}/../src" ABSOLUTE
 
 set(CAMEX_SRCS)
 foreach(name main camex monocypher util log crypto noise keys session slotidx tun packet
-        net proto config client server control nginxmap tcpgate)
+        net proto config client server control nginxmap tcpgate netw)
     list(APPEND CAMEX_SRCS "${CAMEX_SRC_DIR}/${name}.c")
 endforeach()

@@ -33,6 +33,7 @@
 #define CAMEX_CONFIG_PATH_LEN 256
 #define CAMEX_DEFAULT_CONFIG_PATH "/etc/camex/camex.conf"
 #define CAMEX_DEFAULT_MTU 1500
+#define CAMEX_DEFAULT_PORT 5800
 
 typedef enum {
     CAMEX_MODE_CLIENT = 0,
@@ -64,6 +65,13 @@ typedef struct {
     int web_port;        /* client: --web-port, nginx's port on it (#174), 0 = none */
     char server_key_file[256]; /* server: file with its base64 private key */
     char server_pubkey[64];    /* client: the server's base64 public key */
+    char network[64];          /* client: --network, the network's name */
+    char known_servers[256];   /* client: --known-servers, where the keys of
+                                * servers first met are kept; "none" = off */
+    uint8_t top;               /* --top: a live view of the server(s) */
+    uint8_t l2;                /* client: the server's CONFIG said MODE=TAP */
+    uint8_t l2_mac[6];         /* the MAC it gave for the TAP interface */
+    int top_interval;          /* --top -d <seconds> (default 1) */
     char control_path[108];    /* control socket (#82): "" default, "none" */
     uint8_t status_query;      /* --status: ask the server(s), then exit */
     uint8_t status_json;       /* --json */
@@ -94,6 +102,9 @@ void camex_stop(void);
 void camex_cleanup(void);
 int camex_add_route(const char *cidr, const char *gateway);
 
+/* Server: notice a changed config file and ask for a reload */
+void camex_config_watch(void);
+
 /* Client: apply a changed CONFIG (address, gateway, MTU, routes) to the
  * live tunnel: old routes off, tunnel reopened, new routes on (#49). On
  * failure the old settings are restored; returns 0 or -1. Refused for a
@@ -113,6 +124,14 @@ int derive_client_id(char *client_id, size_t client_id_size);
 /* A pause of about a second (Sleep on Windows, where select() without
  * sockets does not wait) */
 void camex_pause_1s(void);
+
+/* Where a client keeps the public keys of the servers it met first
+ * without --server-pubkey: "<host>:<port> <base64 key>" lines */
+#ifdef _WIN32
+#define CAMEX_KNOWN_SERVERS_PATH "camex-known-servers"
+#else
+#define CAMEX_KNOWN_SERVERS_PATH "/etc/camex/known_servers"
+#endif
 
 /* Where a client keeps the ID it took from the MAC until a reboot (#121) */
 #define CAMEX_ID_FILE "/tmp/camex-id"

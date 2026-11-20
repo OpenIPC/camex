@@ -10,6 +10,8 @@
  *   INIT  client -> server  | sender_index 4 | Noise message 1 | mac1 16
  *   RESP  server -> client  | sender_index 4 | receiver_index 4 | message 2
  *   DATA  both ways         | receiver_index 4 | counter 8 LE | AEAD
+ *   KEYREQ client -> server | zero padding to 64 bytes
+ *   KEY   server -> client  | the server's public key 32
  *
  * Indexes are big-endian random numbers chosen by each side for its own
  * end of a session; a DATA packet carries the index of the receiver's
@@ -36,6 +38,13 @@
 #define V2_TYPE_INIT 1U
 #define V2_TYPE_RESP 2U
 #define V2_TYPE_DATA 3U
+/* A client without the server's public key asks for it (first contact);
+ * the request is padded to V2_KEYREQ_LEN, longer than the answer, so the
+ * server never sends more than it gets */
+#define V2_TYPE_KEYREQ 4U
+#define V2_TYPE_KEY    5U
+#define V2_KEYREQ_LEN 64U
+#define V2_KEY_LEN    37U   /* magic, type, public key */
 
 #define V2_INIT_HDR 9U    /* magic, type, sender */
 #define V2_MAC_LEN 16U    /* mac1 at the end of INIT */

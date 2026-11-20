@@ -55,6 +55,7 @@ typedef struct {
     uint8_t registered;   /* a handshake was accepted for this entry; until
                            * then a TCP slot is pre-auth (#9) */
     uint8_t auto_client;  /* registered in auto mode (#15) */
+    uint16_t net1;        /* its network's slot + 1 (netw.h), 0 = none */
     int web_port;         /* the port of its web UI it announced (#174), 0 = none */
     time_t connected_at;  /* TCP accept time: the pre-auth deadline counts
                            * from here, not from last_seen (#9) */
@@ -75,6 +76,10 @@ typedef struct {
     uint64_t tx_bytes;
     uint64_t isolation_drops;  /* its packets to other clients dropped
                                 * by client_isolation (#83) */
+    uint64_t rate_rx_mark;     /* rx_bytes/tx_bytes at the last rate tick */
+    uint64_t rate_tx_mark;
+    uint32_t rx_rate;          /* bytes a second over the last tick */
+    uint32_t tx_rate;
     time_t hs_window;     /* INITs from its address this second, at most */
     uint8_t hs_count;     /* SERVER_KNOWN_PER_SEC as a known source (#78) */
     session_t cur;        /* current session: the server sends on it */
@@ -144,6 +149,21 @@ void server_revalidate_unknown_clients(void);
 /* After a reload: end sessions of clients whose address is now another
  * client's [client ID] local_cidr (#81) */
 void server_revalidate_profile_addresses(void);
+
+/* After the networks changed (start, reload): their gateway addresses on
+ * the tunnel follow, and clients of a network that went away, or whose
+ * address is no longer in its network's pool, are ended */
+void server_networks_apply(void);
+
+/* The networks of the file into the running table (netw_sync() with the
+ * server's settings); 0 or -1 */
+int server_networks_sync(void);
+
+/* Server stop: the networks' gateway addresses off the tunnel */
+void server_networks_down(void);
+
+/* Every second: rates of the clients' traffic for --status and --top */
+void server_rates_tick(void);
 
 /* Forward an IP packet from one client to another (or local TUN) */
 int server_forward_packet(const uint8_t *packet, size_t len,

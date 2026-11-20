@@ -9,7 +9,7 @@ SRC     = ../src
 CFLAGS  += -I$(SRC) -std=c99 -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L \
            -Wall -Wextra -Wshadow -Wstrict-prototypes -O1 -g $(EXTRA_CFLAGS)
 
-TESTS = test_net_tcp test_proto test_log test_packet test_noise test_keys test_session test_nginxmap test_tcpgate
+TESTS = test_net_tcp test_netw test_proto test_log test_packet test_noise test_keys test_session test_nginxmap test_tcpgate
 
 # Rebuild the tests when any project header changes
 HEADERS = $(wildcard $(SRC)/*.h)
@@ -22,7 +22,11 @@ test_net_tcp: test_net_tcp.c $(SRC)/net.c $(SRC)/util.c $(SRC)/log.c \
               $(SRC)/keys.c $(SRC)/noise.c $(SRC)/monocypher.c $(HEADERS)
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
 
-test_proto: test_proto.c $(SRC)/proto.c $(SRC)/config.c $(SRC)/nginxmap.c $(SRC)/slotidx.c $(SRC)/util.c $(SRC)/log.c \
+test_netw: test_netw.c $(SRC)/netw.c $(SRC)/proto.c $(SRC)/config.c $(SRC)/nginxmap.c $(SRC)/slotidx.c $(SRC)/util.c $(SRC)/log.c \
+           $(SRC)/crypto.c $(SRC)/keys.c $(SRC)/monocypher.c $(HEADERS)
+	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
+
+test_proto: test_proto.c $(SRC)/proto.c $(SRC)/netw.c $(SRC)/config.c $(SRC)/nginxmap.c $(SRC)/slotidx.c $(SRC)/util.c $(SRC)/log.c \
             $(SRC)/crypto.c $(SRC)/keys.c $(SRC)/monocypher.c $(HEADERS)
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
 

@@ -6,6 +6,7 @@
 |------------------------------------------|-------------------------------------------------------------------------------------------------|
 | [install.md](install.md)                 | `install.sh` on Debian and Ubuntu, installing by hand, the files on the server, clean reinstall |
 | [usage.md](usage.md)                     | the command line: keys, modes, client and server, every option, TUN backends, notes             |
+| [networks.md](networks.md)               | named networks: joining with the server's address and a name, stable addresses, the server's key on first contact, `--top` |
 | [server.md](server.md)                   | `camex.conf`, reloading, `camex --status`, the auto pool and the number of clients              |
 | [nginx.md](nginx.md)                     | many cameras behind one server, each web UI by name through nginx; the start page; sync script  |
 | [security.md](security.md)               | the protocol, what it does not protect, denial of service limits, recommended deployment        |

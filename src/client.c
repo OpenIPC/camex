@@ -17,10 +17,17 @@
 #include "config.h"
 #include "camex.h"
 #include "tcpgate.h"
+#include "keys.h"
+#ifdef CAMEX_L2
+#include "l2.h"
+
+static l2_reasm_t *client_reasm = NULL;   /* the frame in assembly */
+#endif
 
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -61,6 +68,157 @@ void client_wipe(void)
     client_state.hs_pending = 0U;
 }
 
+/* "<host>:<port>" of the server, the key of the known servers file */
+static void client_known_name(char *buf, size_t size)
+{
+    snprintf(buf, size, "%s:%d", current_config.server_host,
+             current_config.port);
+}
+
+static const char *client_known_path(void)
+{
+    if (strcmp(current_config.known_servers, "none") == 0) {
+        return NULL;
+    }
+    return current_config.known_servers[0] != '\0'
+               ? current_config.known_servers : CAMEX_KNOWN_SERVERS_PATH;
+}
+
+/* 1 while the key in use came from the known servers file: a server whose
+ * key changed is then told how to forget the old one */
+static uint8_t client_key_from_file = 0U;
+
+int client_known_load(void)
+{
+    const char *path = client_known_path();
+    char name[sizeof(current_config.server_host) + 8];
+    char line[256];
+    FILE *fp;
+    int found = -1;
+
+    if (path == NULL) {
+        return -1;
+    }
+    fp = fopen(path, "r");
+    if (fp == NULL) {
+        return -1;
+    }
+    client_known_name(name, sizeof(name));
+    while (fgets(line, (int)sizeof(line), fp) != NULL) {
+        char *sp;
+
+        trim_whitespace(line);
+        sp = strchr(line, ' ');
+        if (line[0] == '#' || sp == NULL) {
+            continue;
+        }
+        *sp = '\0';
+        if (strcasecmp(line, name) != 0) {
+            continue;
+        }
+        trim_whitespace(sp + 1);
+        if (crypto_set_server_pub(sp + 1) == 0) {
+            found = 0;
+            client_key_from_file = 1U;
+            log_message(LOG_INFO, "Server key of %s from %s", name, path);
+        }
+        break;
+    }
+    fclose(fp);
+    return found;
+}
+
+/* Keep the key the server gave on first contact: the file is rewritten
+ * through a new one, so a power cut leaves the old or the new file */
+static void client_known_store(const char *pub_b64)
+{
+    const char *path = client_known_path();
+    char name[sizeof(current_config.server_host) + 8];
+    char tmp[sizeof(current_config.known_servers) + 8];
+    char line[256];
+    FILE *in;
+    FILE *out;
+
+    if (path == NULL) {
+        return;
+    }
+    client_known_name(name, sizeof(name));
+    snprintf(tmp, sizeof(tmp), "%s.new", path);
+    out = fopen(tmp, "w");
+    if (out == NULL) {
+        log_message(LOG_WARNING, "Cannot keep the server key in %s (%s): "
+                    "it is asked for again at the next start", path,
+                    strerror(errno));
+        return;
+    }
+    in = fopen(path, "r");
+    if (in != NULL) {
+        while (fgets(line, (int)sizeof(line), in) != NULL) {
+            char copy[256];
+            char *sp;
+
+            snprintf(copy, sizeof(copy), "%s", line);
+            trim_whitespace(copy);
+            sp = strchr(copy, ' ');
+            if (sp != NULL) {
+                *sp = '\0';
+                if (strcasecmp(copy, name) == 0) {
+                    continue;   /* replaced below */
+                }
+            }
+            fputs(line, out);
+        }
+        fclose(in);
+    }
+    fprintf(out, "%s %s\n", name, pub_b64);
+    if (fclose(out) != 0 || rename(tmp, path) != 0) {
+        log_message(LOG_WARNING, "Cannot keep the server key in %s (%s)",
+                    path, strerror(errno));
+        (void)remove(tmp);
+        return;
+    }
+    log_message(LOG_NOTICE, "Server key of %s kept in %s", name, path);
+}
+
+/* First contact without the server's key: ask for it. The request is
+ * longer than the answer (V2_KEYREQ_LEN) */
+static int client_send_keyreq(void)
+{
+    uint8_t packet[V2_KEYREQ_LEN];
+
+    memset(packet, 0, sizeof(packet));
+    memcpy(packet, CAMEX_MAGIC, 4);
+    packet[4] = V2_TYPE_KEYREQ;
+    client_state.hs_pending = 1U;
+    client_state.hs_sent = g_now;
+    client_state.key_requested = 1U;
+    return net_client_send(packet, sizeof(packet)) < 0 ? -1 : 0;
+}
+
+static int client_send_init(void);
+
+/* The server's key on first contact: kept (trust on first use), then the
+ * handshake starts */
+static int client_handle_key(const uint8_t *buffer, size_t len)
+{
+    char b64[KEY_B64_LEN + 1U];
+
+    if (crypto_get_ctx()->has_server_pub || !client_state.key_requested ||
+        len != V2_KEY_LEN) {
+        return -1;
+    }
+    if (key_base64_encode(buffer + 5, KEY_LEN, b64, sizeof(b64)) == 0U ||
+        crypto_set_server_pub(b64) != 0) {
+        return -1;
+    }
+    client_state.key_requested = 0U;
+    log_message(LOG_NOTICE, "First contact with server %s:%d: its key %s "
+                "is trusted from now on", current_config.server_host,
+                current_config.port, b64);
+    client_known_store(b64);
+    return client_send_init();
+}
+
 static int client_send_init(void)
 {
     const camex_crypto_t *ctx = crypto_get_ctx();
@@ -72,9 +230,12 @@ static int client_send_init(void)
     size_t msg_len;
     size_t len;
 
-    if (!ctx->has_server_pub || !ctx->has_global) {
-        log_message(LOG_ERR, "Missing the server public key or the PSK");
+    if (!ctx->has_global) {
+        log_message(LOG_ERR, "Missing the PSK");
         return -1;
+    }
+    if (!ctx->has_server_pub) {
+        return client_send_keyreq();
     }
     if (proto_build_register(&current_config, message, sizeof(message)) != 0) {
         return -1;
@@ -139,6 +300,8 @@ static void client_check_config_change(const uint8_t *payload, size_t len)
         strcmp(probe.local_cidr, current_config.local_cidr) != 0 ||
         strcmp(probe.gateway_ip, current_config.gateway_ip) != 0 ||
         probe.mtu != current_config.mtu ||
+        probe.l2 != current_config.l2 ||
+        memcmp(probe.l2_mac, current_config.l2_mac, 6) != 0 ||
         probe.route_count != current_config.route_count ||
         memcmp(probe.route_cidrs, current_config.route_cidrs,
                sizeof(probe.route_cidrs)) != 0) {
@@ -232,6 +395,8 @@ int client_handle_net_packet(const uint8_t *buffer, size_t len)
     uint32_t idx;
 
     switch (v2_packet_type(buffer, len)) {
+    case V2_TYPE_KEY:
+        return client_handle_key(buffer, len);
     case V2_TYPE_RESP:
         return client_handle_resp(buffer, len);
     case V2_TYPE_DATA:
@@ -264,6 +429,23 @@ int client_handle_net_packet(const uint8_t *buffer, size_t len)
     if (plain_len == 0U) {
         return 0;   /* keepalive answer */
     }
+#ifdef CAMEX_L2
+    if (current_config.l2) {
+        const uint8_t *frame = NULL;
+        long flen;
+
+        if (client_reasm == NULL) {
+            client_reasm = calloc(1U, sizeof(*client_reasm));
+        }
+        flen = l2_receive(client_reasm, plain, plain_len, &frame, g_now);
+        if (flen < 0) {
+            log_peer(LOG_WARNING, "Dropped a malformed frame from the "
+                     "server");
+            return -1;
+        }
+        return flen == 0 ? 0 : packet_write(frame, (size_t)flen);
+    }
+#endif
     if (tcpgate_active()) {
         uint8_t rst[TCPGATE_RST_LEN];
         size_t rst_len;
@@ -364,6 +546,16 @@ int client_wait_for_config(void)
                             "connection (and so every %ds)",
                             current_config.server_host, current_config.port,
                             current_config.server_timeout);
+            }
+            /* A server that drops every handshake may have a new key: the
+             * kept one is never replaced on its own. Said after the second
+             * silent round, then with the notes above */
+            if (client_key_from_file &&
+                (renewed == 2U || (renewed > 2U && renewed % 12U == 1U))) {
+                log_message(LOG_WARNING, "The server's key came from %s: "
+                            "if the server got a new key, remove its line "
+                            "there (or give --server-pubkey)",
+                            client_known_path());
             }
             if (client_wait_reconnect() != 0) {
                 return -1;
@@ -478,6 +670,23 @@ int client_apply_config_response(const uint8_t *payload, size_t payload_len)
     return rc;
 }
 
+#ifdef CAMEX_L2
+/* A TAP network: frames in pieces (l2.h), each in its own DATA packet */
+static int client_l2_send(void *ctx, const uint8_t *payload, size_t len)
+{
+    uint8_t packet[1U + L2_FRAG_HDR + L2_PIECE + V2_OVERHEAD];
+    size_t packet_len;
+
+    (void)ctx;
+    packet_len = session_seal(&client_state.cur, payload, len, packet,
+                              sizeof(packet));
+    if (packet_len == 0U) {
+        return -1;
+    }
+    return net_client_send(packet, packet_len) < 0 ? -1 : 0;
+}
+#endif
+
 int client_handle_tun_packet(const uint8_t *buffer, size_t len)
 {
     uint8_t packet[TUN_PACKET_MAX + V2_OVERHEAD];
@@ -489,6 +698,11 @@ int client_handle_tun_packet(const uint8_t *buffer, size_t len)
     if (!client_state.cur.valid) {
         return 0;   /* no session yet: the packet is dropped quietly */
     }
+#ifdef CAMEX_L2
+    if (current_config.l2) {
+        return l2_send_frame(buffer, len, client_l2_send, NULL);
+    }
+#endif
     packet_len = session_seal(&client_state.cur, buffer, len, packet,
                               sizeof(packet));
     if (packet_len == 0U) {
@@ -710,4 +924,9 @@ int client_socket_create(const char *host, int port, const char *bind_dev)
 
     net_fd = fd;
     return 0;
+}
+
+int client_key_is_pinned(void)
+{
+    return client_key_from_file;
 }

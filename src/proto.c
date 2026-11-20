@@ -12,6 +12,8 @@
 #include "crypto.h"
 #include "log.h"
 #include "util.h"
+#include "netw.h"
+#include "keys.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -59,6 +61,18 @@ int proto_build_register(const camex_config_t *config,
                                  " LOCAL_IP=%s", config->local_ip) != 0) {
             return -1;
         }
+        /* The network the client joins: its ID, never the name */
+        if (config->network[0] != '\0') {
+            uint8_t id[CAMEX_NET_ID_LEN];
+            char b64[CAMEX_NET_ID_B64_LEN + 1U];
+
+            netw_id_from_name(config->network, id);
+            if (key_base64_encode(id, sizeof(id), b64, sizeof(b64)) == 0U ||
+                append_control_field(buffer, size, &offset, " NET=%s",
+                                     b64) != 0) {
+                return -1;
+            }
+        }
         /* Only when given: a server before 3.19.0 refuses a REGISTER with
          * a field it does not know (#174) */
         if (config->web_port > 0 &&
@@ -91,7 +105,8 @@ int proto_build_register(const camex_config_t *config,
 int proto_parse_register(char *message,
                          char *client_id, size_t client_id_size,
                          char *local_ip, size_t local_ip_size,
-                         uint8_t *auto_request, int *web_port)
+                         uint8_t *auto_request, int *web_port,
+                         uint8_t *net_id, uint8_t *has_net)
 {
     char *saveptr = NULL;
     char *token;
@@ -154,6 +169,24 @@ int proto_parse_register(char *message,
             if (copy_option(client_id, client_id_size, value,
                             "client ID") != 0) {
                 return -1;
+            }
+            continue;
+        }
+
+        if (token_value(token, "NET", value, sizeof(value)) == 0) {
+            uint8_t id[CAMEX_NET_ID_LEN];
+
+            if (strlen(value) != CAMEX_NET_ID_B64_LEN ||
+                key_base64_decode(value, id, sizeof(id)) !=
+                    (int)CAMEX_NET_ID_LEN) {
+                log_peer(LOG_ERR, "Invalid NET in register request");
+                return -1;
+            }
+            if (net_id != NULL) {
+                memcpy(net_id, id, sizeof(id));
+            }
+            if (has_net != NULL) {
+                *has_net = 1U;
             }
             continue;
         }
@@ -271,6 +304,17 @@ int proto_build_config(const char *client_id,
             return -1;
         }
     }
+    /* A TAP network: only to clients that joined one, so an older client
+     * never sees the field */
+    if (profile->l2) {
+        if (append_control_field(buffer, size, &offset,
+                                 " MODE=TAP MAC=%02x:%02x:%02x:%02x:%02x:%02x",
+                                 profile->mac[0], profile->mac[1],
+                                 profile->mac[2], profile->mac[3],
+                                 profile->mac[4], profile->mac[5]) != 0) {
+            return -1;
+        }
+    }
     if (append_control_field(buffer, size, &offset, "\n") != 0) {
         return -1;
     }
@@ -340,6 +384,41 @@ int proto_parse_config(char *message, camex_config_t *config)
                 log_message(LOG_ERR,
                             "Invalid MTU in config response: %s", value);
                 return -1;
+            }
+            continue;
+        }
+        if (token_value(token, "MODE", value, sizeof(value)) == 0) {
+            if (strcmp(value, "TAP") == 0) {
+#ifdef CAMEX_L2
+                profile.l2 = 1U;
+                continue;
+#else
+                log_message(LOG_ERR, "The server's network is a TAP network: "
+                            "this camex is built without CAMEX_L2 (use "
+                            "camex-<arch>-full)");
+                return -1;
+#endif
+            }
+            if (strcmp(value, "TUN") == 0) {
+                continue;
+            }
+            log_message(LOG_ERR, "Unknown MODE in config response: %s",
+                        value);
+            return -1;
+        }
+        if (token_value(token, "MAC", value, sizeof(value)) == 0) {
+            unsigned int v[6];
+            char end;
+            size_t k;
+
+            if (sscanf(value, "%2x:%2x:%2x:%2x:%2x:%2x%c", &v[0], &v[1],
+                       &v[2], &v[3], &v[4], &v[5], &end) != 6 ||
+                (v[0] & 1U) != 0U) {
+                log_message(LOG_ERR, "Invalid MAC in config response");
+                return -1;
+            }
+            for (k = 0U; k < 6U; ++k) {
+                profile.mac[k] = (uint8_t)v[k];
             }
             continue;
         }
