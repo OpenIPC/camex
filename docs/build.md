@@ -31,10 +31,12 @@ make CAMEX_L2=1 CAMEX_MESH=1
 Without them the build is the core camex, as before. The releases have both:
 `camex-<arch>` and `camex-<arch>-full`.
 
-## ChaCha20 with NEON (32-bit ARM)
+## ChaCha20 and Poly1305 with NEON (32-bit ARM)
 
-A build for 32-bit ARM also builds `chacha_neon.c`: ChaCha20, four blocks at
-a time with NEON (Cortex-A7, A9 and the like). It is used only when the kernel
+A build for 32-bit ARM also builds `chacha_neon.c`: ChaCha20 four blocks at a
+time and Poly1305 two blocks at a time with NEON (Cortex-A7, A9 and the like);
+on a hi3516ev300 (Cortex-A7) that seals 175 Mbit/s of 1400-byte packets instead
+of 142 with ChaCha20 alone with NEON. It is used only when the kernel
 says the CPU has NEON (`AT_HWCAP`), so one `camex-arm` still runs on ARMv5 and
 ARMv6 cameras. `CAMEX_NEON=0` leaves it out. `camex --bench-crypto` prints how
 fast the CPU seals 1400-byte tunnel packets, and whether NEON is used.

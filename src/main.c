@@ -128,7 +128,7 @@ static int bench_crypto(void)
            (double)n * sizeof(plain) / secs / 1e6,
            (double)n * sizeof(plain) * 8.0 / secs / 1e6);
 #ifdef CAMEX_CHACHA_NEON
-    printf("ChaCha20 with NEON: %s\n",
+    printf("ChaCha20 and Poly1305 with NEON: %s\n",
            camex_chacha_neon_ok() ? "yes" : "no (this CPU has none)");
 #endif
     return 1;

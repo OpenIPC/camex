@@ -424,6 +424,17 @@ void crypto_poly1305_update(crypto_poly1305_ctx *ctx,
 
 	// Process the message block by block
 	size_t nb_blocks = message_size >> 4;
+#ifdef CAMEX_CHACHA_NEON
+	// camex: pairs of blocks with NEON where the CPU has it
+	// (chacha_neon.c); an odd last block below, as always
+	if (nb_blocks >= 4 && camex_chacha_neon_ok()) {
+		size_t done = camex_poly1305_neon(ctx->h, ctx->r, message,
+		                                  nb_blocks);
+		message      += done << 4;
+		message_size -= done << 4;
+		nb_blocks    -= done;
+	}
+#endif
 	poly_blocks(ctx, message, nb_blocks, 1);
 	message      += nb_blocks << 4;
 	message_size &= 15;

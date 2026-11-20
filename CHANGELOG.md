@@ -24,9 +24,14 @@ release, rebuilt from every push to `master`; this file is the change history.
 - Android app and library: a **Network name** field (`--network`, hidden like the key); with it the
   server's public key and psk may stay empty (the server is checked by CPace; no known servers
   file on the phone, `--known-servers none`). Links take `w=<network>`; `install.sh` adds it.
+- Poly1305 with NEON on 32-bit ARM (`chacha_neon.c`, two blocks at a time in 26-bit limbs, the
+  lanes put together as `a·r² + b·r`), taken like NEON ChaCha20 only when the CPU has NEON. On a
+  Cortex-A7 (hi3516ev300) ChaCha20-Poly1305 of 1400-byte packets: 142 → 175 Mbit/s.
 - Tested on two hi3516ev300 cameras (Cortex-A7, kernel 4.9.37, `tun.ko`): CPace, a direct mesh
-  path for TUN and TAP networks, 10 MB over it at the path's ~12 Mbit/s, key renewal after 10
-  minutes; NEON ChaCha20 there: 33.8 → 48.8 MB/s.
+  path for TUN and TAP networks, 10 MB over it at ~12 Mbit/s, key renewal after 10 minutes; NEON
+  ChaCha20 there: 33.8 → 48.8 MB/s. The ~12 Mbit/s was not the path alone: that path carries
+  ~24 Mbit/s of plain TCP, the default MTU of 1500 makes every full packet two IP fragments, and
+  the camera's CPU was saturated (`top` showed idle time it did not have).
 
 ## 4.5.0 — 2026-11-20
 
