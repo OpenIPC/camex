@@ -149,7 +149,7 @@ jobs:
         run: ./docker/test-e2e-bridge.sh
         if: matrix.target == 'x86_64'
 
-      - name: E2E test (mesh: direct paths through NATs, relay)
+      - name: E2E test (mesh, direct paths through NATs, relay)
         run: ./docker/test-e2e-mesh.sh
         if: matrix.target == 'x86_64'
 
