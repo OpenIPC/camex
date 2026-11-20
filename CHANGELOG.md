@@ -8,6 +8,13 @@ release, rebuilt from every push to `master`; this file is the change history.
 
 ## 4.6.0 — 2026-11-20
 
+- `camex.ko` offloads (`CAMEX_IOC_VNET`, kernels 4.1+): tun's vnet header and TSO/checksum
+  offload on `/dev/camex`, GSO writes of joined TCP packets built of single pages; camex asks for
+  them as with `tun.ko`. A full queue now stops the interface's transmit queue instead of
+  dropping packets (`tx_dropped` grew under load). Two OpenIPC cameras on one LAN, iperf3 TCP
+  through a direct mesh with `tun.ko`: 35/33 Mbit/s without offloads, 60/52 with them (the
+  plain network: 94/90); stock firmware has no `tun.ko`, so this is for `camex.ko`.
+  `tests/kmod/run-vm.sh` moves 4 MB each way through `camex.ko` and checks the bytes.
 - The default tunnel MTU is 1420 (was 1500): a tunnel packet, the MTU plus 57 bytes of IPv4, UDP
   and camex, now fits a 1500-byte link and PPPoE's 1492 whole. With 1500 every full packet went
   as two IP fragments: on a Cortex-A7 camera ~7 points more CPU at 25 Mbit/s and slower TCP

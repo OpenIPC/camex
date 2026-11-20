@@ -164,9 +164,13 @@ void tun_set_l2(int l2, const uint8_t *mac)
 }
 
 /* TUN offloads (offload.h): Linux, a TUN device camex makes itself */
+#define CAMEX_IOC_VNET _IOW(0xCA, 1, int)   /* camex-k.c */
 static int tun_offload_ok = 1;
 #if defined(__linux__)
 static int tun_vnet = 0;
+/* camex.ko has write() only: writev() would reach it as two writes, so
+ * header and packet go in one buffer */
+static int tun_vnet_one_buffer = 0;
 static offload_seg_t tun_seg;
 static offload_gro_t tun_gro;
 #endif
@@ -733,9 +737,21 @@ int tun_create_device(const char *local_ip, const char *netmask,
      * camex (TSO, CSUM). The vnet header stays even if the kernel takes
      * none of them */
     tun_vnet = use_tunsetiff && !tun_l2 && tun_offload_ok;
+    tun_vnet_one_buffer = 0;
     memset(&tun_seg, 0, sizeof(tun_seg));
     tun_gro.len = 0U;
-    if (tun_vnet) {
+    if (!use_tunsetiff && !tun_l2 && tun_offload_ok) {
+        /* camex.ko: the same vnet header by its own ioctl (camex-k.c);
+         * a module without it answers ENOTTY and stays as it was */
+        int on = 1;
+
+        if (ioctl(fd, CAMEX_IOC_VNET, &on) == 0) {
+            tun_vnet = 1;
+            tun_vnet_one_buffer = 1;
+            log_message(LOG_INFO, "TUN offloads: on (camex.ko: TSO, "
+                        "checksums, joined writes)");
+        }
+    } else if (tun_vnet) {
         unsigned int off = TUN_F_CSUM | TUN_F_TSO4 | TUN_F_TSO6 |
                            TUN_F_TSO_ECN;
 
@@ -936,6 +952,17 @@ static int tun_writev(const offload_vnet_t *vh, const uint8_t *pkt, size_t len)
     ssize_t written;
 
     offload_vnet_write(hdr, vh);
+    if (tun_vnet_one_buffer) {
+        static uint8_t one[OFFLOAD_VNET_LEN + OFFLOAD_MAX];
+
+        if (len > OFFLOAD_MAX) {
+            return -1;
+        }
+        memcpy(one, hdr, sizeof(hdr));
+        memcpy(one + sizeof(hdr), pkt, len);
+        written = write(tun_fd, one, len + sizeof(hdr));
+        return (written < 0 || (size_t)written != len + sizeof(hdr)) ? -1 : 0;
+    }
     iov[0].iov_base = hdr;
     iov[0].iov_len = sizeof(hdr);
     iov[1].iov_base = (void *)(uintptr_t)pkt;
