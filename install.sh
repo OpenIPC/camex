@@ -931,7 +931,7 @@ case "$PUBKEY" in
             echo
             echo "Android: open this link on the phone (Telegram, mail, anything);"
             echo "it has the psk, send it only to the device's owner:"
-            printf '%s\n' "  https://openipc.github.io/camex/connect/#h=$(urlenc "$HOST")&p=${PORT_NOW:-5800}&t=$PROTO&k=$(urlenc "$PUBKEY")&s=$(urlenc "$PSK")"
+            printf '%s\n' "  https://openipc.github.io/camex/connect/#h=$(urlenc "$HOST")&p=${PORT_NOW:-5800}&t=$PROTO&k=$(urlenc "$PUBKEY")&s=$(urlenc "$PSK")${NET_NOW:+&w=$(urlenc "$NET_NOW")}"
         fi ;;
 esac
 if [ -n "$DOMAIN" ]; then

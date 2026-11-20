@@ -21,6 +21,9 @@ release, rebuilt from every push to `master`; this file is the change history.
 - `install.sh`: a new `camex.conf` starts with a `[network NAME]` block of a random name (20
   letters and digits; `--network` gives one), and the installer prints the short command line,
   `camex --server-host <host> --network '<name>'`, before the one with the key and psk.
+- Android app and library: a **Network name** field (`--network`, hidden like the key); with it the
+  server's public key and psk may stay empty (the server is checked by CPace; no known servers
+  file on the phone, `--known-servers none`). Links take `w=<network>`; `install.sh` adds it.
 - Tested on two hi3516ev300 cameras (Cortex-A7, kernel 4.9.37, `tun.ko`): CPace, a direct mesh
   path for TUN and TAP networks, 10 MB over it at the path's ~12 Mbit/s, key renewal after 10
   minutes; NEON ChaCha20 there: 33.8 → 48.8 MB/s.
