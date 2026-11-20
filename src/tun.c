@@ -10,6 +10,7 @@
 #include "util.h"
 #include "log.h"
 #include "camex.h"
+#include "offload.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -25,6 +26,7 @@
 #if !defined(_WIN32) && !defined(__APPLE__)
 #include <arpa/inet.h>
 #include <linux/if_tun.h>
+#include <sys/uio.h>
 #include <net/if.h>
 #include <net/if_arp.h>
 #include <netinet/in.h>
@@ -159,6 +161,19 @@ void tun_set_l2(int l2, const uint8_t *mac)
     if (l2 && mac != NULL) {
         memcpy(tun_l2_mac, mac, sizeof(tun_l2_mac));
     }
+}
+
+/* TUN offloads (offload.h): Linux, a TUN device camex makes itself */
+static int tun_offload_ok = 1;
+#if defined(__linux__)
+static int tun_vnet = 0;
+static offload_seg_t tun_seg;
+static offload_gro_t tun_gro;
+#endif
+
+void tun_set_offload(int on)
+{
+    tun_offload_ok = on ? 1 : 0;
 }
 
 #if !defined(_WIN32)
@@ -668,7 +683,8 @@ int tun_create_device(const char *local_ip, const char *netmask,
         fd = open(DEV_NET_TUN, O_RDWR | TUN_OPEN_CLOEXEC);
         if (fd >= 0) {
             copy_ifreq_name(&ifr, tun_l2 ? "tap%d" : "tun%d");
-            ifr.ifr_flags = (short)((tun_l2 ? IFF_TAP : IFF_TUN) | IFF_NO_PI);
+            ifr.ifr_flags = (short)((tun_l2 ? IFF_TAP : IFF_TUN) | IFF_NO_PI |
+                                    (tun_l2 || !tun_offload_ok ? 0 : IFF_VNET_HDR));
             if (ioctl(fd, TUNSETIFF, (void *)&ifr) >= 0) {
                 devpath_used  = DEV_NET_TUN;
                 use_tunsetiff = 1;
@@ -694,13 +710,15 @@ int tun_create_device(const char *local_ip, const char *netmask,
     if (!use_tunsetiff) {
         if (strcmp(devpath_used, DEV_NET_TUN) == 0) {
             copy_ifreq_name(&ifr, tun_l2 ? "tap%d" : "tun%d");
-            ifr.ifr_flags = (short)((tun_l2 ? IFF_TAP : IFF_TUN) | IFF_NO_PI);
+            ifr.ifr_flags = (short)((tun_l2 ? IFF_TAP : IFF_TUN) | IFF_NO_PI |
+                                    (tun_l2 || !tun_offload_ok ? 0 : IFF_VNET_HDR));
             if (ioctl(fd, TUNSETIFF, (void *)&ifr) < 0) {
                 print_errno_message(LOG_ERR, "ioctl(TUNSETIFF)");
                 close_tun_creation(-1, fd);
                 return -1;
             }
             snprintf(tun_name, sizeof(tun_name), "%s", ifr.ifr_name);
+            use_tunsetiff = 1;
         } else {
             p = strrchr(devpath_used, '/');
             strncpy(tun_name, (p != NULL) ? p + 1 : devpath_used,
@@ -711,6 +729,23 @@ int tun_create_device(const char *local_ip, const char *netmask,
 
     log_message(LOG_INFO, "%s backend: %s (%s)", tun_l2 ? "TAP" : "TUN",
                 tun_name, devpath_used);
+    /* Offloads: TCP of up to 64 KB at once both ways, checksums left to
+     * camex (TSO, CSUM). The vnet header stays even if the kernel takes
+     * none of them */
+    tun_vnet = use_tunsetiff && !tun_l2 && tun_offload_ok;
+    memset(&tun_seg, 0, sizeof(tun_seg));
+    tun_gro.len = 0U;
+    if (tun_vnet) {
+        unsigned int off = TUN_F_CSUM | TUN_F_TSO4 | TUN_F_TSO6 |
+                           TUN_F_TSO_ECN;
+
+        if (ioctl(fd, TUNSETOFFLOAD, off) < 0) {
+            log_message(LOG_INFO, "TUN offloads: not taken by the kernel");
+        } else {
+            log_message(LOG_INFO, "TUN offloads: on (TSO, checksums, joined "
+                        "writes)");
+        }
+    }
 
     sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
@@ -892,6 +927,130 @@ void tun_close_device(void)
 #endif
 }
 
+#if defined(__linux__)
+/* A packet with its vnet header (none of the offloads: all zero) */
+static int tun_writev(const offload_vnet_t *vh, const uint8_t *pkt, size_t len)
+{
+    uint8_t hdr[OFFLOAD_VNET_LEN];
+    struct iovec iov[2];
+    ssize_t written;
+
+    offload_vnet_write(hdr, vh);
+    iov[0].iov_base = hdr;
+    iov[0].iov_len = sizeof(hdr);
+    iov[1].iov_base = (void *)(uintptr_t)pkt;
+    iov[1].iov_len = len;
+    written = writev(tun_fd, iov, 2);
+    return (written < 0 || (size_t)written != len + sizeof(hdr)) ? -1 : 0;
+}
+
+void tun_flush(void)
+{
+    offload_vnet_t vh;
+    const uint8_t *pkt;
+    size_t len;
+
+    if (!tun_vnet || tun_fd < 0) {
+        return;
+    }
+    len = offload_gro_take(&tun_gro, &vh, &pkt);
+    if (len != 0U && tun_writev(&vh, pkt, len) != 0) {
+        static log_limit_t limit;
+
+        log_limited(&limit, LOG_WARNING, "write(tun) of %u bytes: %s",
+                    (unsigned)len, strerror(errno));
+    }
+}
+
+int tun_pending(void)
+{
+    return tun_vnet && tun_seg.active;
+}
+
+/* TCP packets of one connection wait to be written together (tun_flush(),
+ * at the latest before the event loop sleeps); any other packet goes at
+ * once, after the waiting ones of its own connection */
+static int tun_write_vnet(const uint8_t *buffer, size_t len)
+{
+    offload_vnet_t none;
+    int rc = offload_gro_add(&tun_gro, buffer, len);
+
+    if (rc == 0) {
+        tun_flush();
+        rc = offload_gro_add(&tun_gro, buffer, len);
+    }
+    if (rc == 1) {
+        if (tun_gro.closed) {
+            tun_flush();
+        }
+        return 0;
+    }
+    if (offload_gro_same_flow(&tun_gro, buffer, len)) {
+        tun_flush();
+    }
+    memset(&none, 0, sizeof(none));
+    return tun_writev(&none, buffer, len);
+}
+
+/* A TSO packet comes out as packets of the MTU one per call; checksums
+ * left to the device are completed */
+static ssize_t tun_read_vnet(uint8_t *buffer, size_t size)
+{
+    static uint8_t raw[OFFLOAD_VNET_LEN + OFFLOAD_MAX];
+
+    for (;;) {
+        offload_vnet_t vh;
+        uint8_t *pkt = raw + OFFLOAD_VNET_LEN;
+        ssize_t len;
+        size_t plen;
+        unsigned int gso;
+
+        if (tun_seg.active) {
+            len = offload_seg_next(&tun_seg, buffer, size);
+            if (len > 0) {
+                return len;
+            }
+            continue;   /* too large for the buffer: dropped */
+        }
+        len = read(tun_fd, raw, sizeof(raw));
+        if (len < 0) {
+            return -1;
+        }
+        if ((size_t)len <= OFFLOAD_VNET_LEN) {
+            continue;
+        }
+        offload_vnet_parse(&vh, raw);
+        plen = (size_t)len - OFFLOAD_VNET_LEN;
+        gso = vh.gso_type & (unsigned int)~OFFLOAD_GSO_ECN;
+        if (gso == OFFLOAD_GSO_TCPV4 || gso == OFFLOAD_GSO_TCPV6) {
+            if (offload_seg_init(&tun_seg, pkt, plen, vh.gso_size) != 0) {
+                continue;
+            }
+            continue;
+        }
+        if (gso != OFFLOAD_GSO_NONE || plen > size) {
+            continue;   /* UDP fragmentation offload is never asked for */
+        }
+        if ((vh.flags & OFFLOAD_F_NEEDS_CSUM) != 0U &&
+            offload_complete_csum(pkt, plen, vh.csum_start,
+                                  vh.csum_offset) != 0) {
+            continue;
+        }
+        memcpy(buffer, pkt, plen);
+        return (ssize_t)plen;
+    }
+}
+#else
+void tun_flush(void)
+{
+}
+
+int tun_pending(void)
+{
+    return 0;
+}
+#endif
+
 ssize_t tun_read_packet(uint8_t *buffer, size_t size)
 {
 #if defined(__APPLE__)
@@ -936,6 +1095,9 @@ ssize_t tun_read_packet(uint8_t *buffer, size_t size)
         return -1;
     }
 
+    if (tun_vnet) {
+        return tun_read_vnet(buffer, size);
+    }
     len = read(tun_fd, buffer, size);
     return len;
 #endif
@@ -986,6 +1148,11 @@ int tun_write_packet(const uint8_t *buffer, size_t len)
     {
         ssize_t written;
 
+#if defined(__linux__)
+        if (tun_vnet) {
+            return tun_write_vnet(buffer, len);
+        }
+#endif
         written = write(tun_fd, buffer, len);
         if (written < 0 || (size_t)written != len) {
             return -1;

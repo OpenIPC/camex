@@ -96,6 +96,7 @@ sudo ./camex \
 | `--server-pubkey <key>`    |       | Client: the server's public key (from `--genkey`); without it the key the server gives on first contact is trusted and kept ([networks.md](networks.md#the-servers-key))                                                                                                                                                                                                                          |
 | `--known-servers <path>`   |       | Client: where the keys of servers met without `--server-pubkey` are kept (default: `/etc/camex/known_servers`; `none`: not kept) |
 | `--server-key-file <path>` |       | Server: file with its private key (or `server_key=` in `[server]`)                                                                                                                                                                                                          |
+| `--no-tun-offload`         |       | Linux: no TUN offloads (see [TUN driver support](#tun-driver-support)); for a kernel that gets them wrong                                                                                                                              |
 | `--bench-crypto`           |       | How fast this CPU seals 1400-byte tunnel packets (ChaCha20-Poly1305, 3 s), and whether NEON is used; then exit |
 | `--genkey`                 |       | Print a new server key pair (`server_key=`, `public_key=`) and exit                                                                                                                                                                                                         |
 | `--encrypt`                | `-e`  | Accepted for compatibility; protocol v2 is always encrypted                                                                                                                                                                                                                 |
@@ -143,6 +144,19 @@ sudo ./camex --mode client ... --tun-dev /dev/camex
 | IPv6                     | Yes                               | No (IPv4 only)          |
 | Multiple instances       | Yes                               | No (one)                |
 | Bare IPv4 packets        | Yes (with `IFF_NO_PI`)            | Yes                     |
+| Offloads (TSO, GRO)      | Yes (`IFF_VNET_HDR`)              | No                      |
+
+**Offloads.** On Linux, a TUN device camex makes itself through `/dev/net/tun`
+takes offloads (`IFF_VNET_HDR`, `TUNSETOFFLOAD`): the kernel hands camex TCP
+data of up to 64 KB at once and checksums still to compute, and camex cuts it
+into packets of the tunnel's MTU; TCP packets of one connection that arrive
+together are written as one, as the kernel's GRO joins them. Nothing changes on
+the wire, so old peers are not affected. The log says `TUN offloads: on`.
+Between two x86 hosts this carries 19–37% more TCP; on a camera (Cortex-A7)
+it saves a little CPU, since the UDP packets and their encryption cost the
+most there. Not used for TAP networks, `/dev/camex`, a device given from
+outside (Android, `CAMEX_TUN_FD`), macOS or Windows. `--no-tun-offload` turns
+them off.
 
 ## Notes
 

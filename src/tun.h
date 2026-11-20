@@ -86,4 +86,12 @@ ssize_t tun_read_packet(uint8_t *buffer, size_t size);
 /* Write a packet to TUN */
 int tun_write_packet(const uint8_t *buffer, size_t len);
 
+/* TUN offloads (offload.h): off for devices made after tun_set_offload(0)
+ * (--no-tun-offload). tun_flush() writes the TCP packets waiting to be
+ * joined; tun_pending() is 1 while a TSO packet has packets left to read
+ * (the event loop must not wait for the descriptor then). */
+void tun_set_offload(int on);
+void tun_flush(void);
+int tun_pending(void);
+
 #endif /* CAMEX_TUN_H */

@@ -180,6 +180,7 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         { "bridge", required_argument, NULL, 1005 },
         { "bridge-mode", required_argument, NULL, 1006 },
         { "bench-crypto", no_argument, NULL, 1007 },
+        { "no-tun-offload", no_argument, NULL, 1008 },
         { NULL, 0, NULL, 0 }
     };
     int opt;
@@ -191,6 +192,7 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
      * its position from the previous run (glibc, musl, bionic and the BSDs
      * all reinitialise on optind 0) */
     optind = 0;
+    tun_set_offload(1);   /* a library run starts from the default */
     config->transport = CAMEX_TRANSPORT_UNSET;
     while ((opt = getopt_long(argc, argv, "M:b:an:f:l:g:p:s:c:t:k:evhP:d:T:R:K:W:GS:Y:QJC:IF:D:U:E:",
                              long_options, &option_index)) != -1) {
@@ -347,6 +349,9 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
             break;
         case 1007:
             return bench_crypto();
+        case 1008:
+            tun_set_offload(0);
+            break;
         case 'Y':
             if (copy_option(config->server_pubkey,
                             sizeof(config->server_pubkey), optarg,
@@ -842,6 +847,10 @@ void print_usage(const char *progname)
            " kept, --known-servers)\n");
     printf("  -W, --server-timeout <s> Connection timeout in seconds"
            " (default: 20)\n");
+    printf("      --no-tun-offload Linux: no TUN offloads (TCP of up to 64 KB"
+           " at once,\n"
+           "                       joined writes); for kernels that get them"
+           " wrong\n");
     printf("      --bench-crypto   How fast this CPU encrypts tunnel packets"
            " (3 s), then exit\n");
     printf("  -v, --version        Show version and exit\n");

@@ -8,6 +8,14 @@ release, rebuilt from every push to `master`; this file is the change history.
 
 ## 4.6.0 — 2026-11-20
 
+- TUN offloads on Linux (`offload.c`): a TUN device camex makes through `/dev/net/tun` takes
+  `IFF_VNET_HDR` with TSO and checksum offload; camex cuts the kernel's TCP of up to 64 KB into
+  packets of the MTU, completes checksums left to it, and writes the TCP packets of one connection
+  that arrive together as one (GRO rules: the same ACK, window and options, data of one size,
+  contiguous sequence). Nothing changes on the wire. x86 to x86: 935 → 1280 and 1134 → 1352
+  Mbit/s of TCP, less CPU; on a Cortex-A7 camera about 2 points less CPU at 20 Mbit/s.
+  `--no-tun-offload` turns them off. `docker/test-e2e-tun-provider.sh` builds with `netw.c`,
+  `pake.c` and `offload.c` (it had not been given the first two).
 - CPace (`pake.c`): a client with `--network` and without `--server-pubkey` checks the server by
   the network's name at every connection, with nothing more to give. KEYREQ, then PAKE1 (the
   client's share on an Elligator2 point of the network's ID and session, 1200 bytes), PAKE2 (one

@@ -53,7 +53,9 @@ const camex_packet_backend_t camex_tun_backend = {
     tun_write_packet,
     tun_backend_fd,
     tun_close_device,
-    tun_backend_host_routes
+    tun_backend_host_routes,
+    tun_flush,
+    tun_pending
 };
 
 static const camex_packet_backend_t *backend = &camex_tun_backend;
@@ -128,4 +130,16 @@ void packet_close(void)
 int packet_host_routes(void)
 {
     return backend->host_routes != NULL && backend->host_routes();
+}
+
+void packet_flush(void)
+{
+    if (backend_open && backend->flush != NULL) {
+        backend->flush();
+    }
+}
+
+int packet_pending(void)
+{
+    return backend_open && backend->pending != NULL && backend->pending();
 }

@@ -1560,6 +1560,12 @@ void camex_run(void)
 
             tv.tv_sec = 1;
             tv.tv_usec = 0;
+            /* Joined TCP packets out before sleeping; a TSO packet with
+             * packets left: no sleeping at all */
+            packet_flush();
+            if (packet_pending()) {
+                tv.tv_sec = 0;
+            }
 
             ready = select(maxfd + 1, &readset, &writeset, NULL, &tv);
             if (ready > 0) {
@@ -1591,6 +1597,9 @@ void camex_run(void)
 #endif
             } else if (ready < 0 && errno != EINTR) {
                 print_errno_message(LOG_ERR, "select");
+            }
+            if (packet_pending()) {
+                handle_tun_packet();
             }
 
             server_expire_clients();
@@ -1757,6 +1766,12 @@ void camex_run(void)
 
         tv.tv_sec = 1;
         tv.tv_usec = 0;
+        /* As in the server's loop: joined TCP packets out, and no sleeping
+         * while a TSO packet has packets left */
+        packet_flush();
+        if (packet_pending()) {
+            tv.tv_sec = 0;
+        }
 
         maxfd = net_fd;
         if ((int)packet_fd() > maxfd) {
@@ -1803,6 +1818,9 @@ void camex_run(void)
 #endif
         } else if (ready < 0 && errno != EINTR) {
             print_errno_message(LOG_ERR, "select");
+        }
+        if (packet_pending()) {
+            handle_tun_packet();
         }
 #ifdef CAMEX_L2
         bridge_tick();

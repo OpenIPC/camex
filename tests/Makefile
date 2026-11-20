@@ -9,7 +9,7 @@ SRC     = ../src
 CFLAGS  += -I$(SRC) -std=c99 -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L \
            -Wall -Wextra -Wshadow -Wstrict-prototypes -O1 -g $(EXTRA_CFLAGS)
 
-TESTS = test_net_tcp test_pake test_netw test_l2 test_bridge test_chacha_neon test_proto test_log test_packet test_noise test_keys test_session test_nginxmap test_tcpgate
+TESTS = test_offload test_net_tcp test_pake test_netw test_l2 test_bridge test_chacha_neon test_proto test_log test_packet test_noise test_keys test_session test_nginxmap test_tcpgate
 
 # Rebuild the tests when any project header changes
 HEADERS = $(wildcard $(SRC)/*.h)
@@ -40,6 +40,9 @@ test_bridge: test_bridge.c $(SRC)/bridge.c $(SRC)/l2.c $(SRC)/util.c $(SRC)/log.
 ARM32 := $(if $(filter arm%,$(shell $(CC) -dumpmachine 2>/dev/null)),$(if $(filter aarch64% arm64%,$(shell $(CC) -dumpmachine 2>/dev/null)),,1),)
 NEON_TEST_FLAGS := $(if $(ARM32),-DCAMEX_CHACHA_NEON -march=armv7-a -mfpu=neon $(if $(shell $(CC) -dM -E - </dev/null 2>/dev/null | grep __ARM_PCS_VFP),,-mfloat-abi=softfp),)
 
+test_offload: test_offload.c $(SRC)/offload.c $(HEADERS)
+	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
+
 test_chacha_neon: test_chacha_neon.c $(SRC)/chacha_neon.c $(SRC)/monocypher.c $(HEADERS)
 	$(CC) $(CFLAGS) $(NEON_TEST_FLAGS) -o $@ $(filter %.c,$^)
 
@@ -56,7 +59,7 @@ test_tcpgate: test_tcpgate.c $(SRC)/tcpgate.c $(HEADERS)
 test_log: test_log.c $(SRC)/log.c $(HEADERS)
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
 
-test_packet: test_packet.c $(SRC)/packet.c $(SRC)/tun.c $(SRC)/util.c \
+test_packet: test_packet.c $(SRC)/packet.c $(SRC)/tun.c $(SRC)/offload.c $(SRC)/util.c \
              $(SRC)/log.c $(SRC)/monocypher.c $(HEADERS)
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
 

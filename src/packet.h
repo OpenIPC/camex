@@ -50,6 +50,12 @@ typedef struct {
      * tunnel; 0 when the routes are someone else's (Android VpnService) or
      * there is no host interface at all */
     int (*host_routes)(void);
+    /* Optional (NULL: nothing to do). flush: write what the backend holds
+     * back (packets to join); called before the event loop sleeps.
+     * pending: 1 when packets can be read without the descriptor being
+     * readable */
+    void (*flush)(void);
+    int (*pending)(void);
 } camex_packet_backend_t;
 
 /* TUN devices: Linux /dev/net/tun or /dev/camex, macOS utun, WinTUN,
@@ -67,5 +73,7 @@ int packet_write(const uint8_t *buffer, size_t len);
 intptr_t packet_fd(void);
 void packet_close(void);
 int packet_host_routes(void);
+void packet_flush(void);
+int packet_pending(void);
 
 #endif /* CAMEX_PACKET_H */

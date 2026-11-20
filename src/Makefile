@@ -46,7 +46,7 @@ else
   LDFLAGS  += -Wl,-dead_strip
 endif
 
-SRCS = main.c camex.c netw.c pake.c monocypher.c util.c log.c crypto.c noise.c keys.c session.c tun.c packet.c net.c proto.c config.c client.c server.c slotidx.c control.c nginxmap.c tcpgate.c
+SRCS = main.c camex.c netw.c pake.c monocypher.c util.c log.c crypto.c noise.c keys.c session.c tun.c offload.c packet.c net.c proto.c config.c client.c server.c slotidx.c control.c nginxmap.c tcpgate.c
 SRCS += wintun.c
 
 # Optional features (#mesh): make CAMEX_L2=1 CAMEX_MESH=1 builds the full
