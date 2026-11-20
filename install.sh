@@ -18,14 +18,15 @@ camex installer for Debian and Ubuntu. Steps:
      with nginx also nginx and openssl).
   3. Download camex of the "latest" release to /usr/local/bin/camex.
   4. Create the server's key pair, /etc/camex/server.key.
-  5. Create the server's settings, /etc/camex/camex.conf, with a new
-     pre-shared key (psk=) for the clients.
+  5. Create the server's settings, /etc/camex/camex.conf, with a network
+     of a random name and a new pre-shared key (psk=) for the clients.
   6. Install the camex service (its arguments in /etc/default/camex),
      enable and start it.
   7. With --domain (or when it was installed before): nginx in front of
      the clients, each one's web UI at http://<client ID>.<domain>/, the
      start page of all of them at http://<domain>/ behind a password.
-  8. Print what the clients need: the server's public key and psk.
+  8. Print what the clients need: the network's name, or the server's
+     public key and psk.
 
 Run it again at any time: it updates camex, the scripts and the services.
 The settings made once (camex.conf, server.key, /etc/default/camex,
@@ -43,6 +44,8 @@ Usage: install.sh [--domain <domain>] [options]
   --port <port>           the server's port (5800)
   --transport udp|tcp|both  the server's transport (both: UDP and TCP on
                           its port)
+  --network <name>        the network clients join by name (a random one;
+                          docs/networks.md); its name is its key
   --psk <key>             the clients' pre-shared key (a random one)
   --pool <network/prefix> the clients' pool, the server at its first
                           address (10.200.0.0/24)
@@ -100,6 +103,7 @@ PORT=5800
 PORT_OPT=
 TRANSPORT=
 PSK_OPT=
+NET_OPT=
 POOL=
 CLIENT_TIMEOUT=
 PUBLIC_HOST=
@@ -294,7 +298,7 @@ uninstall_list() {
 while [ $# -gt 0 ]; do
     # An option given with an empty value is a mistake, not "the default"
     case "$1" in
-        --domain|--port|--transport|--psk|--pool|--password|--http-port|--upstream-port|--client-timeout|--public-host)
+        --domain|--port|--transport|--psk|--network|--pool|--password|--http-port|--upstream-port|--client-timeout|--public-host)
             [ $# -ge 2 ] || usage
             [ -n "$2" ] || die "$1: empty" ;;
     esac
@@ -303,6 +307,7 @@ while [ $# -gt 0 ]; do
         --port)      [ $# -ge 2 ] || usage; PORT=$2; PORT_OPT=$2; shift 2 ;;
         --transport) [ $# -ge 2 ] || usage; TRANSPORT=$2; shift 2 ;;
         --psk)       [ $# -ge 2 ] || usage; PSK_OPT=$2; shift 2 ;;
+        --network)   [ $# -ge 2 ] || usage; NET_OPT=$2; shift 2 ;;
         --pool)      [ $# -ge 2 ] || usage; POOL=$2; shift 2 ;;
         --client-timeout) [ $# -ge 2 ] || usage; CLIENT_TIMEOUT=$2; shift 2 ;;
         --public-host) [ $# -ge 2 ] || usage; PUBLIC_HOST=$2; shift 2 ;;
@@ -372,6 +377,16 @@ esac
 # As camex reads them: hex:<64 hex digits>, base64:<44 characters>, both
 # 32 bytes and not all zero, or a passphrase; one line, below 128
 # characters, no blank at its ends (camex trims those off)
+if [ -n "$NET_OPT" ]; then
+    case "$NET_OPT" in
+        *"]"*|*"
+"*) die "--network: one line, without ]" ;;
+        [[:space:]]*|*[[:space:]]) die "--network: no blank at its start or end" ;;
+    esac
+    [ "$(printf '%s' "$NET_OPT" | LC_ALL=C wc -c)" -le 63 ] || die "--network: at most 63 bytes"
+    ! printf '%s' "$NET_OPT" | LC_ALL=C grep -q "$(printf '[\001-\037\177]')" ||
+        die "--network: no control characters"
+fi
 if [ -n "$PSK_OPT" ]; then
     case "$PSK_OPT" in
         *"
@@ -561,6 +576,13 @@ if [ -f "$CONF" ]; then
         say "added domain=$DOMAIN to [server]"
     fi
 else
+    # A network name hard to guess: 20 letters and digits, about 100 bits
+    if [ -n "$NET_OPT" ]; then
+        NET=$NET_OPT
+    else
+        NET=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 20)
+        [ ${#NET} -eq 20 ] || die "cannot make a network name"
+    fi
     if [ -n "$PSK_OPT" ]; then
         PSK=$PSK_OPT
     else
@@ -584,11 +606,19 @@ else
         echo "# The clients' pre-shared key"
         printf 'psk=%s\n' "$PSK"
         [ -n "$DOMAIN" ] && echo "domain=$DOMAIN"
+    } > "$TMP/camex.server"
+    {
+        echo "# camex server settings, made by install.sh; see"
+        echo "# https://github.com/OpenIPC/camex/blob/master/examples/camex.conf"
+        echo "# The network clients join with: camex --server-host <host> --network <name>"
+        echo "# Its name is its key: whoever knows it can join (docs/networks.md)"
+        printf '[network %s]\n\n' "$NET"
+        sed '1,2d' "$TMP/camex.server"
     } > "$TMP/camex.conf"
     (umask 077; cp "$TMP/camex.conf" "$CONF") || die "cannot write $CONF"
     chmod 600 "$CONF"
     say "created: $CONF (port $PORT, pool ${POOL_NET:-10.200.0.0/24}," \
-        "${PSK_OPT:+the given psk}${PSK_OPT:-a new psk})"
+        "${PSK_OPT:+the given psk}${PSK_OPT:-a new psk}, a network)"
 fi
 # Settings made once: a different value is said, not applied. An older
 # unit's --port or --psk, moved to CAMEX_ARGS, wins over camex.conf: then
@@ -854,10 +884,29 @@ echo "Open $OPEN port ${PORT_NOW:-5800} in the firewall${DOMAIN:+, and TCP ${WEB
 # host's public address
 HOST=${PUBLIC_HOST:-$(conf_server domain "$USED_CONF" | tr 'A-Z' 'a-z')}
 HOST=${HOST:-$(public_addr)}
-echo "A client connects with:"
+# The first [network NAME] block of camex.conf: the short way in
+NET_NOW=$(sed -n 's/^[[:space:]]*\[[[:space:]]*network[[:space:]]\{1,\}\(.*[^[:space:]]\)[[:space:]]*\][[:space:]]*$/\1/p' "$USED_CONF" 2>/dev/null | head -n 1)
+PORTARG=
+[ "${PORT_NOW:-5800}" != 5800 ] && PORTARG=" --port $PORT_NOW"
+if [ -n "$NET_NOW" ]; then
+    NET_Q=$(printf '%s' "$NET_NOW" | sed "s/'/'\\\\''/g")
+    echo "A client joins the network with its name (its ID is its MAC; the server's"
+    echo "key is checked by the name, docs/networks.md):"
+    echo
+    printf '%s\n' "  camex --server-host ${HOST:-<this host>}$PORTARG$TOPT --network '$NET_Q'"
+    echo
+    echo "or, with the server's key and the pre-shared key:"
+else
+    echo "A client connects with:"
+fi
 echo
 echo "  camex --mode client --auto --server-host ${HOST:-<this host>} --port ${PORT_NOW:-5800}$TOPT \\"
 printf '%s\n' "      --server-pubkey $PUBKEY --psk '$PSK_Q'"
+[ -z "$NET_NOW" ] && {
+    echo
+    echo "Add a [network NAME] block to $USED_CONF for the shorter way in: the server's"
+    echo "address and the network's name (docs/networks.md)."
+}
 # The same settings for the Android app (#146): the fields after '#' never
 # leave the phone's browser; the psk is in it, so it is a password
 case "$PUBKEY" in

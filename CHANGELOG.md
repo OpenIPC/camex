@@ -18,6 +18,12 @@ release, rebuilt from every push to `master`; this file is the change history.
   A network the server does not know but may create (`allow_new_networks`), or a server without
   CPace, gets the ID the old way (trust on first use), and only while that server never proved
   the network: one that did and then claims to be open is refused as an impostor.
+- `install.sh`: a new `camex.conf` starts with a `[network NAME]` block of a random name (20
+  letters and digits; `--network` gives one), and the installer prints the short command line,
+  `camex --server-host <host> --network '<name>'`, before the one with the key and psk.
+- Tested on two hi3516ev300 cameras (Cortex-A7, kernel 4.9.37, `tun.ko`): CPace, a direct mesh
+  path for TUN and TAP networks, 10 MB over it at the path's ~12 Mbit/s, key renewal after 10
+  minutes; NEON ChaCha20 there: 33.8 → 48.8 MB/s.
 
 ## 4.5.0 — 2026-11-20
 

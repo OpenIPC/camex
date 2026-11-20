@@ -32,7 +32,8 @@ The steps, printed before it starts and numbered as it goes:
 5. Create the server's settings, `/etc/camex/camex.conf` (mode 0600): the
    port, the auto pool `10.200.0.0/24` with the server at `10.200.0.1`,
    `client_isolation=yes`, `client_timeout=60`, a new random `psk=hex:…` and, with `--domain`,
-   `domain=`.
+   `domain=`; first in the file, a `[network NAME]` block of a random name of
+   20 letters and digits (`--network` gives one; [networks.md](networks.md)).
 6. Write `/etc/default/camex` (the service's arguments: server mode with that
    config and key), install `camex.service`, enable and start it.
 7. With `--domain` (or when nginx was installed before): nginx's server blocks
@@ -40,8 +41,10 @@ The steps, printed before it starts and numbered as it goes:
    password (user `camex`, kept in `/etc/camex/nginx-password`, for nginx in
    `/etc/nginx/camex.htpasswd`), the sync script with its service;
    then `nginx -t`, a reload, one sync and `camex-nginx-sync --check`.
-8. Print what the clients need: the server's public key, the psk, a client
-   command line and a link for the Android app
+8. Print what the clients need: the short command line with the network's
+   name (`camex --server-host <host> --network '<name>'`), and the server's
+   public key, the psk, a client command line with them and a link for the
+   Android app
    ([android.md](android.md#a-link-with-the-settings)); with `--domain` the
    addresses and the start page's password.
 
@@ -52,6 +55,7 @@ Options:
 | `--domain <domain>`              | also install nginx in front of the clients for `<domain>`; one in another script (`мойдомен.рф`) is taken in its IDNA form (`xn--d1acklchcc.xn--p1ai`, made by `idn2`), the form of its DNS records and of `domain=` |
 | `--port <port>`                  | the server's port (5800)                                                                                                                                                                                             |
 | `--transport <udp, tcp or both>` | the server's transport (`both`: UDP and TCP on its port, #178); the clients use UDP unless set to TCP, for networks that block UDP                                                                                   |
+| `--network <name>`               | the network clients join by name: 1 to 63 bytes, one line, without `]` (a random one of 20 letters and digits); its name is its key |
 | `--psk <key>`                    | the clients' pre-shared key: `hex:<64 hex digits>`, `base64:<44 characters>` or a passphrase (a random `hex:` key)                                                                                                   |
 | `--pool <network>/<prefix>`      | the clients' pool, `/8` to `/30`; the server gets its first address (`10.200.0.0/24`, the server `10.200.0.1`)                                                                                                       |
 | `--client-timeout <s>`           | `client_timeout=` in a new `camex.conf`: seconds of silence before a client is dropped and its lamp turns red, 60 to 120 (60)                                                                                        |
