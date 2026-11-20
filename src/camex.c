@@ -686,6 +686,10 @@ int camex_init(camex_config_t *config)
     client_mode = (config->mode == CAMEX_MODE_CLIENT) ? 1U : 0U;
     server_mode = (config->mode == CAMEX_MODE_SERVER) ? 1U : 0U;
     client_state_init(&client_state);
+    if (server_mode) {
+        log_message(LOG_INFO, "camex %s, %s", CAMEX_VERSION,
+                    mode_to_string(current_config.mode));
+    }
 
     if (client_mode && current_config.keepalive == 0) {
         log_message(LOG_INFO,
@@ -850,6 +854,14 @@ int camex_init(camex_config_t *config)
                                  sizeof(current_config.client_id)) != 0) {
             return -1;
         }
+        if (current_config.client_id[0] != '\0') {
+            log_message(LOG_INFO, "camex %s, %s %s", CAMEX_VERSION,
+                        mode_to_string(current_config.mode),
+                        current_config.client_id);
+        } else {
+            log_message(LOG_INFO, "camex %s, %s", CAMEX_VERSION,
+                        mode_to_string(current_config.mode));
+        }
 
         {
             unsigned int dns_attempt = 0;
@@ -972,19 +984,11 @@ int camex_init(camex_config_t *config)
             (void)mesh_client_start(current_config.l2);
         }
 #endif
-        log_message(LOG_NOTICE,
-                    "Tunnel started, awaiting response from server %s:%d",
-                    current_config.server_host, current_config.port);
-        log_message(LOG_INFO, "Tunnel initialized");
-        log_message(LOG_INFO, "  Mode: %s", mode_to_string(current_config.mode));
-        log_message(LOG_INFO, "  Server: %s:%d",
-                    current_config.server_host, current_config.port);
-        log_message(LOG_INFO, "  Local CIDR: %s", current_config.local_cidr);
-        log_message(LOG_INFO, "  Tunnel device: %s", tun_name);
-        log_message(LOG_INFO, "  MTU: %d", current_config.mtu);
-        log_message(LOG_INFO, "  Protocol: v%u (%s)", (unsigned)CAMEX_PROTO_VER,
+        log_message(LOG_DEBUG, "Protocol v%u (%s)", (unsigned)CAMEX_PROTO_VER,
                     "Noise_NKpsk0_25519_ChaChaPoly_BLAKE2b");
-        log_message(LOG_INFO, "  Transport: %s",
+        log_message(LOG_INFO, "Tunnel up: %s %s, MTU %d, server %s:%d (%s)",
+                    tun_name, current_config.local_cidr, current_config.mtu,
+                    current_config.server_host, current_config.port,
                     current_config.transport == CAMEX_TRANSPORT_TCP
                         ? "TCP" : "UDP");
         return 0;
@@ -1043,20 +1047,23 @@ int camex_init(camex_config_t *config)
     server_networks_apply();
     camex_config_watch();
 
-    log_message(LOG_INFO, "Tunnel initialized");
-    log_message(LOG_INFO, "  Mode: %s", mode_to_string(current_config.mode));
-    log_message(LOG_INFO, "  Listen endpoint: %s", endpoint);
-    if (current_config.local_cidr[0] != '\0') {
-        log_message(LOG_INFO, "  Local CIDR: %s", current_config.local_cidr);
-        log_message(LOG_INFO, "  Tunnel device: %s", tun_name);
-    }
-    log_message(LOG_INFO, "  MTU: %d", current_config.mtu);
-    log_message(LOG_INFO, "  Protocol: v%u (%s)", (unsigned)CAMEX_PROTO_VER,
+    log_message(LOG_DEBUG, "Protocol v%u (%s)", (unsigned)CAMEX_PROTO_VER,
                 "Noise_NKpsk0_25519_ChaChaPoly_BLAKE2b");
-    log_message(LOG_INFO, "  Transport: %s",
-                current_config.transport == CAMEX_TRANSPORT_TCP  ? "TCP"
-                : current_config.transport == CAMEX_TRANSPORT_BOTH ? "UDP and TCP"
-                                                                   : "UDP");
+    {
+        const char *tr = current_config.transport == CAMEX_TRANSPORT_TCP
+                             ? "TCP"
+                         : current_config.transport == CAMEX_TRANSPORT_BOTH
+                             ? "UDP and TCP" : "UDP";
+
+        if (current_config.local_cidr[0] != '\0') {
+            log_message(LOG_INFO, "Tunnel up: %s %s, MTU %d, listening on %s "
+                        "(%s)", tun_name, current_config.local_cidr,
+                        current_config.mtu, endpoint, tr);
+        } else {
+            log_message(LOG_INFO, "Listening on %s (%s), no tunnel interface",
+                        endpoint, tr);
+        }
+    }
     g_now = time(NULL);
     return 0;
 }
@@ -1108,7 +1115,7 @@ static void drain_udp_packets(void)
         if (rc == 0) {
             if (!client_link_confirmed) {
                 client_link_confirmed = 1U;
-                log_message(LOG_NOTICE,
+                log_message(LOG_DEBUG,
                     "Connection to server %s:%d established "
                     "(first response received)",
                     current_config.server_host, current_config.port);
@@ -1132,7 +1139,7 @@ static void drain_udp_packets(void)
         if (len > 0) {
             if (!client_link_confirmed) {
                 client_link_confirmed = 1U;
-                log_message(LOG_NOTICE,
+                log_message(LOG_DEBUG,
                     "Connection to server %s:%d established "
                     "(first response received)",
                     current_config.server_host, current_config.port);
@@ -1518,7 +1525,7 @@ void camex_run(void)
             log_message(LOG_INFO, "Client isolation: packets between "
                         "clients are dropped (#83)");
         }
-        log_message(LOG_INFO, "Server started. Press Ctrl+C to stop.");
+        log_message(LOG_DEBUG, "Server started");
         while (running) {
             size_t si;
 
@@ -1748,11 +1755,11 @@ void camex_run(void)
             }
         }
 
-        log_message(LOG_INFO, "Server stopped.");
+        log_message(LOG_INFO, "Server stopped");
         return;
     }
 
-    log_message(LOG_INFO, "Client started. Press Ctrl+C to stop.");
+    log_message(LOG_DEBUG, "Client started");
     while (running) {
         g_now = time(NULL);
         log_limit_tick();
@@ -1838,7 +1845,7 @@ void camex_run(void)
         client_tick();
     }
 
-    log_message(LOG_INFO, "Client stopped.");
+    log_message(LOG_INFO, "Client stopped");
 }
 
 void camex_stop(void)
@@ -2140,8 +2147,9 @@ int camex_client_reconfigure(const camex_config_t *next)
         return client_reconfig_pending ? -1 : 0;
     }
     log_message(LOG_NOTICE, "Applying the new tunnel configuration from the "
-                "server: CIDR=%s GW=%s MTU=%d routes=%u", next->local_cidr,
-                next->gateway_ip, next->mtu, (unsigned)next->route_count);
+                "server: %s, gateway %s, MTU %d, %u route(s)",
+                next->local_cidr, next->gateway_ip, next->mtu,
+                (unsigned)next->route_count);
 
     /* Routes go with the old device: remove them while it exists. A
      * route that cannot be removed stays (logged): it points at the old

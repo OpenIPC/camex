@@ -96,6 +96,8 @@ sudo ./camex \
 | `--server-pubkey <key>`    |       | Client: the server's public key (from `--genkey`); without it the key the server gives on first contact is trusted and kept ([networks.md](networks.md#the-servers-key))                                                                                                                                                                                                                          |
 | `--known-servers <path>`   |       | Client: where the keys of servers met without `--server-pubkey` are kept (default: `/etc/camex/known_servers`; `none`: not kept) |
 | `--server-key-file <path>` |       | Server: file with its private key (or `server_key=` in `[server]`)                                                                                                                                                                                                          |
+| `--verbose`                |       | Details too: handshakes, key renewals, backends, mesh attempts (see [Log](#log))                                                                                                                                                 |
+| `--quiet`                  |       | Warnings and errors only                                                                                                                                                                                                       |
 | `--no-tun-offload`         |       | Linux: no TUN offloads (see [TUN driver support](#tun-driver-support)); for a kernel that gets them wrong                                                                                                                              |
 | `--bench-crypto`           |       | How fast this CPU seals 1400-byte tunnel packets (ChaCha20-Poly1305, 3 s), and whether NEON is used; then exit |
 | `--genkey`                 |       | Print a new server key pair (`server_key=`, `public_key=`) and exit                                                                                                                                                                                                         |
@@ -151,12 +153,34 @@ takes offloads (`IFF_VNET_HDR`, `TUNSETOFFLOAD`): the kernel hands camex TCP
 data of up to 64 KB at once and checksums still to compute, and camex cuts it
 into packets of the tunnel's MTU; TCP packets of one connection that arrive
 together are written as one, as the kernel's GRO joins them. Nothing changes on
-the wire, so old peers are not affected. The log says `TUN offloads: on`.
+the wire, so old peers are not affected. The log says `TUN backend: tun0 (/dev/net/tun), offloads on`.
 Between two x86 hosts this carries 19–37% more TCP; on a camera (Cortex-A7)
 it saves a little CPU, since the UDP packets and their encryption cost the
 most there. Not used for TAP networks, `/dev/camex`, a device given from
 outside (Android, `CAMEX_TUN_FD`), macOS or Windows. `--no-tun-offload` turns
 them off.
+
+## Log
+
+On the console each line starts with the time and its level, then a plain
+sentence:
+
+```
+18:31:02 [INFO]  camex 4.6.0, client CAM-a
+18:31:02 [INFO]  Server 172.28.0.2:5800 proved it knows the network (CPace); its key ... is kept
+18:31:02 [INFO]  Received config from server: 10.77.0.148/24, gateway 10.77.0.1, MTU 1420
+18:31:02 [INFO]  Connection to server 172.28.0.2:5800 established (UDP)
+18:31:02 [INFO]  TUN backend: tun0 (/dev/net/tun), offloads on
+18:31:02 [INFO]  Tunnel up: tun0 10.77.0.148/24, MTU 1420, server 172.28.0.2:5800 (UDP)
+18:31:03 [INFO]  Mesh: peer CAM-b direct at 172.28.0.4:55043
+18:40:11 [WARN]  ...
+```
+
+Warnings and errors go to stderr, the rest to stdout. Syslog (and logcat on
+Android) gets the same sentences without the time and level, which it adds
+itself. `--quiet` keeps warnings and errors only; `--verbose` adds the details
+(`[DEBUG]`): handshakes, key renewals, the protocol, the server key file, mesh
+attempts.
 
 ## Notes
 

@@ -1189,7 +1189,7 @@ int config_build_keystore(void)
             return -1;
         }
     }
-    log_message(LOG_INFO, "Server keystore: %u PSK(s) loaded",
+    log_message(server_ks.count > 0U ? LOG_INFO : LOG_DEBUG, "Server keystore: %u PSK(s) loaded",
                 (unsigned)ks->count);
     return 0;
 }

@@ -203,7 +203,7 @@ static void client_known_store(const char *pub_b64, int pake_mark)
         (void)remove(tmp);
         return;
     }
-    log_message(LOG_INFO, "Server key of %s kept in %s", name, path);
+    log_message(LOG_DEBUG, "Server key of %s kept in %s", name, path);
 }
 
 /* First contact without the server's key: ask for it. The request is
@@ -621,8 +621,10 @@ static int client_handle_resp(const uint8_t *buffer, size_t len)
         }
     }
     if (first) {
-        log_message(LOG_NOTICE, "Connection to server %s:%d established",
-                    current_config.server_host, current_config.port);
+        log_message(LOG_NOTICE, "Connection to server %s:%d established (%s)",
+                    current_config.server_host, current_config.port,
+                    current_config.transport == CAMEX_TRANSPORT_TCP ? "TCP"
+                                                                    : "UDP");
     } else {
         log_message(LOG_INFO, "Session keys renewed");
     }
@@ -774,7 +776,7 @@ int client_wait_for_config(void)
     time_t next_note;
     unsigned int renewed = 0U;
 
-    log_message(LOG_INFO, "Waiting for auto-config from server...");
+    log_message(LOG_DEBUG, "Waiting for auto-config from server...");
     wait_start = time(NULL);
     socket_since = wait_start;
     next_note = wait_start + 10;
@@ -921,13 +923,16 @@ int client_apply_config_response(const uint8_t *payload, size_t payload_len)
             snprintf(current_config.local_ip, sizeof(current_config.local_ip),
                      "%s", lip);
         }
-        log_message(LOG_INFO,
-                    "Received config from server:"
-                    " CIDR=%s GW=%s MTU=%d routes=%u",
-                    current_config.local_cidr,
-                    current_config.gateway_ip,
-                    current_config.mtu,
-                    (unsigned)current_config.route_count);
+        if (current_config.route_count > 0U) {
+            log_message(LOG_INFO, "Received config from server: %s, gateway "
+                        "%s, MTU %d, %u route(s)", current_config.local_cidr,
+                        current_config.gateway_ip, current_config.mtu,
+                        (unsigned)current_config.route_count);
+        } else {
+            log_message(LOG_INFO, "Received config from server: %s, gateway "
+                        "%s, MTU %d", current_config.local_cidr,
+                        current_config.gateway_ip, current_config.mtu);
+        }
     }
 
     return rc;
@@ -975,11 +980,10 @@ int client_handle_tun_packet(const uint8_t *buffer, size_t len)
     if (buffer == NULL || len == 0U || len > TUN_PACKET_MAX) {
         return -1;
     }
-    if (!client_state.cur.valid) {
-        return 0;   /* no session yet: the packet is dropped quietly */
-    }
 #ifdef CAMEX_MESH
-    /* A mesh peer with a direct path takes it */
+    /* A mesh peer with a direct path takes it, with or without a session
+     * with the server: its pair keys and its path are the peers' own, so a
+     * server that is gone (or being restarted) does not cut them off */
     if (mesh_client_active()) {
         int rc;
 
@@ -996,6 +1000,9 @@ int client_handle_tun_packet(const uint8_t *buffer, size_t len)
         }
     }
 #endif
+    if (!client_state.cur.valid) {
+        return 0;   /* no session: the packet is dropped quietly */
+    }
 #ifdef CAMEX_L2
     if (current_config.l2) {
         return l2_send_frame(buffer, len, client_l2_send, NULL);

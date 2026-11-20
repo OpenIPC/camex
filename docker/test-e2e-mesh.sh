@@ -236,7 +236,8 @@ assert any(r["from"] == "C" and r["to"] == "D" for r in s["relayed"]), s["relaye
 ' "$BUILD_CTX/st.json"
 check $? "--status --json: relayed C -> D, E -> A direct, C -> D relay"
 docker exec "$P-srv" sh -c 'timeout 3 camex --top --interval 1 </dev/null' > "$BUILD_CTX/top.txt" 2>&1
-grep -q "PEERS (as the clients report them)" "$BUILD_CTX/top.txt"
+grep -Eq "Mesh +E +<-> +A|Mesh +A +<-> +E" "$BUILD_CTX/top.txt" &&
+    grep -Eq "Mesh +C +<-> +D +relayed" "$BUILD_CTX/top.txt"
 check $? "--top lists the peers the clients report"
 
 echo "== 6. a TAP mesh network"
@@ -255,6 +256,25 @@ docker logs "$P-TA" 2>&1 | grep -q "Mesh: peer TB direct"
 check $? "TA and TB go direct"
 docker exec "$P-TA" ping -c 3 -W 2 -M do -s 1472 "$TB" >/dev/null
 check $? "1500-byte packets on the direct TAP path"
+
+echo "== 7. the server gone: direct peers keep talking"
+docker exec "$P-E" ping -c 3 -W 2 "$A" >/dev/null
+docker pause "$P-srv" >/dev/null
+wait_log "$P-TA" "Connection lost" 60 && wait_log "$P-E" "Connection lost" 60
+check $? "TA and E notice the server is gone"
+docker exec "$P-TA" ping -c 5 -W 2 "$TB" >/dev/null
+check $? "TA still reaches TB directly (TAP)"
+docker exec "$P-E" ping -c 5 -W 2 "$A" >/dev/null
+check $? "E still reaches A directly (TUN)"
+before=$(docker logs "$P-TA" 2>&1 | grep -c "Connection to server .* established")
+docker unpause "$P-srv" >/dev/null
+for i in $(seq 1 60); do
+    [ "$(docker logs "$P-TA" 2>&1 | grep -c "Connection to server .* established")" -gt "$before" ] && break
+    sleep 1
+done
+[ "$(docker logs "$P-TA" 2>&1 | grep -c "Connection to server .* established")" -gt "$before" ] &&
+    docker exec "$P-TA" ping -c 3 -W 2 "$TB" >/dev/null
+check $? "TA connects again when the server is back, TB still reachable"
 
 echo
 if [ "$FAILS" = 0 ]; then

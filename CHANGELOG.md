@@ -8,6 +8,23 @@ release, rebuilt from every push to `master`; this file is the change history.
 
 ## 4.6.0 — 2026-11-20
 
+- `camex --top` grouped by network: a summary (`Clients 3 of 256   In 0.7 Mbit/s   Out 0.7 Mbit/s
+  Relayed 0.0 Mbit/s`), then each network's clients (rates in Mbit/s, `-` when idle, UDP/TCP)
+  and its mesh pairs (`Mesh  CAM-BACK <-> CAM-FRONT  direct  3.9 Mbit/s`: the clients' reports
+  for a direct path, which the server cannot see, its own count for a relayed one). Redrawn in
+  place without flicker. `--status` and `--status --json` are unchanged.
+- Mesh peers with a direct path keep talking when the server is gone or being restarted: a
+  client without a server session used to drop every packet it sent, its peers' included.
+  `test-e2e-mesh.sh` pauses the server and pings over a TUN and a TAP direct path.
+- The console log: every line starts with the time and its level (`18:31:02 [INFO]  ...`,
+  `[WARN]`, `[ERROR]`, `[DEBUG]`); syslog and logcat get the plain sentence. The start is shorter:
+  `camex 4.6.0, client CAM-a`, one `Tunnel up: tun0 10.77.0.148/24, MTU 1420, server ... (UDP)`
+  line instead of an eight-line block, one `TUN backend: ..., offloads on` line, `Received config
+  from server: 10.77.0.148/24, gateway 10.77.0.1, MTU 1420`; the encryption fingerprint, the
+  protocol, the known-servers file and other details only with `--verbose` (`--quiet`: warnings
+  and errors only). The server says where a client came from (`Registered auto client CAM-a:
+  10.77.0.148 in network net-8a386ca1, from 172.28.0.3:37186 (UDP)`) and no longer warns about the
+  auto pool when only networks are configured.
 - Memory: camex locks all of it (`mlockall`), so every static buffer is resident on every
   camera. The tables only a server uses (networks, CPace sessions) are allocated by the server,
   and the offload buffers (64 KB to read a TSO packet, 32 KB to join packets) only when a device

@@ -196,7 +196,7 @@ int mesh_client_start(int l2)
         mesh.gw_be = g.s_addr;
     }
     mesh.active = 1;
-    log_message(LOG_INFO, "Mesh: peers go direct where they can");
+    log_message(LOG_DEBUG, "Mesh: peers go direct where they can");
     mesh_session_up();
     return 0;
 }

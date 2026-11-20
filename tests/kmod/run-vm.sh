@@ -150,7 +150,7 @@ if [ -n "$PUB" ]; then
     ping -c 3 -W 2 10.200.0.1 >/dev/null &&
         echo "ok: client: guest pings the server through camex.ko" ||
         echo "FAIL: client: guest cannot ping the server"
-    grep -q "TUN offloads: on (camex.ko" /tmp/log &&
+    grep -q "offloads on (camex.ko)" /tmp/log &&
         echo "ok: client: offloads on through camex.ko" ||
         echo "FAIL: client: no offloads through camex.ko"
     wget -q -O /tmp/f http://10.200.0.1:8080/f &&

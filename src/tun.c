@@ -240,14 +240,14 @@ static void tun_disable_ipv6(const char *ifname)
     fd = open(path, O_RDONLY | TUN_OPEN_CLOEXEC);
     if (fd < 0) {
         if (errno != ENOENT) {
-            log_message(LOG_WARNING, "IPv6 stays on on %s: %s: %s", ifname,
+            log_message(LOG_WARNING, "IPv6 stays on for %s: %s: %s", ifname,
                         path, strerror(errno));
         }
         return;
     }
     if (read(fd, &cur, 1) != 1) {
         /* Unknown before: changing it could not be undone, leave it */
-        log_message(LOG_WARNING, "IPv6 stays on on %s: %s: unreadable",
+        log_message(LOG_WARNING, "IPv6 stays on for %s: %s: unreadable",
                     ifname, path);
         close(fd);
         return;
@@ -258,7 +258,7 @@ static void tun_disable_ipv6(const char *ifname)
     }
     fd = open(path, O_WRONLY | TUN_OPEN_CLOEXEC);
     if (fd < 0 || write(fd, "1", 1) != 1) {
-        log_message(LOG_WARNING, "IPv6 stays on on %s: %s: %s", ifname, path,
+        log_message(LOG_WARNING, "IPv6 stays on for %s: %s: %s", ifname, path,
                     strerror(errno));
     } else if (cur == '0') {
         tun_ipv6_was = cur;
@@ -747,8 +747,6 @@ int tun_create_device(const char *local_ip, const char *netmask,
         }
     }
 
-    log_message(LOG_INFO, "%s backend: %s (%s)", tun_l2 ? "TAP" : "TUN",
-                tun_name, devpath_used);
     /* Offloads: TCP of up to 64 KB at once both ways, checksums left to
      * camex (TSO, CSUM). The vnet header stays even if the kernel takes
      * none of them */
@@ -758,27 +756,30 @@ int tun_create_device(const char *local_ip, const char *netmask,
     if (tun_gro != NULL) {
         tun_gro->len = 0U;
     }
-    if (!use_tunsetiff && offload_want) {
-        /* camex.ko: the same vnet header by its own ioctl (camex-k.c);
-         * a module without it answers ENOTTY and stays as it was */
-        int on = 1;
+    {
+        /* One line for the device: which, and its offloads */
+        const char *offloads = "offloads off";
 
-        if (ioctl(fd, CAMEX_IOC_VNET, &on) == 0) {
-            tun_vnet = 1;
-            tun_vnet_one_buffer = 1;
-            log_message(LOG_INFO, "TUN offloads: on (camex.ko: TSO, "
-                        "checksums, joined writes)");
-        }
-    } else if (tun_vnet) {
-        unsigned int off = TUN_F_CSUM | TUN_F_TSO4 | TUN_F_TSO6 |
-                           TUN_F_TSO_ECN;
+        if (!use_tunsetiff && offload_want) {
+            /* camex.ko: the same vnet header by its own ioctl (camex-k.c);
+             * a module without it answers ENOTTY and stays as it was */
+            int on = 1;
 
-        if (ioctl(fd, TUNSETOFFLOAD, off) < 0) {
-            log_message(LOG_INFO, "TUN offloads: not taken by the kernel");
-        } else {
-            log_message(LOG_INFO, "TUN offloads: on (TSO, checksums, joined "
-                        "writes)");
+            if (ioctl(fd, CAMEX_IOC_VNET, &on) == 0) {
+                tun_vnet = 1;
+                tun_vnet_one_buffer = 1;
+                offloads = "offloads on (camex.ko)";
+            }
+        } else if (tun_vnet) {
+            unsigned int off = TUN_F_CSUM | TUN_F_TSO4 | TUN_F_TSO6 |
+                               TUN_F_TSO_ECN;
+
+            offloads = ioctl(fd, TUNSETOFFLOAD, off) < 0
+                           ? "offloads not taken by the kernel"
+                           : "offloads on";
         }
+        log_message(LOG_INFO, "%s backend: %s (%s), %s",
+                    tun_l2 ? "TAP" : "TUN", tun_name, devpath_used, offloads);
     }
 
     sock = socket(AF_INET, SOCK_DGRAM, 0);

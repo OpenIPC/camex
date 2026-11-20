@@ -191,8 +191,29 @@ and number of clients. `camex --status --json` adds `networks` (`label`,
 for each client `network` and its traffic rates `rx_rate` and `tx_rate` in
 bytes a second.
 
-`camex --top` shows the clients redrawn every second (`--interval <s>` sets
-the interval), busiest first, with RX/s and TX/s. Press `q` to quit.
+`camex --top` is redrawn in place every second (`--interval <s>` sets the
+interval; `q` quits). A summary first, then a block for each network: its
+clients, the busiest first, and its mesh pairs.
+
+```
+camex 4.6.0 server   up 49s   UDP+TCP port 5800   tunnel 10.201.0.1/24   19:19:17
+Clients 3 of 256   In 0.7 Mbit/s   Out 0.7 Mbit/s   Relayed 0.0 Mbit/s
+
+NETWORK cams  10.77.0.0/24, mesh
+  CLIENT     ADDRESS          ENDPOINT          VIA  IN Mbit/s  OUT Mbit/s          IN         OUT   SEEN
+  CAM-FRONT  10.77.0.84       172.29.0.3:48265  UDP          -           -       419 B        84 B     8s
+  CAM-BACK   10.77.0.5        172.29.0.4:33070  UDP          -           -       401 B        84 B     9s
+  Mesh  CAM-BACK  <-> CAM-FRONT  direct    3.9 Mbit/s
+
+NETWORK office  10.78.0.0/24
+  CLIENT     ADDRESS          ENDPOINT          VIA  IN Mbit/s  OUT Mbit/s          IN         OUT   SEEN
+  LAPTOP-7   10.78.0.243      172.29.0.5:45132  TCP        0.7         0.7     3.1 MiB     3.1 MiB     0s
+```
+
+`IN` is what the client sends the server, `OUT` what the server sends it
+(rates in Mbit/s, `-` when idle; totals since it connected); `SEEN` the time
+since its last packet. Clients without a network follow in a `CLIENTS` block
+of the auto pool.
 
 ## The full camex
 
@@ -328,6 +349,11 @@ networks alike.
   never opens stays on the server (`stays on the server: no answer to
   punches`) and is tried again after 60 s. Traffic never stops either way.
 - **Keepalives.** A direct path gets one every 15 s while it carries nothing.
+- **Without the server.** Direct paths do not need it: their keys and
+  keepalives are the peers' own. When the server stops (or is restarted),
+  clients log `Connection lost` and keep reconnecting, while peers with a direct
+  path go on talking. What needs the server waits for it: the server itself,
+  relayed peers, peers not yet met, and a peer's new address after it moved.
 
 | Peers behind                                   | Path                    |
 |------------------------------------------------|-------------------------|
@@ -342,12 +368,17 @@ The server hands out the pair keys, so it could read what its clients send
 each other. That is the same trust as in hub mode, where the server forwards
 everything.
 
-`camex --status` and `--top` on the server show:
+`camex --status` on the server shows:
 
 - `RELAYED BY THE SERVER`: the pairs whose traffic the server forwards, with
   their rates;
 - `PEERS (as the clients report them)`: each client's peers, path (`direct`,
   `relay`, `punching`) and rates. Clients report every 30 s, and the server
   does not see direct traffic itself.
+
+`camex --top` puts both together: one `Mesh` line for each pair in its
+network's block, with its path (`direct`, `relayed`, `punching`) and its rate
+both ways: the clients' last report for a direct path, the server's own count
+for a relayed one. The summary's `Relayed` is all the server relays.
 
 `--json` has `relayed` and `peers` for the same.

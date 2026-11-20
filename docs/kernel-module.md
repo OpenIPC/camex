@@ -320,7 +320,7 @@ is on:
   own, and the kernel would split one into two writes.
 
 camex asks for it on `/dev/camex` unless `--no-tun-offload` is given, and logs
-`TUN offloads: on (camex.ko: ...)`. A module without the ioctl answers
+`TUN backend: camex (/dev/camex), offloads on (camex.ko)`. A module without the ioctl answers
 `ENOTTY`, and camex runs without offloads as before. On kernels before 4.1
 the module has no offloads. Closing the descriptor turns them off again.
 

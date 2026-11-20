@@ -885,6 +885,20 @@ static void top_signal(int sig)
     top_stop = 1;
 }
 
+/* A frame's text, each line cleared to its end (the last frame's longer
+ * lines go) */
+static void top_put(const char *buf, size_t len)
+{
+    size_t i;
+
+    for (i = 0U; i < len; ++i) {
+        if (buf[i] == '\n') {
+            fputs("\033[K", stdout);
+        }
+        fputc(buf[i], stdout);
+    }
+}
+
 int control_top(const char *path, int interval)
 {
     struct termios saved;
@@ -906,7 +920,9 @@ int control_top(const char *path, int interval)
     }
     signal(SIGINT, top_signal);
     signal(SIGTERM, top_signal);
-    fputs("\033[?25l", stdout);   /* no cursor while it redraws */
+    /* No cursor while it redraws; the screen is cleared once, then each
+     * frame overwrites the last in place (no flicker) */
+    fputs("\033[?25l\033[2J", stdout);
     while (!top_stop) {
         control_path_t one;
         control_path_t *paths = &one;
@@ -925,9 +941,9 @@ int control_top(const char *path, int interval)
             paths = listed;
         }
         strftime(when, sizeof(when), "%H:%M:%S", localtime(&now));
-        fputs("\033[H\033[2J", stdout);
-        printf("camex --top  %s  every %ds, q quits\n\n", when, interval);
+        fputs("\033[H", stdout);
         if (n <= 0) {
+            printf("camex --top  %s\033[K\n\033[K\n", when);
             printf("no server control socket in %s\n", CAMEX_CONTROL_DIR);
         }
         for (i = 0; i < n; ++i) {
@@ -942,21 +958,22 @@ int control_top(const char *path, int interval)
             r = control_ask(paths[i], "STATUS TOP\n", &buf, &len);
             control_quiet = 0;
             if (r == 0) {
-                fwrite(buf, 1U, len, stdout);
+                top_put(buf, len);
             } else if (r == -3) {
                 /* A server before --top: its plain table */
                 free(buf);
                 buf = NULL;
                 len = 0U;
                 if (control_ask(paths[i], "STATUS\n", &buf, &len) == 0) {
-                    fwrite(buf, 1U, len, stdout);
+                    top_put(buf, len);
                 }
             } else {
-                printf("(no answer)\n");
+                printf("(no answer)\033[K\n");
             }
             free(buf);
         }
         free(listed);
+        printf("\033[K\n  every %ds, q quits\033[K\n\033[J", interval);
         fflush(stdout);
         FD_ZERO(&rs);
         if (tty) {

@@ -198,6 +198,12 @@ void server_check_pool(const char *server_cidr)
     server_tunnel_ip = a.s_addr;
     sip = ntohl(a.s_addr);
     smask = ntohl(m.s_addr);
+    /* Networks only (no psk, no [client] sections): no client can get an
+     * address of the auto pool, so nothing to warn about */
+    if (config_networks_enabled() && current_config.psk[0] == '\0' &&
+        server_db.globals.psk[0] == '\0' && server_db.client_count == 0U) {
+        return;
+    }
     ip_text(pool_gateway(), gw, sizeof(gw));
     if ((sip & smask) != (server_db.globals.pool_net & smask) ||
         smask > pmask) {
@@ -1299,7 +1305,7 @@ static int server_build_net_config(server_client_t *entry, int n,
     profile->mesh = netw_table[n].mesh && entry->mesh ? 1U : 0U;
     server_assign_ip(entry, ip_be);
     if (ip_be != old_ip_be) {
-        log_message(LOG_INFO, "Network %s: %s for client %s%s",
+        log_message(LOG_DEBUG, "Network %s: %s for client %s%s",
                     netw_label(n), profile->local_cidr, client_id,
                     entry->pending_ip_be == ip_be
                         ? " (it moves there when it confirms the new "
@@ -2803,7 +2809,23 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     entry->handshakes++;
     if (first) {
         if (auto_request) {
-            log_message(LOG_INFO, "Registered auto client %s", client_id);
+            char from_text[64];
+            char ipt[16];
+            uint32_t ip = entry->ip_be != 0U ? entry->ip_be
+                                             : entry->pending_ip_be;
+
+            net_sockaddr_to_string(from, from_text, sizeof(from_text));
+            ip_text(ntohl(ip), ipt, sizeof(ipt));
+            if (entry->net1 != 0U) {
+                log_message(LOG_INFO, "Registered auto client %s: %s in "
+                            "network %s, from %s (%s)", client_id, ipt,
+                            netw_label((int)entry->net1 - 1), from_text,
+                            fd >= 0 ? "TCP" : "UDP");
+            } else {
+                log_message(LOG_INFO, "Registered auto client %s: %s, from %s "
+                            "(%s)", client_id, ipt, from_text,
+                            fd >= 0 ? "TCP" : "UDP");
+            }
         } else {
             log_message(LOG_INFO, "Registered client %s", local_ip);
         }
@@ -4084,6 +4106,346 @@ static int status_rate_cmp(const void *a, const void *b)
     return *(const size_t *)a < *(const size_t *)b ? -1 : 1;
 }
 
+/* --top: a rate in Mbit/s, "-" when idle */
+static void top_mbit(char *buf, size_t size, uint64_t bytes_per_s)
+{
+    double m = (double)bytes_per_s * 8.0 / 1e6;
+
+    if (bytes_per_s == 0U) {
+        snprintf(buf, size, "-");
+    } else if (m < 0.1) {
+        snprintf(buf, size, "<0.1");
+    } else {
+        snprintf(buf, size, "%.1f", m);
+    }
+}
+
+typedef struct {
+    int id_w, addr_w, ep_w, any_name;
+} top_cols_t;
+
+static void top_client_row(status_buf_t *b, const top_cols_t *w,
+                           const server_client_t *c)
+{
+    char ip[16], pend[16], addr[48], ep[64], seen[32], rr[16], tr[16];
+    char rx[24], tx[24], idbuf[CAMEX_CLIENT_ID_LEN];
+    const char *name = status_name(c->client_id);
+    int wp = config_db_web_port(c->client_id, c->web_port);
+    double last = c->last_data != 0 ? difftime(g_now, c->last_data) : -1.0;
+
+    ip_text(ntohl(c->ip_be), ip, sizeof(ip));
+    if (c->pending_ip_be != 0U) {
+        ip_text(ntohl(c->pending_ip_be), pend, sizeof(pend));
+        snprintf(addr, sizeof(addr), "%s -> %s", ip, pend);
+    } else {
+        snprintf(addr, sizeof(addr), "%s", ip);
+    }
+    if (wp > 0) {
+        size_t al = strlen(addr);
+
+        snprintf(addr + al, sizeof(addr) - al, ":%d", wp);
+    }
+    net_sockaddr_to_string(&c->addr, ep, sizeof(ep));
+    if (last < 0.0) {
+        snprintf(seen, sizeof(seen), "-");
+    } else {
+        status_dur(seen, sizeof(seen), last);
+    }
+    top_mbit(rr, sizeof(rr), c->rx_rate);
+    top_mbit(tr, sizeof(tr), c->tx_rate);
+    status_bytes(rx, sizeof(rx), c->rx_bytes);
+    status_bytes(tx, sizeof(tx), c->tx_bytes);
+    sb_printf(b, "  %-*s  %-*s  %-*s  %-3s  %9s  %10s  %10s  %10s  %5s%s%s\n",
+              w->id_w, status_id(idbuf, sizeof(idbuf), c->client_id),
+              w->addr_w, addr, w->ep_w, ep, c->tcp_fd >= 0 ? "TCP" : "UDP",
+              rr, tr, rx, tx, seen, name != NULL ? "  " : "",
+              name != NULL ? name : "");
+}
+
+static void top_client_head(status_buf_t *b, const top_cols_t *w)
+{
+    sb_printf(b, "  %-*s  %-*s  %-*s  %-3s  %9s  %10s  %10s  %10s  %5s%s\n",
+              w->id_w, "CLIENT", w->addr_w, "ADDRESS", w->ep_w, "ENDPOINT",
+              "VIA", "IN Mbit/s", "OUT Mbit/s", "IN", "OUT", "SEEN",
+              w->any_name ? "  NAME" : "");
+}
+
+#ifdef CAMEX_MESH
+/* A pair of peers in --top: both clients' reports and the server's relay
+ * of their packets, put together */
+typedef struct {
+    char a[CAMEX_CLIENT_ID_LEN], b[CAMEX_CLIENT_ID_LEN];
+    char state[16];
+    uint64_t rate;     /* bytes/s, both ways */
+} top_pair_t;
+
+#define TOP_PAIRS 64U
+
+static top_pair_t *top_pair_of(top_pair_t *pairs, size_t *n, const char *x,
+                               const char *y)
+{
+    const char *a = strcmp(x, y) <= 0 ? x : y;
+    const char *bb = strcmp(x, y) <= 0 ? y : x;
+    size_t i;
+
+    for (i = 0U; i < *n; ++i) {
+        if (strcmp(pairs[i].a, a) == 0 && strcmp(pairs[i].b, bb) == 0) {
+            return &pairs[i];
+        }
+    }
+    if (*n >= TOP_PAIRS) {
+        return NULL;
+    }
+    memset(&pairs[*n], 0, sizeof(pairs[*n]));
+    snprintf(pairs[*n].a, sizeof(pairs[*n].a), "%s", a);
+    snprintf(pairs[*n].b, sizeof(pairs[*n].b), "%s", bb);
+    return &pairs[(*n)++];
+}
+
+/* The pairs of network n1 (its slot + 1; 0: clients without a network) */
+static void top_mesh_lines(status_buf_t *b, const top_cols_t *w, uint32_t n1)
+{
+    static top_pair_t pairs[TOP_PAIRS];
+    size_t np = 0U;
+    size_t i;
+
+    for (i = 0U; server_meshes != NULL && i < server_max_clients; ++i) {
+        const server_client_t *c = &server_clients[i];
+        const server_mesh_t *m = server_meshes[i];
+        const char *p;
+
+        if (m == NULL || !c->active || c->net1 != n1 ||
+            m->owner != c->registered_at || m->stats_at == 0 ||
+            difftime(g_now, m->stats_at) > 90.0) {
+            continue;
+        }
+        for (p = strchr(m->stats, '|'); p != NULL; p = strchr(p + 1, '|')) {
+            char peer[CAMEX_CLIENT_ID_LEN], state[16];
+            unsigned long long rx, tx;
+            unsigned int rr, tr;
+            long since;
+            top_pair_t *t;
+
+            if (sscanf(p + 1, "%31s %15s %llu %llu %u %u %ld", peer, state,
+                       &rx, &tx, &rr, &tr, &since) != 7 ||
+                strcmp(state, "none") == 0) {
+                continue;
+            }
+            t = top_pair_of(pairs, &np, c->client_id, peer);
+            if (t == NULL) {
+                continue;
+            }
+            if (t->state[0] == '\0' || strcmp(state, "direct") == 0) {
+                snprintf(t->state, sizeof(t->state), "%s",
+                         strcmp(state, "relay") == 0 ? "relayed" : state);
+            }
+            if ((uint64_t)rr + tr > t->rate) {
+                t->rate = (uint64_t)rr + tr;
+            }
+        }
+    }
+    /* What the server relays now, live */
+    for (i = 0U; i < SERVER_RELAY_PAIRS; ++i) {
+        const server_relay_t *r = &server_relays[i];
+        const server_client_t *x;
+        const server_client_t *y;
+        top_pair_t *t;
+
+        if (r->a1 == 0U || r->a1 > server_max_clients ||
+            r->b1 == 0U || r->b1 > server_max_clients ||
+            difftime(g_now, r->last) > 60.0) {
+            continue;
+        }
+        x = &server_clients[r->a1 - 1U];
+        y = &server_clients[r->b1 - 1U];
+        if (!x->active || !y->active || x->net1 != n1) {
+            continue;
+        }
+        t = top_pair_of(pairs, &np, x->client_id, y->client_id);
+        if (t == NULL) {
+            continue;
+        }
+        if (strcmp(t->state, "direct") != 0) {
+            snprintf(t->state, sizeof(t->state), "relayed");
+            t->rate = 0U;   /* the reports are older: the live rate */
+        }
+    }
+    for (i = 0U; i < SERVER_RELAY_PAIRS; ++i) {
+        const server_relay_t *r = &server_relays[i];
+        top_pair_t *t;
+
+        if (r->a1 == 0U || r->a1 > server_max_clients ||
+            r->b1 == 0U || r->b1 > server_max_clients ||
+            difftime(g_now, r->last) > 60.0 ||
+            server_clients[r->a1 - 1U].net1 != n1) {
+            continue;
+        }
+        t = top_pair_of(pairs, &np, server_clients[r->a1 - 1U].client_id,
+                        server_clients[r->b1 - 1U].client_id);
+        if (t != NULL && strcmp(t->state, "direct") != 0) {
+            t->rate += r->rate;
+        }
+    }
+    for (i = 0U; i < np; ++i) {
+        char rate[16];
+
+        top_mbit(rate, sizeof(rate), pairs[i].rate);
+        sb_printf(b, "  Mesh  %-*s <-> %-*s  %-8s  %s%s\n", w->id_w,
+                  pairs[i].a, w->id_w, pairs[i].b, pairs[i].state, rate,
+                  pairs[i].rate != 0U ? " Mbit/s" : "");
+    }
+}
+
+static uint64_t top_relayed_rate(void)
+{
+    uint64_t sum = 0U;
+    size_t i;
+
+    for (i = 0U; i < SERVER_RELAY_PAIRS; ++i) {
+        if (server_relays[i].a1 != 0U &&
+            difftime(g_now, server_relays[i].last) <= 60.0) {
+            sum += server_relays[i].rate;
+        }
+    }
+    return sum;
+}
+#endif
+
+/* camex --top: a summary, then one block per network (its clients, the
+ * busiest first, and its mesh pairs), then the clients without one */
+static void status_top(status_buf_t *b)
+{
+    top_cols_t w = { 6, 7, 8, 0 };
+    size_t *order = NULL;
+    size_t n = 0U, i, k;
+    size_t slots_used = 0U;
+    uint64_t in = 0U, out = 0U, relayed = 0U;
+    char d[32], when[16];
+    time_t now = time(NULL);
+    struct tm *tmv = localtime(&now);
+    int any_plain = 0;
+
+    for (i = 0U; i < server_max_clients; ++i) {
+        const server_client_t *c = &server_clients[i];
+        char ep[64];
+        int x;
+
+        if (!c->active) {
+            continue;
+        }
+        slots_used++;
+        if (!c->registered) {
+            continue;
+        }
+        n++;
+        in += c->rx_rate;
+        out += c->tx_rate;
+        w.any_name |= status_name(c->client_id) != NULL;
+        any_plain |= c->net1 == 0U;
+        x = (int)strlen(c->client_id[0] != '\0' ? c->client_id : "-");
+        w.id_w = x > w.id_w ? x : w.id_w;
+        net_sockaddr_to_string(&c->addr, ep, sizeof(ep));
+        x = (int)strlen(ep);
+        w.ep_w = x > w.ep_w ? x : w.ep_w;
+        x = c->pending_ip_be != 0U ? 34 : 15;
+        if (config_db_web_port(c->client_id, c->web_port) > 0) {
+            x += 6;
+        }
+        w.addr_w = x > w.addr_w ? x : w.addr_w;
+    }
+#ifdef CAMEX_MESH
+    relayed = top_relayed_rate();
+#endif
+    status_dur(d, sizeof(d), server_started != 0
+                                 ? difftime(g_now, server_started) : 0.0);
+    if (tmv == NULL || strftime(when, sizeof(when), "%H:%M:%S", tmv) == 0U) {
+        when[0] = '\0';
+    }
+    sb_printf(b, "camex %s server   up %s   %s port %d   tunnel %s   %s\n",
+              CAMEX_VERSION, d,
+              current_config.transport == CAMEX_TRANSPORT_TCP    ? "TCP"
+              : current_config.transport == CAMEX_TRANSPORT_BOTH ? "UDP+TCP"
+                                                                 : "UDP",
+              current_config.port,
+              current_config.local_cidr[0] != '\0'
+                  ? current_config.local_cidr : "none", when);
+    sb_printf(b, "Clients %u of %u   In %.1f Mbit/s   Out %.1f Mbit/s   "
+              "Relayed %.1f Mbit/s\n", (unsigned)n,
+              (unsigned)server_max_clients, (double)in * 8.0 / 1e6,
+              (double)out * 8.0 / 1e6, (double)relayed * 8.0 / 1e6);
+    if (server_client_isolation()) {
+        sb_printf(b, "Client isolation on: %llu client-to-client packets "
+                  "dropped\n", (unsigned long long)server_isolation_drops);
+    }
+    (void)slots_used;
+
+    if (n > 0U) {
+        order = malloc(n * sizeof(*order));
+    }
+    if (order != NULL) {
+        size_t m = 0U;
+
+        for (i = 0U; i < server_max_clients && m < n; ++i) {
+            if (server_clients[i].active && server_clients[i].registered) {
+                order[m++] = i;
+            }
+        }
+        n = m;
+        qsort(order, n, sizeof(*order), status_rate_cmp);
+    } else {
+        n = 0U;
+    }
+    /* One block per network, in the server's order */
+    for (k = 0U; netw_table != NULL && k < CAMEX_NET_MAX; ++k) {
+        const camex_network_t *t = &netw_table[k];
+        char pool[24];
+        unsigned int count = 0U;
+
+        if (!t->active) {
+            continue;
+        }
+        for (i = 0U; i < n; ++i) {
+            count += server_clients[order[i]].net1 == (uint32_t)k + 1U;
+        }
+        netw_pool_text((int)k, pool, sizeof(pool));
+        sb_printf(b, "\nNETWORK %s  %s%s%s%s\n", netw_label((int)k), pool,
+                  t->mesh ? ", mesh" : "", t->tap ? ", TAP" : "",
+                  count == 0U ? "   (no clients)" : "");
+        if (count == 0U) {
+            continue;
+        }
+        top_client_head(b, &w);
+        for (i = 0U; i < n; ++i) {
+            if (server_clients[order[i]].net1 == (uint32_t)k + 1U) {
+                top_client_row(b, &w, &server_clients[order[i]]);
+            }
+        }
+#ifdef CAMEX_MESH
+        top_mesh_lines(b, &w, (uint32_t)k + 1U);
+#endif
+    }
+    if (any_plain) {
+        char ip[16];
+
+        ip_text(server_db.globals.pool_net, ip, sizeof(ip));
+        sb_printf(b, "\nCLIENTS  auto pool %s/%u\n", ip,
+                  (unsigned)server_db.globals.pool_prefix);
+        top_client_head(b, &w);
+        for (i = 0U; i < n; ++i) {
+            if (server_clients[order[i]].net1 == 0U) {
+                top_client_row(b, &w, &server_clients[order[i]]);
+            }
+        }
+#ifdef CAMEX_MESH
+        top_mesh_lines(b, &w, 0U);
+#endif
+    }
+    if (n == 0U && netw_table == NULL) {
+        sb_printf(b, "\nNo clients\n");
+    }
+    free(order);
+}
+
 char *server_status(int json, size_t *len)
 {
     status_buf_t b = { NULL, 0U, 0U, 0 };
@@ -4106,7 +4468,13 @@ char *server_status(int json, size_t *len)
     long pid;
 
     if (top) {
-        json = 0;
+        status_top(&b);
+        if (b.err) {
+            free(b.p);
+            return NULL;
+        }
+        *len = b.len;
+        return b.p;
     }
 
 #ifdef _WIN32

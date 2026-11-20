@@ -284,8 +284,8 @@ check $? "the client joins a new network the old way, and says so"
 
 echo "== 10. camex --top"
 docker exec "$P-srv" sh -c 'timeout 3 camex --top --interval 1 </dev/null' > "$BUILD_CTX/top.txt" 2>&1
-grep -q "RX/s" "$BUILD_CTX/top.txt" && grep -q "CAM-A" "$BUILD_CTX/top.txt" &&
-    grep -q "networks: " "$BUILD_CTX/top.txt"
+grep -q "IN Mbit/s" "$BUILD_CTX/top.txt" && grep -q "CAM-A" "$BUILD_CTX/top.txt" &&
+    grep -q "^NETWORK " "$BUILD_CTX/top.txt"
 check $? "--top lists clients with rates and the networks"
 docker exec "$P-srv" camex --status --json | python3 -c '
 import json, sys

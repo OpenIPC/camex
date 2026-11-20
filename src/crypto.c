@@ -84,7 +84,7 @@ void crypto_log_fingerprint(void)
     char fp[33];
     hex_encode(crypto_ctx.fingerprint, sizeof(crypto_ctx.fingerprint),
                fp, sizeof(fp));
-    log_message(LOG_INFO, "Encryption fingerprint: %s", fp);
+    log_message(LOG_DEBUG, "Encryption fingerprint: %s", fp);
 }
 
 const camex_crypto_t *crypto_get_ctx(void)
