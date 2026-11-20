@@ -9,8 +9,23 @@
 
 #include "server.h"
 #include "netw.h"
+#ifdef CAMEX_MESH
+#include "mesh.h"
+
+static void server_relay_count(const server_client_t *from,
+                               const server_client_t *to, size_t len);
+#endif
 #ifdef CAMEX_L2
 #include "l2.h"
+
+/* The frame in assembly of each slot, allocated when a client of a TAP
+ * network sends its first piece; owner tells a new client in the slot */
+typedef struct {
+    time_t owner;
+    l2_reasm_t r;
+} server_reasm_t;
+
+static server_reasm_t **server_reasm = NULL;
 #endif
 #include "tun.h"
 #include "client.h"
@@ -1243,9 +1258,24 @@ static int server_build_net_config(server_client_t *entry, int n,
 {
     uint32_t old_ip_be = entry->pending_ip_be != 0U ? entry->pending_ip_be
                                                     : entry->ip_be;
-    uint32_t ip_be = server_net_pick(entry, n, client_id, hint_ip);
+    uint32_t ip_be;
     char ip[16];
 
+#ifdef CAMEX_L2
+    if (netw_table[n].noaddr) {
+        /* addresses = none: the devices take theirs on the bridged LAN */
+        profile->local_cidr[0] = '\0';
+        profile->gateway_ip[0] = '\0';
+        profile->l2 = 1U;
+        l2_client_mac(netw_table[n].id, client_id, profile->mac);
+        profile->mesh = netw_table[n].mesh && entry->mesh ? 1U : 0U;
+        (void)old_ip_be;
+        (void)hint_ip;
+        return proto_build_config(client_id, profile, message,
+                                  message_size);
+    }
+#endif
+    ip_be = server_net_pick(entry, n, client_id, hint_ip);
     if (ip_be == 0U) {
         char pool[24];
 
@@ -1265,6 +1295,7 @@ static int server_build_net_config(server_client_t *entry, int n,
         l2_client_mac(netw_table[n].id, client_id, profile->mac);
     }
 #endif
+    profile->mesh = netw_table[n].mesh && entry->mesh ? 1U : 0U;
     server_assign_ip(entry, ip_be);
     if (ip_be != old_ip_be) {
         log_message(LOG_INFO, "Network %s: %s for client %s%s",
@@ -2093,6 +2124,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     uint8_t has_net = 0U;
     int net = -1;
     uint16_t net1_before = 0U;
+    uint8_t mesh_req = 0U;
 
     net_sockaddr_to_string(from, peer, sizeof(peer));
     if (!ctx->has_server_key) {
@@ -2227,10 +2259,10 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     message[payload_len - V2_TIMESTAMP_LEN] = '\0';
     client_id[0] = '\0';
     local_ip[0] = '\0';
-    if (proto_parse_register(message, client_id, sizeof(client_id),
-                             local_ip, sizeof(local_ip),
-                             &auto_request, &web_port, net_id,
-                             &has_net) != 0 ||
+    if (proto_parse_register_ex(message, client_id, sizeof(client_id),
+                                local_ip, sizeof(local_ip),
+                                &auto_request, &web_port, net_id,
+                                &has_net, &mesh_req) != 0 ||
         server_register_allowed(used_key, client_id, sizeof(client_id),
                                 local_ip, auto_request, from) != 0) {
         noise_wipe(&hs);
@@ -2349,6 +2381,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     memcpy(psk_before, entry->psk_key, sizeof(psk_before));
     net1_before = entry->net1;
     entry->net1 = has_net ? (uint16_t)(net + 1) : 0U;
+    entry->mesh = mesh_req;
     pending_before = entry->pending_ip_be;
     ip_before = entry->ip_be;
     /* --transport both (#178): a client new on TCP (not one that replaces
@@ -2579,14 +2612,6 @@ fail:
  * TAP networks (l2.h): the server is their switch and their gateway.
  */
 
-/* The frame in assembly of each slot, allocated when a client of a TAP
- * network sends its first piece; owner tells a new client in the slot */
-typedef struct {
-    time_t owner;
-    l2_reasm_t r;
-} server_reasm_t;
-
-static server_reasm_t **server_reasm = NULL;
 
 static int server_l2_net(const server_client_t *e)
 {
@@ -2702,8 +2727,9 @@ static int server_l2_input(server_client_t *entry, const uint8_t *plain,
     l2_mac_learn(entry->net1, frame + 6, (uint32_t)slot + 1U, g_now);
     l2_gateway_mac(netw_table[n].id, gw_mac);
 
-    /* ARP for the gateway: the server answers */
-    {
+    /* ARP for the gateway: the server answers (a network with addresses;
+     * one without has no gateway) */
+    if (!netw_table[n].noaddr) {
         uint8_t reply[L2_ETH_HDR + 28U];
         size_t rl = l2_arp_reply(frame, (size_t)flen, gw_ip, gw_mac, reply,
                                  sizeof(reply));
@@ -2713,7 +2739,7 @@ static int server_l2_input(server_client_t *entry, const uint8_t *plain,
         }
     }
     /* IPv4 to the gateway: into the server's tunnel interface */
-    if (memcmp(frame, gw_mac, 6) == 0) {
+    if (!netw_table[n].noaddr && memcmp(frame, gw_mac, 6) == 0) {
         if (flen > (long)L2_ETH_HDR && frame[12] == 0x08U &&
             frame[13] == 0x00U) {
             return packet_write(frame + L2_ETH_HDR,
@@ -2738,6 +2764,9 @@ static int server_l2_input(server_client_t *entry, const uint8_t *plain,
         server_client_t *dst = &server_clients[to - 1U];
 
         if (dst != entry && dst->active && dst->net1 == entry->net1) {
+#ifdef CAMEX_MESH
+            server_relay_count(entry, dst, (size_t)flen);
+#endif
             return server_l2_send(dst, frame, (size_t)flen);
         }
         return 0;
@@ -2763,6 +2792,345 @@ static int server_l2_from_tun(server_client_t *dst, const uint8_t *packet,
     frame[13] = 0x00U;
     memcpy(frame + L2_ETH_HDR, packet, len);
     return server_l2_send(dst, frame, L2_ETH_HDR + len);
+}
+#endif
+
+
+#ifdef CAMEX_MESH
+/*
+ * Mesh networks (mesh.h): the server learns each mesh client's peer
+ * socket (ENDPOINT), hands pairs their keys and endpoints (PEER?), and
+ * keeps what clients report about their peers (STATS) and how much it
+ * relays between pairs.
+ */
+typedef struct {
+    time_t owner;                 /* the entry's registered_at */
+    struct sockaddr_in p2p;       /* its peer socket after its NAT */
+    time_t p2p_seen;
+    struct sockaddr_in lan;       /* that socket on its own LAN */
+    uint8_t has_lan;
+    char stats[CAMEX_CONTROL_MAX];   /* its last STATS */
+    time_t stats_at;
+} server_mesh_t;
+
+static server_mesh_t **server_meshes = NULL;
+
+static server_mesh_t *mesh_of(const server_client_t *e, int create)
+{
+    size_t slot = (size_t)(e - server_clients);
+    server_mesh_t *m;
+
+    if (server_meshes == NULL) {
+        if (!create) {
+            return NULL;
+        }
+        server_meshes = calloc(server_max_clients, sizeof(*server_meshes));
+        if (server_meshes == NULL) {
+            return NULL;
+        }
+    }
+    m = server_meshes[slot];
+    if (m == NULL && create) {
+        m = server_meshes[slot] = calloc(1U, sizeof(*m));
+    }
+    if (m != NULL && m->owner != e->registered_at) {
+        memset(m, 0, sizeof(*m));   /* another client in the slot */
+        m->owner = e->registered_at;
+    }
+    return m;
+}
+
+/* Pairs the server relays: their traffic for --top */
+#define SERVER_RELAY_PAIRS 256U
+typedef struct {
+    uint32_t a1, b1;              /* slots + 1, from a to b */
+    time_t a_since, b_since;      /* their registered_at: a reused slot */
+    uint64_t bytes;
+    uint64_t mark;
+    uint32_t rate;
+    time_t last;
+} server_relay_t;
+
+static server_relay_t server_relays[SERVER_RELAY_PAIRS];
+
+static void server_relay_count(const server_client_t *from,
+                               const server_client_t *to, size_t len)
+{
+    uint32_t a1 = (uint32_t)(from - server_clients) + 1U;
+    uint32_t b1 = (uint32_t)(to - server_clients) + 1U;
+    uint32_t h = (a1 * 2654435761U) ^ (b1 * 40503U);
+    server_relay_t *victim = NULL;
+    size_t i;
+
+    if (from->net1 == 0U || !netw_table[from->net1 - 1U].mesh) {
+        return;
+    }
+    for (i = 0U; i < 8U; ++i) {
+        server_relay_t *r = &server_relays[(h + i) % SERVER_RELAY_PAIRS];
+
+        if (r->a1 == a1 && r->b1 == b1 && r->a_since == from->registered_at &&
+            r->b_since == to->registered_at) {
+            r->bytes += len;
+            r->last = g_now;
+            return;
+        }
+        if (victim == NULL || r->last < victim->last) {
+            victim = r;
+        }
+    }
+    memset(victim, 0, sizeof(*victim));
+    victim->a1 = a1;
+    victim->b1 = b1;
+    victim->a_since = from->registered_at;
+    victim->b_since = to->registered_at;
+    victim->bytes = len;
+    victim->last = g_now;
+}
+
+static void server_relay_rates(double dt)
+{
+    size_t i;
+
+    for (i = 0U; i < SERVER_RELAY_PAIRS; ++i) {
+        server_relay_t *r = &server_relays[i];
+
+        if (r->a1 == 0U) {
+            continue;
+        }
+        r->rate = (uint32_t)((double)(r->bytes - r->mark) / dt);
+        r->mark = r->bytes;
+    }
+}
+
+/* A control message to a client inside its session */
+static int server_send_control(server_client_t *e, const char *text)
+{
+    uint8_t plain[CAMEX_CONTROL_MAX];
+    uint8_t out[CAMEX_CONTROL_MAX + V2_OVERHEAD];
+    size_t n = strlen(text);
+    size_t len;
+
+    if (!e->cur.valid || n + 1U > sizeof(plain)) {
+        return -1;
+    }
+    plain[0] = MESH_CTRL;
+    memcpy(plain + 1, text, n);
+    len = session_seal(&e->cur, plain, n + 1U, out, sizeof(out));
+    if (len == 0U) {
+        return -1;
+    }
+    if (e->tcp_fd >= 0) {
+        int accepted = 0;
+
+        (void)net_tcp_send_frame_ex(e->tcp_fd, out, len, &accepted);
+        return accepted ? 0 : -1;
+    }
+    return server_send(e, out, len);
+}
+
+static void sock_text(const struct sockaddr_in *a, char *buf, size_t size)
+{
+    char ip[INET_ADDRSTRLEN];
+
+    inet_ntop(AF_INET, &a->sin_addr, ip, sizeof(ip));
+    snprintf(buf, size, "%s:%u", ip, (unsigned)ntohs(a->sin_port));
+}
+
+/* "PEER ..." to `to` about `about` */
+static void server_peer_msg(server_client_t *to, server_client_t *about,
+                            const char *key64, uint32_t pair)
+{
+    server_mesh_t *m = mesh_of(about, 0);
+    char msg[512], ip[16] = "-", mac[18] = "-", pub[32] = "-", lan[32] = "-";
+
+    if (about->ip_be != 0U) {
+        ip_text(ntohl(about->ip_be), ip, sizeof(ip));
+    }
+#ifdef CAMEX_L2
+    if (netw_table[about->net1 - 1U].tap) {
+        uint8_t mm[6];
+
+        l2_client_mac(netw_table[about->net1 - 1U].id, about->client_id, mm);
+        l2_mac_text(mm, mac, sizeof(mac));
+    }
+#endif
+    if (m != NULL && m->p2p_seen != 0) {
+        sock_text(&m->p2p, pub, sizeof(pub));
+    }
+    if (m != NULL && m->has_lan) {
+        sock_text(&m->lan, lan, sizeof(lan));
+    }
+    snprintf(msg, sizeof(msg), "PEER id=%s ip=%s mac=%s pub=%s lan=%s key=%s "
+             "pair=%08x", about->client_id, ip, mac, pub, lan, key64,
+             (unsigned)pair);
+    (void)server_send_control(to, msg);
+}
+
+/* PEER? from a client: the other end of a pair */
+static void server_mesh_ask(server_client_t *e, const char *msg)
+{
+    const char *ip = strstr(msg, "ip=");
+#ifdef CAMEX_L2
+    const char *mac = strstr(msg, "mac=");
+#endif
+    server_client_t *peer = NULL;
+    const char *why = NULL;
+    char what[40];
+    server_mesh_t *me = mesh_of(e, 0);
+    server_mesh_t *pm;
+    int n = (int)e->net1 - 1;
+
+    if (ip != NULL) {
+        struct in_addr a;
+        char t[16];
+        size_t l = strcspn(ip + 3, " ");
+
+        snprintf(t, sizeof(t), "%.*s", (int)(l < 15U ? l : 15U), ip + 3);
+        snprintf(what, sizeof(what), "ip=%s", t);
+        if (inet_pton(AF_INET, t, &a) == 1) {
+            peer = server_find_by_ip(a.s_addr);
+        }
+    }
+#ifdef CAMEX_L2
+    else if (mac != NULL) {
+        uint8_t m[6];
+        char t[18];
+
+        snprintf(t, sizeof(t), "%.17s", mac + 4);
+        snprintf(what, sizeof(what), "mac=%s", t);
+        if (l2_mac_parse(t, m) == 0) {
+            uint32_t s1 = l2_mac_lookup(e->net1, m, g_now);
+
+            if (s1 != 0U && s1 - 1U < server_max_clients) {
+                uint8_t own[6];
+
+                peer = &server_clients[s1 - 1U];
+                /* Only the peer's own MAC: a bridge's LAN goes on
+                 * through the server */
+                l2_client_mac(netw_table[n].id, peer->client_id, own);
+                if (memcmp(own, m, 6) != 0) {
+                    peer = NULL;
+                    why = "a device behind a bridge";
+                }
+            }
+        }
+    }
+#endif
+    else {
+        return;
+    }
+    if (peer == NULL || peer == e || !peer->active || !peer->registered ||
+        peer->net1 != e->net1) {
+        why = why != NULL ? why : "no such client";
+    } else if (!peer->mesh) {
+        why = "the peer cannot go peer to peer";
+    } else if (net_isolation(n)) {
+        why = "client_isolation";
+    } else if (me == NULL || me->p2p_seen == 0 ||
+               (pm = mesh_of(peer, 0)) == NULL || pm->p2p_seen == 0) {
+        why = "no peer socket yet";
+    }
+    if (why != NULL) {
+        char out[128];
+
+        snprintf(out, sizeof(out), "NOPEER %s why=%s", what, why);
+        for (size_t k = 0U; out[k] != '\0'; ++k) {
+            if (k > 7U && out[k] == ' ' && strncmp(out + k + 1, "why=", 4) != 0
+                && k > strlen("NOPEER ") + strlen(what) + 4U) {
+                out[k] = '_';   /* one token for the reason */
+            }
+        }
+        (void)server_send_control(e, out);
+        return;
+    }
+    {
+        uint8_t key[32];
+        char key64[KEY_B64_LEN + 1U];
+        uint32_t pair = 0U;
+
+        if (get_random_bytes(key, sizeof(key)) != 0 ||
+            get_random_bytes(&pair, sizeof(pair)) != 0 || pair == 0U) {
+            return;
+        }
+        key_base64_encode(key, sizeof(key), key64, sizeof(key64));
+        crypto_wipe(key, sizeof(key));
+        server_peer_msg(e, peer, key64, pair);
+        server_peer_msg(peer, e, key64, pair);
+        crypto_wipe(key64, sizeof(key64));
+        log_message(LOG_INFO, "Network %s: peers %s and %s try a direct "
+                    "path", netw_label(n), e->client_id, peer->client_id);
+    }
+}
+
+static void server_mesh_control(server_client_t *e, const uint8_t *data,
+                                size_t len)
+{
+    char msg[CAMEX_CONTROL_MAX];
+    server_mesh_t *m;
+
+    if (!e->mesh || e->net1 == 0U || !netw_table[e->net1 - 1U].mesh ||
+        len >= sizeof(msg)) {
+        return;
+    }
+    memcpy(msg, data, len);
+    msg[len] = '\0';
+    if (strncmp(msg, "PEER? ", 6) == 0) {
+        server_mesh_ask(e, msg + 6);
+    } else if (strncmp(msg, "LAN ", 4) == 0) {
+        char ip[16];
+        unsigned int port;
+
+        m = mesh_of(e, 1);
+        if (m != NULL && sscanf(msg + 4, "%15[0-9.]:%u", ip, &port) == 2 &&
+            port > 0U && port < 65536U &&
+            inet_pton(AF_INET, ip, &m->lan.sin_addr) == 1) {
+            m->lan.sin_family = AF_INET;
+            m->lan.sin_port = htons((uint16_t)port);
+            m->has_lan = 1U;
+        }
+    } else if (strncmp(msg, "STATS", 5) == 0) {
+        m = mesh_of(e, 1);
+        if (m != NULL) {
+            snprintf(m->stats, sizeof(m->stats), "%s", msg + 5);
+            m->stats_at = g_now;
+        }
+    }
+}
+
+/* ENDPOINT: a mesh client's peer socket, sealed with its session */
+static int server_handle_endpoint(const uint8_t *buffer, size_t len,
+                                  const struct sockaddr_in *from, int fd)
+{
+    uint32_t idx = v2_data_receiver(buffer);
+    uint32_t slot1 = idx & 0xFFFFU;
+    server_client_t *c;
+    session_t *s = NULL;
+    uint8_t plain[16];
+    size_t plain_len = 0U;
+    server_mesh_t *m;
+
+    if (fd >= 0 || slot1 == 0U || slot1 > server_max_clients) {
+        return -1;
+    }
+    c = &server_clients[slot1 - 1U];
+    if (!c->active || !c->mesh) {
+        return -1;
+    }
+    if (c->cur.valid && c->cur.local_index == idx) {
+        s = &c->cur;
+    } else if (c->next.valid && c->next.local_index == idx) {
+        s = &c->next;
+    }
+    if (s == NULL || session_open_as(s, V2_TYPE_ENDPOINT, buffer, len, plain,
+                                     sizeof(plain), &plain_len) != 0) {
+        return -1;
+    }
+    m = mesh_of(c, 1);
+    if (m != NULL) {
+        m->p2p = *from;
+        m->p2p_seen = g_now;
+    }
+    return 0;
 }
 #endif
 
@@ -2871,6 +3239,13 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
         return 0;
     }
 
+    /* A control message (mesh.h) */
+    if (plain[0] == 0xC0U) {
+#ifdef CAMEX_MESH
+        server_mesh_control(entry, plain + 1, plain_len - 1U);
+#endif
+        return 0;
+    }
 #ifdef CAMEX_L2
     if (server_l2_net(entry)) {
         return server_l2_input(entry, plain, plain_len);
@@ -2926,6 +3301,11 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
                                                : "(manual)");
             return 0;
         }
+#ifdef CAMEX_MESH
+        if (to != NULL && to != entry) {
+            server_relay_count(entry, to, plain_len);
+        }
+#endif
     }
     return server_forward_packet(plain, plain_len, src_ip_be, dst_ip_be);
 }
@@ -3022,6 +3402,10 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
         return server_handle_init(buffer, len, from, fd);
     case V2_TYPE_KEYREQ:
         return server_handle_keyreq(from, fd);
+#ifdef CAMEX_MESH
+    case V2_TYPE_ENDPOINT:
+        return server_handle_endpoint(buffer, len, from, fd);
+#endif
     case V2_TYPE_DATA:
         return server_handle_data(buffer, len, from, fd);
     default:
@@ -3273,6 +3657,112 @@ static const char *status_key(const server_client_t *c)
                    keystore_key_owned_by(c->psk_key, c->client_id)
                ? "own" : "global";
 }
+
+
+#ifdef CAMEX_MESH
+/* Mesh networks in the status: the pairs the server relays (traffic it
+ * sees), and the peers the clients report (STATS; direct paths the server
+ * does not see). JSON: after the clients array, "relayed" and "peers". */
+static void status_mesh(status_buf_t *b, int json)
+{
+    size_t i;
+    unsigned int shown = 0U;
+
+    if (json) {
+        sb_printf(b, "],\"relayed\":[");
+    }
+    for (i = 0U; i < SERVER_RELAY_PAIRS; ++i) {
+        const server_relay_t *r = &server_relays[i];
+        const server_client_t *a;
+        const server_client_t *c;
+        char tot[24], rate[24];
+
+        if (r->a1 == 0U || r->a1 > server_max_clients ||
+            r->b1 > server_max_clients ||
+            difftime(g_now, r->last) > 600.0) {
+            continue;
+        }
+        a = &server_clients[r->a1 - 1U];
+        c = &server_clients[r->b1 - 1U];
+        if (!a->active || !c->active) {
+            continue;
+        }
+        if (json) {
+            sb_printf(b, "%s{\"from\":", shown > 0U ? "," : "");
+            sb_json_str(b, a->client_id);
+            sb_printf(b, ",\"to\":");
+            sb_json_str(b, c->client_id);
+            sb_printf(b, ",\"bytes\":%llu,\"rate\":%u}",
+                      (unsigned long long)r->bytes, (unsigned)r->rate);
+        } else {
+            if (shown == 0U) {
+                sb_printf(b, "\nRELAYED BY THE SERVER\n%-32s  %10s  %10s\n",
+                          "FROM -> TO", "RATE", "TOTAL");
+            }
+            status_bytes(tot, sizeof(tot), r->bytes);
+            status_bytes(rate, sizeof(rate), r->rate);
+            {
+                char pair[80];
+
+                snprintf(pair, sizeof(pair), "%s -> %s", a->client_id,
+                         c->client_id);
+                sb_printf(b, "%-32s  %8s/s  %10s\n", pair, rate, tot);
+            }
+        }
+        ++shown;
+    }
+    if (json) {
+        sb_printf(b, "],\"peers\":[");
+    }
+    shown = 0U;
+    for (i = 0U; server_meshes != NULL && i < server_max_clients; ++i) {
+        const server_client_t *c = &server_clients[i];
+        const server_mesh_t *m = server_meshes[i];
+        const char *p;
+
+        if (m == NULL || !c->active || m->owner != c->registered_at ||
+            m->stats_at == 0) {
+            continue;
+        }
+        /* "|<peer> <state> <rx> <tx> <rx/s> <tx/s> <since>" each */
+        for (p = strchr(m->stats, '|'); p != NULL; p = strchr(p + 1, '|')) {
+            char peer[CAMEX_CLIENT_ID_LEN], state[16];
+            unsigned long long rx, tx;
+            unsigned int rr, tr;
+            long since;
+
+            if (sscanf(p + 1, "%31s %15s %llu %llu %u %u %ld", peer, state,
+                       &rx, &tx, &rr, &tr, &since) != 7) {
+                continue;
+            }
+            if (json) {
+                sb_printf(b, "%s{\"client\":", shown > 0U ? "," : "");
+                sb_json_str(b, c->client_id);
+                sb_printf(b, ",\"peer\":");
+                sb_json_str(b, peer);
+                sb_printf(b, ",\"state\":\"%s\",\"rx_bytes\":%llu,"
+                          "\"tx_bytes\":%llu,\"rx_rate\":%u,\"tx_rate\":%u,"
+                          "\"reported_s\":%.0f}", state, rx, tx, rr, tr,
+                          difftime(g_now, m->stats_at));
+            } else {
+                char a[24], t[24], pair[80];
+
+                if (shown == 0U) {
+                    sb_printf(b, "\nPEERS (as the clients report them)\n"
+                              "%-32s  %-8s  %10s  %10s\n", "CLIENT -> PEER",
+                              "PATH", "RX/s", "TX/s");
+                }
+                status_bytes(a, sizeof(a), rr);
+                status_bytes(t, sizeof(t), tr);
+                snprintf(pair, sizeof(pair), "%s -> %s", c->client_id, peer);
+                sb_printf(b, "%-32s  %-8s  %8s/s  %8s/s\n", pair, state, a, t);
+            }
+            ++shown;
+        }
+    }
+    /* JSON: the caller's "]," closes "peers" */
+}
+#endif
 
 /* The networks: header lines of the table, or "networks":[...], in b */
 static void status_networks(status_buf_t *b, int json)
@@ -3615,6 +4105,9 @@ char *server_status(int json, size_t *len)
         used++;
     }
     free(order);
+#ifdef CAMEX_MESH
+    status_mesh(&b, json);
+#endif
 
     if (json) {
         size_t n = 0U;
@@ -3945,7 +4438,7 @@ void server_networks_apply(void)
             t->alias_up = 0U;
             t->alias_ip = 0U;
         }
-        if (t->active && !t->alias_up && tun_fd >= 0) {
+        if (t->active && !t->noaddr && !t->alias_up && tun_fd >= 0) {
             if (tun_alias_set((unsigned int)i, gw, t->pool_prefix) == 0) {
                 char pool[24];
 
@@ -4018,4 +4511,7 @@ void server_rates_tick(void)
         c->rate_rx_mark = c->rx_bytes;
         c->rate_tx_mark = c->tx_bytes;
     }
+#ifdef CAMEX_MESH
+    server_relay_rates(dt);
+#endif
 }

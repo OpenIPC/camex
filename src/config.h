@@ -36,6 +36,7 @@ typedef struct {
     int web_port;    /* web_port= (#174): nginx's port on the client, 0 = not set */
     char psk[128];   /* hex: + 64 digits fits; passphrases too */
     uint8_t l2;      /* CONFIG of a TAP network: MODE=TAP */
+    uint8_t mesh;    /* CONFIG of a mesh network: MESH=1 */
     uint8_t mac[6];  /* and the client's MAC there */
 } camex_profile_t;
 

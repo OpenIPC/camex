@@ -69,6 +69,9 @@ typedef struct {
     char known_servers[256];   /* client: --known-servers, where the keys of
                                 * servers first met are kept; "none" = off */
     uint8_t top;               /* --top: a live view of the server(s) */
+    char bridge_if[IFNAMSIZ];  /* client: --bridge, the LAN interface */
+    uint8_t bridge_mode;       /* --bridge-mode: bridge_mode_t */
+    uint8_t mesh;              /* client: the server's CONFIG said MESH=1 */
     uint8_t l2;                /* client: the server's CONFIG said MODE=TAP */
     uint8_t l2_mac[6];         /* the MAC it gave for the TAP interface */
     int top_interval;          /* --top -d <seconds> (default 1) */

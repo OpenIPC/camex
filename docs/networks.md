@@ -163,3 +163,161 @@ bytes a second.
 
 `camex --top` shows the clients redrawn every second (`--interval <s>` sets
 the interval), busiest first, with RX/s and TX/s. Press `q` to quit.
+
+## The full camex
+
+Three features are built only into the full camex: TAP networks, bridging a
+LAN, and mesh networks. Each release has both binaries: `camex-<arch>`, the
+core as before, and `camex-<arch>-full`. To build the full one:
+
+```sh
+make CAMEX_L2=1 CAMEX_MESH=1        # both; either flag alone works too
+```
+
+A core camex refuses what it was built without, and says so:
+
+- a server refuses `mode = tap` or `mesh = yes` in its file;
+- a client refuses a server's `MODE=TAP`;
+- a client built without mesh never asks for it, and its network's other
+  clients reach it through the server.
+
+## TAP networks (`mode = tap`)
+
+```ini
+[network lan]
+mode = tap
+pool = 10.66.0.0/24
+```
+
+A TAP network carries Ethernet frames, not IPv4 packets. Each client gets a
+TAP interface (`tap0`) with a MAC the server derives from the network and its
+ID. The MAC is locally administered and the same after any restart. The
+client also gets its address from the pool as in a TUN network.
+
+- The server is the network's switch. It learns which client a MAC is behind
+  and sends a frame only there. It floods broadcast, multicast and unknown
+  destinations to the network's other clients; with `client_isolation` it
+  floods nothing and drops frames between clients.
+- The server is also the network's gateway. It answers ARP for the gateway
+  address with the gateway's MAC, and IPv4 sent to that MAC goes to its tunnel
+  interface.
+- MTU 1500: camex carries a frame longer than 1300 bytes in pieces of its own
+  (up to 8), each in its own packet. A full 1514-byte frame never needs an IP
+  fragment on the way, which NATs and mobile networks often drop; the largest
+  datagram is about 1340 bytes.
+- TAP clients run on Linux only, with `/dev/net/tun`, or with `camex.ko`
+  loaded with `mode=tap` ([kernel-module.md](kernel-module.md)). Android
+  (`VpnService`), macOS and Windows have no TAP devices.
+
+`addresses = none` gives the clients no addresses: the TAP interface comes up
+without one, and the server is only the switch, with no gateway. Use it for a
+network bridged to a LAN, whose devices take addresses from the LAN, e.g. with
+`udhcpc -i tap0`.
+
+## Bridging a LAN (`--bridge`)
+
+```sh
+camex --server-host vpn.example.org --network site --bridge eth0
+```
+
+A client of a TAP network can bridge it to one of its interfaces. The remote
+devices are then on that LAN as if plugged into it: DHCP from the LAN works,
+and they reach the LAN's devices and are reached by them. The host keeps its
+own settings and goes on reaching everything:
+
+- **No bridge device, no TAP device.** A packet socket on the interface sees
+  every frame there, including the host's own outgoing ones, and sends frames
+  onto it. Promiscuous mode is asked through that socket, and the kernel drops
+  it when camex stops; the interface's flags, addresses and offloads are left
+  alone.
+- **LAN → remote devices:** broadcast, multicast, and frames to a MAC that
+  came from the tunnel go into the tunnel; the rest stays on the LAN.
+- **Host ↔ remote devices:** a frame sent through the packet socket never
+  reaches the host's own stack, so camex hands IPv4 packets for the host to it
+  through a raw IP socket. It answers ARP for the host's address, and gives the
+  host permanent neighbour entries for the remote devices, which it removes
+  when it stops.
+- **Offloads:** the kernel says which frames still need their checksum
+  (checksum offload) and which are TCP segments merged by TSO or GRO
+  (`PACKET_VNET_HDR`). camex completes the checksums and cuts the merged
+  segments into frames of the interface's MTU.
+- **Loops:** every bridge sends a probe frame (EtherType `0x88B5`) on its LAN
+  every 5 s. A bridge that sees another bridge of the same network there with
+  a lower client ID stops bridging, and says so, until that one has been
+  silent for 15 s.
+
+`--bridge-mode` sets how frames go onto the LAN:
+
+| Mode   | When                                                   | What passes                                     |
+|--------|--------------------------------------------------------|-------------------------------------------------|
+| `full` | Ethernet, a Wi-Fi access point or 4-address (WDS) link | every frame, as it is                           |
+| `nat`  | a Wi-Fi client (station)                               | IPv4 and ARP, with the host's MAC towards the LAN |
+| `auto` | the default                                            | `nat` on a Wi-Fi interface, `full` elsewhere    |
+
+A Wi-Fi access point takes frames only from the MACs associated with it, so
+over a Wi-Fi station link the bridge works like OpenWrt's `relayd`:
+
+- remote devices' frames go onto the LAN with the host's MAC, ARP included;
+- frames to the host's MAC whose IPv4 destination is a remote device go to
+  that device;
+- DHCP requests keep their client hardware address and ask for broadcast
+  answers, so every remote device still gets its own lease.
+
+Only IPv4 and ARP pass. If the host forwards IPv4 (`ip_forward=1`), it also
+routes the packets meant for remote devices; camex warns about it.
+
+## Mesh networks (`mesh = yes`)
+
+```ini
+[network cams]
+mesh = yes
+```
+
+In a mesh network, clients talk to each other directly wherever their NATs
+let them, and through the server where they cannot. It works for TUN and TAP
+networks alike.
+
+- **Peer socket.** Every mesh client opens a second UDP socket for its peers.
+  It sends an `ENDPOINT` packet from it to the server, sealed with its session
+  so nobody else can claim it, every 20 s. The server learns that socket's
+  address and port after the client's NAT. The client also tells the server
+  the socket's address on its own LAN.
+- **Asking for a peer.** Traffic to another client of the network goes through
+  the server at first, as always. With it, the client asks the server about
+  that peer in a control message inside its session. The server answers both
+  clients at once with each other's two endpoints and a fresh key for the
+  pair.
+- **Punching.** Both clients send punches to each other's public and LAN
+  endpoints every 250 ms for 10 s. That opens their NATs to each other. The
+  first authenticated answer makes the path direct, and the client logs `Mesh:
+  peer <ID> direct at <address>`. Peer-to-peer packets are sealed with the
+  pair's keys (ChaCha20-Poly1305, one key and counter per direction, with a
+  replay window).
+- **Falling back.** A direct path without a packet for 35 s goes back through
+  the server (`back through the server`) and is tried again 5 s later. One that
+  never opens stays on the server (`stays on the server: no answer to
+  punches`) and is tried again after 60 s. Traffic never stops either way.
+- **Keepalives.** A direct path gets one every 15 s while it carries nothing.
+
+| Peers behind                                   | Path                    |
+|------------------------------------------------|-------------------------|
+| ordinary NATs (one mapping per inside port)    | direct                  |
+| the same NAT, on one LAN                       | direct, over the LAN    |
+| symmetric NATs on both sides                   | through the server      |
+
+In a TAP mesh network, frames to another client's own MAC go direct.
+Broadcasts, and devices behind a bridging client, go through the server.
+
+The server hands out the pair keys, so it could read what its clients send
+each other. That is the same trust as in hub mode, where the server forwards
+everything.
+
+`camex --status` and `--top` on the server show:
+
+- `RELAYED BY THE SERVER`: the pairs whose traffic the server forwards, with
+  their rates;
+- `PEERS (as the clients report them)`: each client's peers, path (`direct`,
+  `relay`, `punching`) and rates. Clients report every 30 s, and the server
+  does not see direct traffic itself.
+
+`--json` has `relayed` and `peers` for the same.

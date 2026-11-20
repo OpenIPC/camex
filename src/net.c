@@ -517,6 +517,24 @@ int net_send_text(int fd, const struct sockaddr_in *to, const char *text)
     return net_send_payload(fd, to, (const uint8_t *)text, strlen(text));
 }
 
+int net_client_peer_addr(struct sockaddr_in *out)
+{
+    socklen_t l = sizeof(*out);
+
+    return net_fd >= 0 &&
+           getpeername(net_fd, (struct sockaddr *)out, &l) == 0 &&
+           out->sin_family == AF_INET ? 0 : -1;
+}
+
+int net_client_local_addr(struct sockaddr_in *out)
+{
+    socklen_t l = sizeof(*out);
+
+    return net_fd >= 0 &&
+           getsockname(net_fd, (struct sockaddr *)out, &l) == 0 &&
+           out->sin_family == AF_INET ? 0 : -1;
+}
+
 int net_client_send(const uint8_t *data, size_t len)
 {
     if (current_config.transport == CAMEX_TRANSPORT_TCP) {

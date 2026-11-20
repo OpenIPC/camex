@@ -13,6 +13,10 @@
  *   fd = open("/dev/camex", O_RDWR);
  *   // read() → raw IPv4 packets from kernel to userspace
  *   // write() → inject raw IPv4 packets into kernel stack
+ *
+ * With mode=tap (insmod camex.ko mode=tap) the interface is an Ethernet
+ * one instead, like tun's IFF_TAP: read() and write() carry whole frames
+ * (a TAP network of the full camex, CAMEX_L2).
  */
 
 #include <linux/module.h>
@@ -114,6 +118,23 @@
 #define DEV_NAME     "camex"
 #define QUEUE_LIMIT   64    /* max packets queued for userspace read() */
 #define CAMEX_MTU    1500
+
+/* mode=tun (the default) or mode=tap */
+static char *mode = "tun";
+module_param(mode, charp, 0444);
+MODULE_PARM_DESC(mode, "tun: IPv4 packets (default); tap: Ethernet frames");
+
+static int camex_tap(void)
+{
+    return mode != NULL && strcmp(mode, "tap") == 0;
+}
+
+/* A random MAC: eth_hw_addr_random() came in 3.4 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 4, 0)
+# define CAMEX_RANDOM_MAC(dev) eth_hw_addr_random(dev)
+#else
+# define CAMEX_RANDOM_MAC(dev) random_ether_addr((dev)->dev_addr)
+#endif
 
 /* ================================================================
  * Data structures
@@ -221,6 +242,15 @@ static const struct net_device_ops camex_netdev_ops = {
     .ndo_start_xmit = camex_net_xmit,
 };
 
+/* mode=tap: the MAC can be set (camex gives the one of its network) */
+static const struct net_device_ops camex_tap_netdev_ops = {
+    .ndo_open            = camex_net_open,
+    .ndo_stop            = camex_net_stop,
+    .ndo_start_xmit      = camex_net_xmit,
+    .ndo_set_mac_address = eth_mac_addr,
+    .ndo_validate_addr   = eth_validate_addr,
+};
+
 /**
  * camex_net_setup - called by alloc_netdev to initialise net_device fields.
  *
@@ -229,6 +259,14 @@ static const struct net_device_ops camex_netdev_ops = {
  */
 static void camex_net_setup(struct net_device *dev)
 {
+    if (camex_tap()) {
+        /* An Ethernet interface, as tun's IFF_TAP */
+        ether_setup(dev);
+        dev->netdev_ops   = &camex_tap_netdev_ops;
+        dev->tx_queue_len = 500;
+        CAMEX_RANDOM_MAC(dev);
+        return;
+    }
     dev->netdev_ops      = &camex_netdev_ops;
     dev->flags           = IFF_POINTOPOINT | IFF_NOARP | IFF_MULTICAST;
     dev->type            = ARPHRD_NONE;
@@ -388,6 +426,26 @@ static ssize_t camex_chr_write(struct file *filp, const char __user *buf,
     unsigned char     *data;
     unsigned char      first_byte;
 
+    if (camex_tap()) {
+        /* A whole Ethernet frame */
+        if (count < ETH_HLEN || count > 65535)
+            return -EINVAL;
+        skb = netdev_alloc_skb(priv->dev, count + NET_IP_ALIGN);
+        if (!skb)
+            return -ENOMEM;
+        skb_reserve(skb, NET_IP_ALIGN);
+        data = CAMEX_SKB_PUT(skb, count);
+        if (copy_from_user(data, buf, count)) {
+            kfree_skb(skb);
+            return -EFAULT;
+        }
+        skb->protocol = eth_type_trans(skb, priv->dev);
+        priv->dev->stats.rx_packets++;
+        priv->dev->stats.rx_bytes += count;
+        CAMEX_NETIF_RX(skb);
+        return count;
+    }
+
     if (count < 20 || count > 65535)
         return -EINVAL;
 
@@ -510,8 +568,8 @@ static int __init camex_init(void)
         return ret;
     }
 
-    pr_info("camex: loaded — /dev/%s <-> net:%s  (kernel %d.%d)\n",
-            camex_miscdev.name, DEV_NAME,
+    pr_info("camex: loaded — /dev/%s <-> net:%s, %s  (kernel %d.%d)\n",
+            camex_miscdev.name, DEV_NAME, camex_tap() ? "tap" : "tun",
             (LINUX_VERSION_CODE >> 16) & 0xff,
             (LINUX_VERSION_CODE >>  8) & 0xff);
     return 0;

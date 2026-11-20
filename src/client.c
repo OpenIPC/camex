@@ -18,8 +18,12 @@
 #include "camex.h"
 #include "tcpgate.h"
 #include "keys.h"
+#ifdef CAMEX_MESH
+#include "mesh.h"
+#endif
 #ifdef CAMEX_L2
 #include "l2.h"
+#include "bridge.h"
 
 static l2_reasm_t *client_reasm = NULL;   /* the frame in assembly */
 #endif
@@ -288,6 +292,12 @@ static void client_check_config_change(const uint8_t *payload, size_t len)
     char message[CAMEX_CONTROL_MAX];
     camex_config_t probe = current_config;
 
+#ifdef CAMEX_L2
+    if (bridge_active()) {
+        return;   /* a bridge has no tunnel interface to change */
+    }
+#endif
+
     if (len >= sizeof(message)) {
         return;
     }
@@ -384,6 +394,9 @@ static int client_handle_resp(const uint8_t *buffer, size_t len)
     } else {
         log_message(LOG_INFO, "Session keys renewed");
     }
+#ifdef CAMEX_MESH
+    mesh_session_up();   /* the server learns the peer socket's address */
+#endif
     return 0;
 }
 
@@ -429,6 +442,13 @@ int client_handle_net_packet(const uint8_t *buffer, size_t len)
     if (plain_len == 0U) {
         return 0;   /* keepalive answer */
     }
+    /* A control message of the server (mesh.h) */
+    if (plain[0] == 0xC0U) {
+#ifdef CAMEX_MESH
+        mesh_control(plain + 1, plain_len - 1U);
+#endif
+        return 0;
+    }
 #ifdef CAMEX_L2
     if (current_config.l2) {
         const uint8_t *frame = NULL;
@@ -443,7 +463,14 @@ int client_handle_net_packet(const uint8_t *buffer, size_t len)
                      "server");
             return -1;
         }
-        return flen == 0 ? 0 : packet_write(frame, (size_t)flen);
+        if (flen == 0) {
+            return 0;
+        }
+        /* --bridge: onto the LAN (or to the host), no TAP device */
+        if (bridge_active()) {
+            return bridge_from_tunnel(frame, (size_t)flen);
+        }
+        return packet_write(frame, (size_t)flen);
     }
 #endif
     if (tcpgate_active()) {
@@ -625,8 +652,9 @@ int client_wait_for_config(void)
              * checks, not any packet): keep it */
             socket_since = time(NULL);
             if (client_state.config_received &&
-                current_config.local_cidr[0] != '\0' &&
-                current_config.gateway_ip[0] != '\0') {
+                ((current_config.local_cidr[0] != '\0' &&
+                  current_config.gateway_ip[0] != '\0') ||
+                 current_config.l2)) {
                 return 0;
             }
         }
@@ -687,6 +715,23 @@ static int client_l2_send(void *ctx, const uint8_t *payload, size_t len)
 }
 #endif
 
+int client_send_control(const char *text)
+{
+    uint8_t plain[CAMEX_CONTROL_MAX];
+    uint8_t packet[CAMEX_CONTROL_MAX + V2_OVERHEAD];
+    size_t n = strlen(text);
+    size_t len;
+
+    if (!client_state.cur.valid || n + 1U > sizeof(plain)) {
+        return -1;
+    }
+    plain[0] = 0xC0U;   /* MESH_CTRL */
+    memcpy(plain + 1, text, n);
+    len = session_seal(&client_state.cur, plain, n + 1U, packet,
+                       sizeof(packet));
+    return len == 0U || net_client_send(packet, len) < 0 ? -1 : 0;
+}
+
 int client_handle_tun_packet(const uint8_t *buffer, size_t len)
 {
     uint8_t packet[TUN_PACKET_MAX + V2_OVERHEAD];
@@ -698,6 +743,24 @@ int client_handle_tun_packet(const uint8_t *buffer, size_t len)
     if (!client_state.cur.valid) {
         return 0;   /* no session yet: the packet is dropped quietly */
     }
+#ifdef CAMEX_MESH
+    /* A mesh peer with a direct path takes it */
+    if (mesh_client_active()) {
+        int rc;
+
+        if (current_config.l2) {
+            rc = len >= 14U ? mesh_send(0U, buffer, buffer, len) : 0;
+        } else {
+            uint32_t src = 0U, dst = 0U;
+
+            rc = ipv4_parse_endpoints(buffer, len, &src, &dst) == 0
+                     ? mesh_send(dst, NULL, buffer, len) : 0;
+        }
+        if (rc == 1) {
+            return 0;
+        }
+    }
+#endif
 #ifdef CAMEX_L2
     if (current_config.l2) {
         return l2_send_frame(buffer, len, client_l2_send, NULL);

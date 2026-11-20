@@ -806,6 +806,33 @@ static int config_db_parse_file(const char *path, char *line,
                                 val);
                     rc = -1;
                 }
+            } else if (strcmp(content, "mesh") == 0) {
+                int yn = parse_yes_no(val);
+
+                if (yn < 0) {
+                    log_message(LOG_ERR, "Invalid value for mesh: %s", val);
+                    rc = -1;
+                } else {
+#ifdef CAMEX_MESH
+                    network->mesh = (uint8_t)yn;
+#else
+                    if (yn) {
+                        log_message(LOG_ERR, "mesh = yes needs a camex built "
+                                    "with CAMEX_MESH=1 (camex-<arch>-full)");
+                        rc = -1;
+                    }
+#endif
+                }
+            } else if (strcmp(content, "addresses") == 0) {
+                if (strcasecmp(val, "pool") == 0) {
+                    network->noaddr = 0U;
+                } else if (strcasecmp(val, "none") == 0) {
+                    network->noaddr = 1U;
+                } else {
+                    log_message(LOG_ERR, "Invalid addresses: %s (pool or "
+                                "none)", val);
+                    rc = -1;
+                }
             } else if (strcmp(content, "label") == 0) {
                 if (strlen(val) > CAMEX_NET_LABEL_MAX ||
                     !camex_name_valid(val) || strchr(val, ' ') != NULL) {
@@ -1175,7 +1202,10 @@ int config_apply_profile(camex_config_t *config, const camex_profile_t *profile)
         return -1;
     }
 
-    if (profile->local_cidr[0] == '\0' || profile->gateway_ip[0] == '\0') {
+    /* A TAP network without addresses (addresses = none) has neither */
+    if ((profile->local_cidr[0] == '\0' || profile->gateway_ip[0] == '\0') &&
+        !(profile->l2 && profile->local_cidr[0] == '\0' &&
+          profile->gateway_ip[0] == '\0')) {
         return -1;
     }
 
@@ -1194,6 +1224,7 @@ int config_apply_profile(camex_config_t *config, const camex_profile_t *profile)
         config->mtu = profile->mtu;
     }
     config->l2 = profile->l2;
+    config->mesh = profile->mesh;
     memcpy(config->l2_mac, profile->mac, sizeof(config->l2_mac));
 
     return 0;

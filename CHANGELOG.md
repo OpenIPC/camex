@@ -6,6 +6,37 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 4.5.0 — 2026-11-20
+
+- The full camex, `camex-<arch>-full` next to every `camex-<arch>` (`make CAMEX_L2=1
+  CAMEX_MESH=1`); without the flags the build is the core camex as before. A core camex refuses
+  `mode = tap`, `mesh = yes` and a server's `MODE=TAP`, and says it needs the full one.
+- TAP networks (`mode = tap`, CAMEX_L2): Ethernet frames, a TAP interface with a derived MAC on each
+  client; the server is the network's switch (learned MACs, floods broadcast, multicast and unknown
+  destinations; `client_isolation` floods nothing) and its gateway (ARP for the gateway, IPv4 to its
+  MAC into the tunnel interface). Frames over 1300 bytes go in camex's own pieces (up to 8), so a
+  1514-byte frame of an MTU 1500 LAN never needs an IP fragment; `addresses = none` gives no
+  addresses (a bridged LAN's devices take theirs). `camex.ko mode=tap`: an Ethernet interface.
+- `--bridge <iface>` (CAMEX_L2): a client bridges its TAP network to a LAN without a bridge or TAP
+  device: a packet socket on the interface (promiscuous through the socket); IPv4 to the host through
+  a raw socket, ARP for the host answered, the remote devices as permanent neighbour entries
+  (removed at the stop); checksum offload and TSO/GRO segments completed and cut to the MTU
+  (`PACKET_VNET_HDR`); loop probes (EtherType 0x88B5): of two bridges of a network on one LAN, the
+  higher client ID stops. `--bridge-mode nat` (auto on Wi-Fi): relayd-like, the host's MAC towards
+  the LAN, ARP rewritten, DHCP asks for broadcast answers.
+- Mesh networks (`mesh = yes`, CAMEX_MESH): each client has a peer socket whose public endpoint the
+  server learns (ENDPOINT, sealed with the session) and its LAN one; on traffic to a peer the client
+  asks the server (PEER?), the server gives both peers each other's endpoints and a pair key, both
+  punch at once; a direct path carries P2P packets (ChaCha20-Poly1305, a key and counter per
+  direction, replay window); a silent one (35 s) goes back through the server, a failed punch is
+  tried again after 60 s. The first punches to a public endpoint have TTL 2: they open this side's
+  NAT and die before the peer's, so no early inbound entry in its connection tracking makes Linux
+  NAT give the peer's mapping another port. `--status`/`--top`: relayed pairs and the peers clients
+  report.
+- ChaCha20 with NEON on 32-bit ARM (`chacha_neon.c`, four blocks at a time), used only when the
+  CPU has NEON (AT_HWCAP), so one `camex-arm` still runs on ARMv5/ARMv6; `CAMEX_NEON=0` leaves it
+  out. `camex --bench-crypto`: packets a second of 1400 bytes, and whether NEON is used.
+
 ## 4.4.0 — 2026-11-20
 
 - Named networks ([docs/networks.md](docs/networks.md)): a client joins with the server's address

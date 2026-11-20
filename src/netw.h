@@ -48,6 +48,8 @@ typedef struct {
     uint8_t pool_set;
     int8_t isolation;       /* client_isolation=: -1 not set, 0, 1 */
     uint8_t tap;            /* mode = tap: an Ethernet network (CAMEX_L2) */
+    uint8_t noaddr;         /* addresses = none: camex gives no addresses */
+    uint8_t mesh;           /* mesh = yes: peers go direct (CAMEX_MESH) */
 } camex_net_conf_t;
 
 /* A network of the running server */
@@ -61,6 +63,8 @@ typedef struct {
     uint8_t pool_set;       /* its pool came from pool= */
     int8_t isolation;       /* -1: the server's client_isolation */
     uint8_t tap;            /* an Ethernet network */
+    uint8_t noaddr;         /* camex gives its clients no addresses */
+    uint8_t mesh;           /* clients go peer to peer where they can */
     uint8_t alias_up;       /* the server put alias_ip on its tunnel */
     uint32_t alias_ip;      /* that address, host order */
     time_t created;

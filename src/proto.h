@@ -49,6 +49,15 @@ int proto_parse_register(char *message,
                          uint8_t *auto_request, int *web_port,
                          uint8_t *net_id, uint8_t *has_net);
 
+/* The same, and MESH (the client can go peer to peer) in *mesh (NULL:
+ * not wanted) */
+int proto_parse_register_ex(char *message,
+                            char *client_id, size_t client_id_size,
+                            char *local_ip, size_t local_ip_size,
+                            uint8_t *auto_request, int *web_port,
+                            uint8_t *net_id, uint8_t *has_net,
+                            uint8_t *mesh);
+
 /* Build CONFIG text message */
 int proto_build_config(const char *client_id,
                        const camex_profile_t *profile,

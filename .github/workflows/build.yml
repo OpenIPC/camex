@@ -141,6 +141,18 @@ jobs:
         run: ./docker/test-e2e-networks.sh
         if: matrix.target == 'x86_64'
 
+      - name: E2E test (TAP networks, the full camex)
+        run: ./docker/test-e2e-tap.sh
+        if: matrix.target == 'x86_64'
+
+      - name: E2E test (a TAP network bridged to a LAN)
+        run: ./docker/test-e2e-bridge.sh
+        if: matrix.target == 'x86_64'
+
+      - name: E2E test (mesh: direct paths through NATs, relay)
+        run: ./docker/test-e2e-mesh.sh
+        if: matrix.target == 'x86_64'
+
       - name: E2E test (nginx map of the clients, issue #84)
         run: ./docker/test-e2e-nginx-map.sh
         if: matrix.target == 'x86_64'
@@ -176,14 +188,17 @@ jobs:
       - name: Report size
         run: |
           echo "## ${{ matrix.target }} binary sizes" | tee -a sizes.md
-          ls -lh "${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.target }}" | \
+          ls -lh "${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.target }}" \
+                 "${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.target }}-full" | \
             awk '{print "- `" $5 "`  " $9}' | tee -a sizes.md
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: camex-${{ matrix.target }}
-          path: ${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.target }}
+          path: |
+            ${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.target }}
+            ${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.target }}-full
           if-no-files-found: error
 
       - name: Upload size report
@@ -698,8 +713,9 @@ jobs:
 
           mkdir release
           # Linux: static musl binaries, one per architecture
+          # ... and the full camex (TAP networks, --bridge, mesh) of each
           for arch in aarch64 arm mipsel x86_64; do
-            cp -v "artifacts/camex-$arch" release/
+            cp -v "artifacts/camex-$arch" "artifacts/camex-$arch-full" release/
           done
           # Android: the signed release APK only (the debug APK has another name)
           cp -v artifacts/camex-android.apk release/

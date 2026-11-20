@@ -73,6 +73,13 @@ int proto_build_register(const camex_config_t *config,
                 return -1;
             }
         }
+#ifdef CAMEX_MESH
+        /* With a network only: a server that knows NET knows MESH */
+        if (config->network[0] != '\0' &&
+            append_control_field(buffer, size, &offset, " MESH=1") != 0) {
+            return -1;
+        }
+#endif
         /* Only when given: a server before 3.19.0 refuses a REGISTER with
          * a field it does not know (#174) */
         if (config->web_port > 0 &&
@@ -107,6 +114,18 @@ int proto_parse_register(char *message,
                          char *local_ip, size_t local_ip_size,
                          uint8_t *auto_request, int *web_port,
                          uint8_t *net_id, uint8_t *has_net)
+{
+    return proto_parse_register_ex(message, client_id, client_id_size,
+                                   local_ip, local_ip_size, auto_request,
+                                   web_port, net_id, has_net, NULL);
+}
+
+int proto_parse_register_ex(char *message,
+                            char *client_id, size_t client_id_size,
+                            char *local_ip, size_t local_ip_size,
+                            uint8_t *auto_request, int *web_port,
+                            uint8_t *net_id, uint8_t *has_net,
+                            uint8_t *mesh)
 {
     char *saveptr = NULL;
     char *token;
@@ -187,6 +206,13 @@ int proto_parse_register(char *message,
             }
             if (has_net != NULL) {
                 *has_net = 1U;
+            }
+            continue;
+        }
+
+        if (token_value(token, "MESH", value, sizeof(value)) == 0) {
+            if (mesh != NULL) {
+                *mesh = strcmp(value, "1") == 0 ? 1U : 0U;
             }
             continue;
         }
@@ -304,6 +330,11 @@ int proto_build_config(const char *client_id,
             return -1;
         }
     }
+    /* Mesh: only to clients that asked for it (MESH=1) */
+    if (profile->mesh &&
+        append_control_field(buffer, size, &offset, " MESH=1") != 0) {
+        return -1;
+    }
     /* A TAP network: only to clients that joined one, so an older client
      * never sees the field */
     if (profile->l2) {
@@ -385,6 +416,12 @@ int proto_parse_config(char *message, camex_config_t *config)
                             "Invalid MTU in config response: %s", value);
                 return -1;
             }
+            continue;
+        }
+        if (token_value(token, "MESH", value, sizeof(value)) == 0) {
+#ifdef CAMEX_MESH
+            profile.mesh = strcmp(value, "1") == 0 ? 1U : 0U;
+#endif
             continue;
         }
         if (token_value(token, "MODE", value, sizeof(value)) == 0) {

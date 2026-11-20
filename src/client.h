@@ -79,6 +79,10 @@ int client_known_load(void);
 /* 1 when the key in use came from that file */
 int client_key_is_pinned(void);
 
+/* A control message to the server inside the session (mesh.h); 0 or
+ * -1 */
+int client_send_control(const char *text);
+
 /* Wipe sessions and handshake state */
 void client_wipe(void);
 

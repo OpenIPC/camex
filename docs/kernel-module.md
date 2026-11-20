@@ -164,6 +164,18 @@ ip link show camex
 # camex: <POINTOPOINT,NOARP> mtu 1500 ...
 ```
 
+### TAP mode
+
+```sh
+insmod camex.ko mode=tap
+```
+
+With `mode=tap` the `camex` interface is an Ethernet one, like tun's
+`IFF_TAP`: `read()` and `write()` carry whole frames, its MAC can be set, and
+ARP runs on it. A client of a TAP network of the full camex uses it as it uses
+`/dev/net/tun` ([networks.md](networks.md#tap-networks-mode--tap)). The mode
+is chosen at load time, so one module serves one kind of network.
+
 ### Persistent load at boot
 
 ```bash

@@ -741,24 +741,28 @@ int tun_create_device(const char *local_ip, const char *netmask,
         }
     }
 
-    copy_ifreq_name(&cfg, tun_name);
-    sin = (struct sockaddr_in *)&cfg.ifr_addr;
-    sin->sin_family = AF_INET;
-    if (inet_pton(AF_INET, local_ip, &sin->sin_addr) != 1 ||
-        ioctl(sock, SIOCSIFADDR, &cfg) < 0) {
-        print_errno_message(LOG_ERR, "ioctl(SIOCSIFADDR)");
-        close_tun_creation(sock, fd);
-        return -1;
-    }
+    /* 0.0.0.0: a TAP network without addresses (the interface gets
+     * none from camex) */
+    if (strcmp(local_ip, "0.0.0.0") != 0) {
+        copy_ifreq_name(&cfg, tun_name);
+        sin = (struct sockaddr_in *)&cfg.ifr_addr;
+        sin->sin_family = AF_INET;
+        if (inet_pton(AF_INET, local_ip, &sin->sin_addr) != 1 ||
+            ioctl(sock, SIOCSIFADDR, &cfg) < 0) {
+            print_errno_message(LOG_ERR, "ioctl(SIOCSIFADDR)");
+            close_tun_creation(sock, fd);
+            return -1;
+        }
 
-    copy_ifreq_name(&cfg, tun_name);
-    sin = (struct sockaddr_in *)&cfg.ifr_netmask;
-    sin->sin_family = AF_INET;
-    if (inet_pton(AF_INET, netmask, &sin->sin_addr) != 1 ||
-        ioctl(sock, SIOCSIFNETMASK, &cfg) < 0) {
-        print_errno_message(LOG_ERR, "ioctl(SIOCSIFNETMASK)");
-        close_tun_creation(sock, fd);
-        return -1;
+        copy_ifreq_name(&cfg, tun_name);
+        sin = (struct sockaddr_in *)&cfg.ifr_netmask;
+        sin->sin_family = AF_INET;
+        if (inet_pton(AF_INET, netmask, &sin->sin_addr) != 1 ||
+            ioctl(sock, SIOCSIFNETMASK, &cfg) < 0) {
+            print_errno_message(LOG_ERR, "ioctl(SIOCSIFNETMASK)");
+            close_tun_creation(sock, fd);
+            return -1;
+        }
     }
 
     copy_ifreq_name(&cfg, tun_name);

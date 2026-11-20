@@ -18,6 +18,7 @@
 #include <arpa/inet.h>
 #else
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #endif
 
 camex_network_t netw_table[CAMEX_NET_MAX];
@@ -398,6 +399,13 @@ int netw_sync(const camex_net_conf_t *conf, size_t count, int allow_new,
         next[s].listed = 1U;
         next[s].isolation = conf[j].isolation;
         next[s].tap = conf[j].tap;
+        next[s].noaddr = conf[j].noaddr;
+        next[s].mesh = conf[j].mesh;
+        if (conf[j].noaddr && !conf[j].tap) {
+            log_message(LOG_ERR, "addresses = none is for a TAP network "
+                        "(mode = tap)");
+            return -1;
+        }
         if (conf[j].label[0] != '\0') {
             snprintf(next[s].label, sizeof(next[s].label), "%s",
                      conf[j].label);

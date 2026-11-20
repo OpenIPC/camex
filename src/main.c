@@ -11,6 +11,10 @@
 #include "server.h"
 #include "main.h"
 #include "netw.h"
+#include "noise.h"
+#ifdef CAMEX_CHACHA_NEON
+#include "chacha_neon.h"
+#endif
 #include "config.h"
 #include "crypto.h"
 #include "keys.h"
@@ -80,6 +84,45 @@ static int parse_mode(const char *value, camex_mode_t *mode)
     return -1;
 }
 
+/* camex --bench-crypto: how fast this CPU seals tunnel packets of 1400
+ * bytes (ChaCha20-Poly1305, as every DATA packet), for a few seconds.
+ * Returns 1 (done, exit). */
+static int bench_crypto(void)
+{
+    static uint8_t plain[1400];
+    static uint8_t out[1400 + 16];
+    uint8_t key[32];
+    uint8_t ad[17];
+    struct timespec t0, t1;
+    unsigned long n = 0UL;
+    double secs = 0.0;
+
+    memset(key, 0x42, sizeof(key));
+    memset(ad, 0x17, sizeof(ad));
+    memset(plain, 0x5A, sizeof(plain));
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    do {
+        unsigned int k;
+
+        for (k = 0U; k < 256U; ++k) {
+            noise_encrypt(key, (uint64_t)n++, ad, sizeof(ad), plain,
+                          sizeof(plain), out);
+        }
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        secs = (double)(t1.tv_sec - t0.tv_sec) +
+               (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+    } while (secs < 3.0);
+    printf("ChaCha20-Poly1305, 1400-byte packets: %.0f packets/s, %.1f MB/s"
+           " (%.0f Mbit/s)\n", (double)n / secs,
+           (double)n * sizeof(plain) / secs / 1e6,
+           (double)n * sizeof(plain) * 8.0 / secs / 1e6);
+#ifdef CAMEX_CHACHA_NEON
+    printf("ChaCha20 with NEON: %s\n",
+           camex_chacha_neon_ok() ? "yes" : "no (this CPU has none)");
+#endif
+    return 1;
+}
+
 int parse_arguments(int argc, char **argv, camex_config_t *config)
 {
     static const struct option long_options[] = {
@@ -123,6 +166,9 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         { "known-servers", required_argument, NULL, 1002 },
         { "top", no_argument, NULL, 1003 },
         { "interval", required_argument, NULL, 1004 },
+        { "bridge", required_argument, NULL, 1005 },
+        { "bridge-mode", required_argument, NULL, 1006 },
+        { "bench-crypto", no_argument, NULL, 1007 },
         { NULL, 0, NULL, 0 }
     };
     int opt;
@@ -269,6 +315,27 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
                 config->top_interval = (int)val;
             }
             break;
+        case 1005:
+            if (copy_option(config->bridge_if, sizeof(config->bridge_if),
+                            optarg, "bridge interface") != 0) {
+                return -1;
+            }
+            break;
+        case 1006:
+            if (strcmp(optarg, "auto") == 0) {
+                config->bridge_mode = 0U;
+            } else if (strcmp(optarg, "full") == 0) {
+                config->bridge_mode = 1U;
+            } else if (strcmp(optarg, "nat") == 0) {
+                config->bridge_mode = 2U;
+            } else {
+                log_message(LOG_ERR, "Invalid --bridge-mode: %s (auto, full "
+                            "or nat)", optarg);
+                return -1;
+            }
+            break;
+        case 1007:
+            return bench_crypto();
         case 'Y':
             if (copy_option(config->server_pubkey,
                             sizeof(config->server_pubkey), optarg,
@@ -514,6 +581,19 @@ int validate_config(camex_config_t *config)
                     "blocks");
         return -1;
     }
+    if (config->bridge_if[0] != '\0') {
+#ifdef CAMEX_L2
+        if (config->mode != CAMEX_MODE_CLIENT || config->network[0] == '\0') {
+            log_message(LOG_ERR, "--bridge is for a client of a TAP network "
+                        "(--network)");
+            return -1;
+        }
+#else
+        log_message(LOG_ERR, "--bridge needs a camex built with CAMEX_L2=1 "
+                    "(camex-<arch>-full)");
+        return -1;
+#endif
+    }
     /* A client without --port talks to the default one */
     if (config->mode == CAMEX_MODE_CLIENT && config->port <= 0) {
         config->port = CAMEX_DEFAULT_PORT;
@@ -660,6 +740,13 @@ void print_usage(const char *progname)
            " --server-pubkey\n"
            "                          (default: %s; none = not kept)\n",
            CAMEX_KNOWN_SERVERS_PATH);
+#ifdef CAMEX_L2
+    printf("      --bridge <iface>    A TAP network: bridge it to this LAN"
+           " interface (no bridge\n"
+           "                          device; the host keeps its settings)\n");
+    printf("      --bridge-mode <m>   auto (nat on Wi-Fi, else full), full or"
+           " nat\n");
+#endif
     printf("  -n, --name <id>         Client ID (auto mode; optional in manual mode)\n");
     printf("      --web-port <port>   Auto client: the port of its web UI, for nginx\n"
            "                          on the server (#174; needs a server 3.19.0+)\n");
@@ -744,6 +831,8 @@ void print_usage(const char *progname)
            " kept, --known-servers)\n");
     printf("  -W, --server-timeout <s> Connection timeout in seconds"
            " (default: 20)\n");
+    printf("      --bench-crypto   How fast this CPU encrypts tunnel packets"
+           " (3 s), then exit\n");
     printf("  -v, --version        Show version and exit\n");
     printf("  -h, --help           Show this help message and exit\n\n");
 

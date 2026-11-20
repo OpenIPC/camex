@@ -17,6 +17,28 @@
 make
 ```
 
+## The full camex (optional features)
+
+```sh
+make CAMEX_L2=1 CAMEX_MESH=1
+```
+
+| Flag           | Adds                                                                                       |
+|----------------|--------------------------------------------------------------------------------------------|
+| `CAMEX_L2=1`   | TAP networks (`mode = tap`) and bridging a LAN (`--bridge`), Linux ([networks.md](networks.md#tap-networks-mode--tap)) |
+| `CAMEX_MESH=1` | mesh networks (`mesh = yes`): peers direct through NATs, relay otherwise ([networks.md](networks.md#mesh-networks-mesh--yes)) |
+
+Without them the build is the core camex, as before. The releases have both:
+`camex-<arch>` and `camex-<arch>-full`.
+
+## ChaCha20 with NEON (32-bit ARM)
+
+A build for 32-bit ARM also builds `chacha_neon.c`: ChaCha20, four blocks at
+a time with NEON (Cortex-A7, A9 and the like). It is used only when the kernel
+says the CPU has NEON (`AT_HWCAP`), so one `camex-arm` still runs on ARMv5 and
+ARMv6 cameras. `CAMEX_NEON=0` leaves it out. `camex --bench-crypto` prints how
+fast the CPU seals 1400-byte tunnel packets, and whether NEON is used.
+
 ## Kernel module (optional)
 
 ```sh

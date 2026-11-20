@@ -48,6 +48,35 @@ endif
 
 SRCS = main.c camex.c netw.c monocypher.c util.c log.c crypto.c noise.c keys.c session.c tun.c packet.c net.c proto.c config.c client.c server.c slotidx.c control.c nginxmap.c tcpgate.c
 SRCS += wintun.c
+
+# Optional features (#mesh): make CAMEX_L2=1 CAMEX_MESH=1 builds the full
+# camex (camex-<arch>-full); without them it is the core camex as before
+CAMEX_L2 ?= 0
+CAMEX_MESH ?= 0
+ifeq ($(CAMEX_L2),1)
+  CPPFLAGS += -DCAMEX_L2
+  SRCS += l2.c bridge.c
+endif
+ifeq ($(CAMEX_MESH),1)
+  CPPFLAGS += -DCAMEX_MESH
+  SRCS += mesh.c
+endif
+# 32-bit ARM: ChaCha20 with NEON (chacha_neon.c), taken at run time only
+# when the CPU has NEON, so one binary serves ARMv5 to ARMv7 cameras.
+# CAMEX_NEON=0 leaves it out.
+CAMEX_NEON ?= 1
+TARGET_MACHINE := $(shell $(CC) -dumpmachine 2>/dev/null)
+ifeq ($(CAMEX_NEON),1)
+ifneq ($(filter arm%,$(TARGET_MACHINE)),)
+ifeq ($(filter aarch64% arm64%,$(TARGET_MACHINE)),)
+  CPPFLAGS += -DCAMEX_CHACHA_NEON
+  SRCS += chacha_neon.c
+  # softfp links with soft-float objects; a hard-float toolchain keeps its own
+  NEON_FLOAT := $(if $(shell $(CC) -dM -E - </dev/null 2>/dev/null | grep __ARM_PCS_VFP),,-mfloat-abi=softfp)
+  NEON_CFLAGS := -march=armv7-a -mfpu=neon $(NEON_FLOAT)
+endif
+endif
+endif
 OBJS = $(addprefix $(objdir)/, $(SRCS:.c=.o))
 
 # Ensure object directory exists
@@ -75,6 +104,10 @@ $(BUILD_DIR)/$(TARGET): $(OBJS)
 $(objdir)/%.o: %.c
 	mkdir -p $(objdir)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(objdir)/chacha_neon.o: chacha_neon.c
+	mkdir -p $(objdir)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(NEON_CFLAGS) -MMD -MP -c $< -o $@
 
 # Header dependencies: an edited header rebuilds every object using it
 -include $(OBJS:.o=.d)
@@ -115,6 +148,7 @@ help:
 	@echo "make CC=x86_64-w64-mingw32-gcc   - cross-compile for Windows"
 	@echo "make CC=aarch64-linux-android21-clang - cross-compile for Android"
 	@echo "make apk                         - build Android .apk package (requires SDK)"
+	@echo "make CAMEX_L2=1 CAMEX_MESH=1     - the full camex: TAP networks, bridge, mesh"
 	@echo "make CPPFLAGS=-DTUN_PACKET_MAX=1600 - build with smaller packet buffer"
 	@echo "make run                         - run camex as root"
 	@echo "make clean                       - remove userspace build outputs"

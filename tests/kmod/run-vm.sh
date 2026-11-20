@@ -162,6 +162,24 @@ if [ -n "$PUB" ]; then
     fi
     sed 's/^/guest-log: /' /tmp/log | grep -iE "backend|config|interface|error|warn"
 fi
+# mode=tap: an Ethernet interface whose MAC can be set (TAP networks of
+# the full camex)
+rmmod camex 2>/dev/null
+if insmod /camex.ko mode=tap; then
+    ip link show camex | grep -q "link/ether" &&
+        echo "ok: kmod tap: camex is an Ethernet interface" ||
+        echo "FAIL: kmod tap: camex is not an Ethernet interface"
+    ip link set camex address 02:ca:00:00:00:01 &&
+        ip link show camex | grep -q "02:ca:00:00:00:01" &&
+        echo "ok: kmod tap: its MAC can be set" ||
+        echo "FAIL: kmod tap: its MAC cannot be set"
+    ip link set camex up && echo "ok: kmod tap: up" || echo "FAIL: kmod tap: not up"
+    dmesg | grep -qiE "Oops|BUG:|Unable to handle" &&
+        echo "FAIL: kmod tap: the kernel oopsed" || echo "ok: kmod tap: no oops"
+    rmmod camex && echo "ok: kmod tap: unloads" || echo "FAIL: kmod tap: does not unload"
+else
+    echo "FAIL: kmod tap: insmod camex.ko mode=tap"
+fi
 poweroff -f
 INIT
 chmod +x rootfs/init

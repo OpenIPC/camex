@@ -38,3 +38,6 @@ _PLAN.md
 
 tests/test_netw
 tests/test_tcpgate
+tests/test_l2
+tests/test_bridge
+tests/test_chacha_neon
