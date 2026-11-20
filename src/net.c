@@ -25,7 +25,6 @@
 #include <netdb.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
-#include <poll.h>
 #include <unistd.h>
 #else
 #include <winsock2.h>
@@ -426,10 +425,28 @@ int net_create_socket(camex_transport_t transport)
     return socket(AF_INET, type, 0);
 }
 
+/* UDP buffers: a burst of a TCP connection inside the tunnel (TSO, a
+ * window's worth at line rate) must wait in the socket while camex works
+ * through it, or the kernel drops it and TCP halves its rate. SO_RCVBUF is
+ * capped at net.core.rmem_max without a word (160 KB on cameras, about 110
+ * packets); camex runs with CAP_NET_ADMIN, so the *FORCE options go past
+ * it. 1 MB asked, 2 MB counted by the kernel: ~250 ms at 60 Mbit/s, and
+ * memory only while it is used. */
+#define CAMEX_UDP_FORCE_BUF (1024 * 1024)
+
 int net_tune_udp_socket(int fd)
 {
     int bufsize;
 
+#if defined(SO_RCVBUFFORCE) && defined(SO_SNDBUFFORCE)
+    bufsize = CAMEX_UDP_FORCE_BUF;
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVBUFFORCE, OPTVAL_CAST &bufsize,
+                   sizeof(bufsize)) == 0 &&
+        setsockopt(fd, SOL_SOCKET, SO_SNDBUFFORCE, OPTVAL_CAST &bufsize,
+                   sizeof(bufsize)) == 0) {
+        return set_fd_nonblocking(fd);
+    }
+#endif
     bufsize = 4 * 1024 * 1024;
     if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, OPTVAL_CAST &bufsize, sizeof(bufsize)) < 0) {
         print_errno_message(LOG_WARNING, "setsockopt(SO_RCVBUF)");
@@ -490,42 +507,18 @@ void net_close(void)
     }
 }
 
-/* A datagram on a non-blocking socket; when its buffer is full (or the
- * interface's queue, ENOBUFS) camex waits up to 20 ms for room and tries
- * once more, instead of dropping it at once: a burst of a TCP connection
- * in the tunnel (a TSO packet cut into ~45) then slows down rather than
- * losing packets, which made TCP halve its rate every few seconds. The
- * buffers stay as the kernel caps them (rmem_max/wmem_max): no more
- * memory */
-#define CAMEX_SEND_WAIT_MS 20
-
-ssize_t net_sendto_wait(int fd, const void *data, size_t len,
+/* A datagram on a non-blocking socket. A full buffer drops it: waiting
+ * would stop camex's single loop, receiving included, and on a camera
+ * whose vendor app takes the CPU in bursts that cost more than the drop
+ * (44-45 against 41-42 Mbit/s); the large buffers above keep it rare */
+ssize_t net_sendto_one(int fd, const void *data, size_t len,
                         const struct sockaddr_in *to)
 {
-    ssize_t sent;
-    int tries;
-
-    for (tries = 0; ; ++tries) {
-        if (to == NULL) {
-            sent = send(fd, SEND_CAST data, len, 0);
-        } else {
-            sent = sendto(fd, SEND_CAST data, len, 0,
-                          (const struct sockaddr *)to, sizeof(*to));
-        }
-#ifndef _WIN32
-        if (sent < 0 && tries == 0 &&
-            (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS)) {
-            struct pollfd p;
-
-            p.fd = fd;
-            p.events = POLLOUT;
-            p.revents = 0;
-            (void)poll(&p, 1, CAMEX_SEND_WAIT_MS);
-            continue;
-        }
-#endif
-        return sent;
+    if (to == NULL) {
+        return send(fd, SEND_CAST data, len, 0);
     }
+    return sendto(fd, SEND_CAST data, len, 0, (const struct sockaddr *)to,
+                  sizeof(*to));
 }
 
 int net_send_payload(int fd, const struct sockaddr_in *to,
@@ -537,7 +530,7 @@ int net_send_payload(int fd, const struct sockaddr_in *to,
         return -1;
     }
 
-    sent = net_sendto_wait(fd, data, len, to);
+    sent = net_sendto_one(fd, data, len, to);
 
     if (sent < 0 || (size_t)sent != len) {
         return -1;

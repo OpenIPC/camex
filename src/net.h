@@ -72,8 +72,8 @@ int net_client_local_addr(struct sockaddr_in *out);
 void net_close(void);
 
 /* Send raw payload */
-/* send()/sendto() that waits up to 20 ms for room once (net.c) */
-ssize_t net_sendto_wait(int fd, const void *data, size_t len,
+/* send()/sendto() of one datagram (net.c) */
+ssize_t net_sendto_one(int fd, const void *data, size_t len,
                         const struct sockaddr_in *to);
 int net_send_payload(int fd, const struct sockaddr_in *to,
                      const uint8_t *data, size_t len);

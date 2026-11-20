@@ -13,10 +13,10 @@ release, rebuilt from every push to `master`; this file is the change history.
   and the offload buffers (64 KB to read a TSO packet, 32 KB to join packets) only when a device
   takes offloads. `camex-arm` on a hi3516ev300: 540 KB resident without offloads, 644 KB with
   them (608 KB before this release's offloads).
-- UDP sends wait up to 20 ms for room when the socket's buffer (or the interface's queue) is full,
-  instead of dropping the packet: a TSO packet cut into ~45 went out faster than a stock camera's
-  driver took them (`eth0` tx_dropped), and TCP in the tunnel halved its rate every few seconds.
-  The mesh socket asks for the same buffers as the server's (the kernel caps both at `rmem_max`).
+- UDP buffers past `rmem_max`/`wmem_max` (`SO_RCVBUFFORCE`/`SO_SNDBUFFORCE`, 1 MB asked, kernel
+  memory used only while packets wait), on the mesh socket too, which had the kernel's defaults.
+  Waiting for room on a full send buffer instead was tried and measured worse on a stock camera
+  (41-42 against 44-45 Mbit/s): it stops camex's single loop, receiving included.
 - `camex.ko` offloads (`CAMEX_IOC_VNET`, kernels 4.1+): tun's vnet header and TSO/checksum
   offload on `/dev/camex`, GSO writes of joined TCP packets built of single pages; camex asks for
   them as with `tun.ko`. A full queue now stops the interface's transmit queue instead of

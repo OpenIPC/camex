@@ -386,7 +386,7 @@ static int p2p_send(mesh_peer_t *p, const struct sockaddr_in *a,
                   pkt + V2_P2P_HDR);
     p->send_n++;
     p->last_tx = g_now;
-    return net_sendto_wait(mesh.fd, pkt, V2_P2P_HDR + len + NOISE_TAGLEN,
+    return net_sendto_one(mesh.fd, pkt, V2_P2P_HDR + len + NOISE_TAGLEN,
                            a) < 0 ? -1 : 0;
 }
 
