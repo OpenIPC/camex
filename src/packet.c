@@ -9,6 +9,7 @@
 #include "packet.h"
 #include "log.h"
 #include "tun.h"
+#include "camex.h"
 
 #ifndef _WIN32
 #include <sys/select.h>
@@ -82,7 +83,15 @@ int packet_open(const camex_packet_open_t *params)
     if (backend_open) {
         return -1;  /* already open: close it first */
     }
-    rc = backend->open(params);
+    if (params->l2 && params->mtu == CAMEX_DEFAULT_MTU) {
+        /* A TAP device: the LAN's 1500 unless an MTU was set (camex.h) */
+        camex_packet_open_t tap = *params;
+
+        tap.mtu = CAMEX_L2_MTU;
+        rc = backend->open(&tap);
+    } else {
+        rc = backend->open(params);
+    }
     if (rc != 0) {
         return rc;
     }

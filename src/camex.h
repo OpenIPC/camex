@@ -32,7 +32,12 @@
 #define CAMEX_CLIENT_ID_LEN 32
 #define CAMEX_CONFIG_PATH_LEN 256
 #define CAMEX_DEFAULT_CONFIG_PATH "/etc/camex/camex.conf"
-#define CAMEX_DEFAULT_MTU 1500
+/* 1420: a tunnel packet (MTU + 57 bytes of IPv4, UDP and camex) fits a
+ * 1500-byte link and PPPoE's 1492 whole, never two IP fragments */
+#define CAMEX_DEFAULT_MTU 1420
+/* A TAP device carries the frames of a 1500-byte LAN (camex cuts them into
+ * pieces of its own, l2.h): it keeps 1500 unless an MTU is set */
+#define CAMEX_L2_MTU 1500
 #define CAMEX_DEFAULT_PORT 5800
 
 typedef enum {

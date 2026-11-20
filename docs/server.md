@@ -66,7 +66,7 @@ Three kinds of blocks; lines starting with `#` are comments:
 | `bind_ip`               | the address to listen on, `0.0.0.0` by default (`--bind-ip`)                                                                                                            |
 | `bind_dev`              | the interface to listen on (`--bind-dev`)                                                                                                                               |
 | `local_cidr`            | the server's tunnel address; with the auto pool its first address, e.g. `10.200.0.1/24`                                                                                 |
-| `mtu`                   | the tunnel MTU, 1500 by default                                                                                                                                         |
+| `mtu`                   | the tunnel MTU, 1420 by default                                                                                                                                         |
 | `server_key`            | the private key from `camex --genkey` (or `--server-key-file`)                                                                                                          |
 | `psk`                   | the global pre-shared key: `hex:<64 hex digits>`, `base64:<44 characters>` or a passphrase                                                                              |
 | `tun_dev`               | the TUN device or interface name                                                                                                                                        |

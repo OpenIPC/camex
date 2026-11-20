@@ -8,6 +8,12 @@ release, rebuilt from every push to `master`; this file is the change history.
 
 ## 4.6.0 — 2026-11-20
 
+- The default tunnel MTU is 1420 (was 1500): a tunnel packet, the MTU plus 57 bytes of IPv4, UDP
+  and camex, now fits a 1500-byte link and PPPoE's 1492 whole. With 1500 every full packet went
+  as two IP fragments: on a Cortex-A7 camera ~7 points more CPU at 25 Mbit/s and slower TCP
+  (13.7 against 17.2 Mbit/s down at MTU 1300). TAP devices keep 1500 (their frames are cut by
+  camex itself). An `mtu` set on either side (`--mtu`, `mtu=` in `[server]` or a client's section)
+  still wins.
 - TUN offloads on Linux (`offload.c`): a TUN device camex makes through `/dev/net/tun` takes
   `IFF_VNET_HDR` with TSO and checksum offload; camex cuts the kernel's TCP of up to 64 KB into
   packets of the MTU, completes checksums left to it, and writes the TCP packets of one connection

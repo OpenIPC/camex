@@ -823,7 +823,7 @@ void print_usage(const char *progname)
     printf("      --wait-timeout <s>  The longest wait (default 60)\n\n");
 
     printf("Common options:\n");
-    printf("  -t, --mtu <size>     Tunnel MTU, 576-9000 (default: 1500)\n");
+    printf("  -t, --mtu <size>     Tunnel MTU, 576-9000 (default: 1420; TAP: 1500)\n");
     printf("  -k, --psk <key>      Pre-shared key: hex:<64 hex digits>,"
            " base64:<32 bytes>,\n"
            "                       or a passphrase (stretched with Argon2id)\n");
@@ -915,7 +915,7 @@ int main(int argc, char *argv[])
 
     memset(&config, 0, sizeof(config));
     config.mode = CAMEX_MODE_CLIENT;
-    config.mtu = 1500;
+    config.mtu = CAMEX_DEFAULT_MTU;
     config.server_timeout = 20;
     config.keepalive = 10;
     snprintf(config.config_path, sizeof(config.config_path), "%s",
