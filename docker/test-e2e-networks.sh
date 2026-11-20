@@ -77,9 +77,11 @@ cat > "$BUILD_CTX/camex.conf" <<'EOF'
 local_cidr = 10.200.0.1/24
 
 [network field cameras]
+weak_name = yes
 label = cams
 
 [network lab]
+weak_name = yes
 pool = 10.77.0.0/24
 EOF
 
@@ -254,7 +256,7 @@ docker rm -f "$P-x2" "$P-y2" "$P-srv2" >/dev/null
 
 echo "== 8. the file changes: read again without a signal"
 cp "$BUILD_CTX/camex.conf" "$BUILD_CTX/new.conf"
-printf '\n[network annex]\npool = 10.88.0.0/24\n' >> "$BUILD_CTX/new.conf"
+printf '\n[network annex]\nweak_name = yes\npool = 10.88.0.0/24\n' >> "$BUILD_CTX/new.conf"
 docker cp "$BUILD_CTX/new.conf" "$P-srv:/etc/camex.conf" >/dev/null
 wait_log "$P-srv" "Config file changed" 6
 check $? "the server notices the changed file"
@@ -325,6 +327,46 @@ wait_log "$P-a" "proved it knows this network before: not trusted" 20
 check $? "the client does not take an impostor that claims to be open"
 docker logs "$P-srv" 2>&1 | grep -q "New network"
 r=$?; [ $r != 0 ]; check $? "the impostor learned no network"
+
+echo "== 12. CPace limits: a guesser is limited and banned, a real client is not"
+docker rm -f "$P-srv" "$P-a" >/dev/null 2>&1
+GUARD_NET="guard network of 24 chars"
+printf '[server]\nlocal_cidr = 10.200.0.1/24\ncpace_per_ip = 5\ncpace_ban_after = 8\ncpace_ban_time = 60\n\n[network %s]\nlabel = guarded\n' \
+    "$GUARD_NET" > "$BUILD_CTX/guard.conf"
+server srv "$BUILD_CTX/guard.conf"
+sleep 1
+# PAKE1 with a random point: the same to the server as a wrong name (no PAKE3
+# follows); 10 of them 0.3 s apart, counting the PAKE2 answers
+cat > "$BUILD_CTX/guess.py" <<'PY'
+import os, socket, sys, time
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.settimeout(0.25)
+answers = 0
+for _ in range(10):
+    pkt = b"CXv2" + bytes([8]) + os.urandom(16) + os.urandom(32)
+    s.sendto(pkt + bytes(1200 - len(pkt)), (sys.argv[1], 5800))
+    try:
+        if s.recv(4096)[4] == 9:
+            answers += 1
+    except socket.timeout:
+        pass
+    time.sleep(0.3)
+print(answers)
+PY
+docker create --name "$P-guess" --network "$NET_NAME" --entrypoint python3 "$IMAGE" /guess.py "$P-srv" >/dev/null
+docker cp "$BUILD_CTX/guess.py" "$P-guess:/guess.py" >/dev/null
+answers=$(docker start -a "$P-guess" 2>/dev/null | tail -1)
+[ "$answers" = 5 ]
+check $? "the guesser got 5 answers of 10 (cpace_per_ip = 5), got ${answers:-none}"
+wait_log "$P-srv" "CPace: 8 attempts in a row from" 5
+check $? "the server bans it after 8 attempts in a row and says so"
+docker exec "$P-srv" camex --status --json 2>/dev/null |
+    python3 -c "import json,sys; c=json.load(sys.stdin)['servers'][0]['cpace']; sys.exit(0 if c['bans']==1 and c['banned_now']==1 and c['refused']==5 else 1)"
+check $? "--status --json counts the attempts, the refusals and the ban"
+client a srv "$GUARD_NET" --name CAM-G
+addr_of "$P-a" >/dev/null
+check $? "a real client from another address joins all the same"
+docker rm -f "$P-guess" >/dev/null 2>&1
 
 echo
 if [ "$FAILS" = 0 ]; then

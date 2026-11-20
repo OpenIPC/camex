@@ -82,6 +82,7 @@ cat > "$BUILD_CTX/camex.conf" <<'EOF'
 local_cidr = 10.200.0.1/24
 
 [network site]
+weak_name = yes
 mode = tap
 addresses = none
 EOF

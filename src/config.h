@@ -79,6 +79,16 @@ typedef struct {
     uint32_t net_supernet;         /* network_supernet=, host order */
     uint8_t net_super_prefix;
     uint8_t net_pool_prefix;       /* network_prefix= */
+    /* CPace limits (cpaceguard.h): cpace_per_ip=, cpace_total=,
+     * cpace_ban_after=, cpace_ban_time=; *_set: given in the file */
+    unsigned int cpace_per_ip;
+    unsigned int cpace_total;
+    unsigned int cpace_ban_after;
+    unsigned int cpace_ban_time;
+    uint8_t cpace_per_ip_set;
+    uint8_t cpace_total_set;
+    uint8_t cpace_ban_after_set;
+    uint8_t cpace_ban_time_set;
 } camex_server_globals_t;
 
 /* Default auto pool (#15, #75): 10.200.0.0/24 */

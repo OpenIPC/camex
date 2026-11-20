@@ -44,3 +44,4 @@ tests/test_bridge
 tests/test_chacha_neon
 tests/test_offload
 tests/test_pake
+tests/test_cpaceguard

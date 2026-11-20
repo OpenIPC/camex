@@ -785,6 +785,13 @@ int camex_init(camex_config_t *config)
     /* A client that joins a network by name without --psk: the fixed
      * network handshake key (the name travels inside message 1) */
     if (client_mode && current_config.network[0] != '\0' &&
+        strlen(current_config.network) < CAMEX_NET_NAME_MIN) {
+        /* the server takes such a name only with weak_name = yes */
+        log_message(LOG_WARNING, "The network's name has fewer than %u "
+                    "characters: it could be guessed",
+                    (unsigned)CAMEX_NET_NAME_MIN);
+    }
+    if (client_mode && current_config.network[0] != '\0' &&
         current_config.psk[0] == '\0') {
         uint8_t k[32];
 

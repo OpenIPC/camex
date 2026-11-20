@@ -384,6 +384,9 @@ if [ -n "$NET_OPT" ]; then
         [[:space:]]*|*[[:space:]]) die "--network: no blank at its start or end" ;;
     esac
     [ "$(printf '%s' "$NET_OPT" | LC_ALL=C wc -c)" -le 63 ] || die "--network: at most 63 bytes"
+    # the server refuses a shorter name without weak_name = yes: it could be guessed
+    [ "$(printf '%s' "$NET_OPT" | LC_ALL=C wc -c)" -ge 16 ] ||
+        die "--network: at least 16 characters (a name is a password; leave it out for a random one)"
     ! printf '%s' "$NET_OPT" | LC_ALL=C grep -q "$(printf '[\001-\037\177]')" ||
         die "--network: no control characters"
 fi

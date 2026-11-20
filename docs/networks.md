@@ -9,7 +9,7 @@ from the network and the ID. The client gets the same address after a client
 restart, a server restart or a move to another server with the same file.
 
 ```sh
-camex --server-host vpn.example.org --network "field cameras"
+camex --server-host vpn.example.org --network "field cameras of the north site"
 ```
 
 The client defaults are client mode, auto mode and port 5800. Without
@@ -49,30 +49,38 @@ local_cidr = 10.200.0.1/24       # needed: the networks' gateways go on this tun
 # network_supernet = 10.0.0.0/8  # where derived pools come from (the default)
 # network_prefix = 16            # their size (the default)
 
-[network field cameras]
+[network field cameras of the north site]
 label = cams                     # shown instead of the name in logs and status
 
-[network lab]
+[network 7kq2m9x4p1lab8vz3t0c]
 pool = 10.77.0.0/24              # this pool instead of a derived one
 client_isolation = yes
 ```
 
 `[network NAME]`: NAME runs from after `network` to the `]`, without the
-spaces around it. It is 1 to 63 bytes and case-sensitive.
+spaces around it. It is 1 to 63 bytes and case-sensitive. A name shorter than
+16 characters is refused unless its block has `weak_name = yes` (5.0.0). Such
+a name could be guessed one CPace attempt at a time (see
+[Guessing a name](#guessing-a-name)), and the client warns about it too.
 
-| Key                | Meaning                                                                                   |
-|--------------------|-------------------------------------------------------------------------------------------|
+| Key                | Meaning                                                                                      |
+|--------------------|----------------------------------------------------------------------------------------------|
 | `pool`             | the network's IPv4 pool; without it a `/16` of `network_supernet` picked by the network's ID |
 | `client_isolation` | `yes` or `no`: drop packets between clients of this network; without it the server's setting |
-| `label`            | the name shown in logs and in `camex --status`, up to 31 bytes without spaces              |
+| `label`            | the name shown in logs and in `camex --status`, up to 31 bytes without spaces                |
+| `weak_name`        | `yes`: take a name shorter than 16 characters (a lab, a test); it could be guessed           |
 
 `[server]`:
 
-| Key                  | Meaning                                                                                       |
-|----------------------|-----------------------------------------------------------------------------------------------|
-| `allow_new_networks` | `yes`: a client may name any network; the server makes it on its first handshake (see below)   |
-| `network_supernet`   | the range derived pools come from, `10.0.0.0/8` by default                                    |
-| `network_prefix`     | the size of a derived pool, 9 to 30, `16` by default                                          |
+| Key                  | Meaning                                                                                          |
+|----------------------|--------------------------------------------------------------------------------------------------|
+| `allow_new_networks` | `yes`: a client may name any network; the server makes it on its first handshake (see below)     |
+| `network_supernet`   | the range derived pools come from, `10.0.0.0/8` by default                                       |
+| `network_prefix`     | the size of a derived pool, 9 to 30, `16` by default                                             |
+| `cpace_per_ip`       | unconfirmed CPace attempts a minute from one address, `20` by default; `0` turns it off          |
+| `cpace_total`        | unconfirmed CPace attempts a minute from all addresses, `300` by default; `0` turns it off       |
+| `cpace_ban_after`    | attempts in a row without a confirmed one that ban an address, `30` by default; `0` turns it off |
+| `cpace_ban_time`     | seconds a ban lasts, `600` by default                                                            |
 
 The file is read again when it changes. The server checks its time, size and
 inode every 2 seconds, so no `kill -HUP` is needed, though it still works. A
@@ -237,6 +245,38 @@ When this is not good enough:
 
 Proposals to narrow it further: [#199](https://github.com/OpenIPC/camex/issues/199).
 
+## Guessing a name
+
+A client that does not know the name can still try names. One `PAKE1` tests
+one name against every network the server lists. The client checks the tags
+of `PAKE2` alone, so a wrong guess shows on the server only as a `PAKE1` that
+no `PAKE3` follows. Since 5.0.0 the server counts exactly those (`[server]`
+keys above):
+
+- **per address:** at most `cpace_per_ip` unconfirmed attempts a minute. A
+  `PAKE3` that confirms gives its attempt back, so real clients spend nothing,
+  however often they reconnect;
+- **in all:** at most `cpace_total` unconfirmed attempts a minute from all
+  addresses together, so many addresses cannot guess at many times the rate.
+  An address whose client confirmed within the last hour is not held by this
+  limit;
+- **ban:** `cpace_ban_after` attempts in a row from one address with none
+  confirmed refuse its CPace for `cpace_ban_time` seconds
+  (`CPace: 30 attempts in a row from ... : its CPace refused for 600 s`). An
+  address with a client that confirmed within the hour (a NAT with real
+  cameras behind it) is limited, never banned.
+
+`camex --status` shows the counts
+(`cpace: 12 attempts, 10 confirmed, 2 refused, 0 bans (0 banned now)`), and
+`--status --json` shows them under `cpace`.
+
+With the defaults, one address tests at most 20 names a minute and all
+addresses together at most 300. A random name of 20 characters
+(`install.sh`) is beyond reach either way. These limits are what keeps a
+short name from falling within days. A public selector that would make one
+attempt test one network only is tracked in
+[#201](https://github.com/OpenIPC/camex/issues/201).
+
 ## Status
 
 `camex --status` lists the networks in its header, each with its label, pool
@@ -289,7 +329,7 @@ A core camex refuses what it was built without, and says so:
 ## TAP networks (`mode = tap`)
 
 ```ini
-[network lan]
+[network the office lan, floor two]
 mode = tap
 pool = 10.66.0.0/24
 ```
@@ -374,7 +414,7 @@ routes the packets meant for remote devices; camex warns about it.
 ## Mesh networks (`mesh = yes`)
 
 ```ini
-[network cams]
+[network cameras that meet directly]
 mesh = yes
 ```
 

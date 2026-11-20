@@ -50,7 +50,14 @@ typedef struct {
     uint8_t tap;            /* mode = tap: an Ethernet network (CAMEX_L2) */
     uint8_t noaddr;         /* addresses = none: camex gives no addresses */
     uint8_t mesh;           /* mesh = yes: peers go direct (CAMEX_MESH) */
+    uint8_t name_len;       /* the name's length (the name is not kept) */
+    uint8_t weak_name;      /* weak_name = yes: a name below
+                             * CAMEX_NET_NAME_MIN taken all the same */
 } camex_net_conf_t;
+
+/* The shortest name a [network] block takes without weak_name = yes: a
+ * short name can be guessed one CPace attempt at a time */
+#define CAMEX_NET_NAME_MIN 16U
 
 /* A network of the running server */
 typedef struct {

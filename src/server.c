@@ -9,6 +9,7 @@
 
 #include "server.h"
 #include "netw.h"
+#include "cpaceguard.h"
 #include "pake.h"
 #ifdef CAMEX_MESH
 #include "mesh.h"
@@ -177,6 +178,20 @@ static size_t server_lease_used = 0U;   /* leases in the table */
 static size_t server_lease_next = 0U;   /* where a free one is looked for */
 static time_t server_started = 0;   /* for the pool's start hold (#81) */
 
+/* The CPace limits of [server] (cpaceguard.h): at startup and reload */
+static void server_apply_cpace_limits(void)
+{
+    const camex_server_globals_t *g = &server_db.globals;
+
+    cpace_guard_config(
+        g->cpace_per_ip_set ? g->cpace_per_ip : CPACE_GUARD_PER_IP_DEFAULT,
+        g->cpace_total_set ? g->cpace_total : CPACE_GUARD_TOTAL_DEFAULT,
+        g->cpace_ban_after_set ? g->cpace_ban_after
+                               : CPACE_GUARD_BAN_AFTER_DEFAULT,
+        g->cpace_ban_time_set ? g->cpace_ban_time
+                              : CPACE_GUARD_BAN_SECS_DEFAULT);
+}
+
 void server_check_pool(const char *server_cidr)
 {
     char ip[16];
@@ -188,6 +203,7 @@ void server_check_pool(const char *server_cidr)
     uint32_t smask;
     uint32_t pmask = 0xFFFFFFFFU << (32U - server_db.globals.pool_prefix);
 
+    server_apply_cpace_limits();
     server_tunnel_ip = 0U;
     if (server_cidr == NULL || server_cidr[0] == '\0' ||
         parse_local_cidr(server_cidr, ip, sizeof(ip), mask,
@@ -2181,6 +2197,39 @@ static int server_handle_pake1(const uint8_t *buf, size_t len,
     if (server_handshake_budget(&src) < 0) {
         return -1;
     }
+    /* A guess of the network's name costs one attempt; a confirmed PAKE3
+     * gives it back (cpaceguard.h) */
+    {
+        int banned_now = 0;
+        int why = cpace_guard_attempt(src.a, g_now, &banned_now);
+        char peer[64];
+
+        if (why != CPACE_GUARD_OK) {
+            net_sockaddr_to_string(from, peer, sizeof(peer));
+            if (banned_now) {
+                log_message(LOG_WARNING, "CPace: %u attempts in a row from %s "
+                            "with none confirmed (guessing a network's "
+                            "name?): its CPace refused for %u s",
+                            server_db.globals.cpace_ban_after_set
+                                ? server_db.globals.cpace_ban_after
+                                : CPACE_GUARD_BAN_AFTER_DEFAULT,
+                            peer,
+                            server_db.globals.cpace_ban_time_set
+                                ? server_db.globals.cpace_ban_time
+                                : CPACE_GUARD_BAN_SECS_DEFAULT);
+            } else {
+                log_peer(LOG_NOTICE, "CPace from %s refused: %s", peer,
+                         why == CPACE_GUARD_BANNED
+                             ? "banned for guessing"
+                             : why == CPACE_GUARD_IP_LIMIT
+                                   ? "too many unconfirmed attempts from it "
+                                     "(cpace_per_ip)"
+                                   : "too many unconfirmed attempts in all "
+                                     "(cpace_total)");
+            }
+            return -1;
+        }
+    }
     if (server_pakes == NULL) {
         server_pakes = calloc(SERVER_PAKES, sizeof(*server_pakes));
         if (server_pakes == NULL) {
@@ -2259,6 +2308,7 @@ static int server_handle_pake3(const uint8_t *buf,
         pake_psk(ps->psk, k);
         crypto_wipe(k, sizeof(k));
         ps->confirmed = 1U;
+        cpace_guard_confirm(ntohl(from->sin_addr.s_addr), g_now);
         ps->net = slot;
         ps->at = g_now;
         return 0;
@@ -4089,6 +4139,22 @@ static void status_networks(status_buf_t *b, int json)
         sb_printf(b, "],");
     } else if (shown > 0U) {
         sb_printf(b, "\n");
+    }
+    /* CPace attempts (cpaceguard.h): only where there is CPace */
+    if (shown > 0U || server_db.globals.allow_new_networks) {
+        cpace_guard_stats_t cs;
+
+        cpace_guard_stats(&cs, g_now);
+        if (json) {
+            sb_printf(b, "\"cpace\":{\"attempts\":%lu,\"confirmed\":%lu,"
+                      "\"refused\":%lu,\"bans\":%lu,\"banned_now\":%u},",
+                      cs.attempts, cs.confirmed, cs.refused, cs.bans,
+                      cs.banned_now);
+        } else if (cs.attempts > 0UL || cs.refused > 0UL) {
+            sb_printf(b, "cpace: %lu attempts, %lu confirmed, %lu refused, "
+                      "%lu bans (%u banned now)\n", cs.attempts, cs.confirmed,
+                      cs.refused, cs.bans, cs.banned_now);
+        }
     }
 }
 

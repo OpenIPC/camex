@@ -9,7 +9,7 @@ SRC     = ../src
 CFLAGS  += -I$(SRC) -std=c99 -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L \
            -Wall -Wextra -Wshadow -Wstrict-prototypes -O1 -g $(EXTRA_CFLAGS)
 
-TESTS = test_offload test_net_tcp test_pake test_netw test_l2 test_bridge test_chacha_neon test_proto test_log test_packet test_noise test_keys test_session test_nginxmap test_tcpgate
+TESTS = test_offload test_net_tcp test_pake test_cpaceguard test_netw test_l2 test_bridge test_chacha_neon test_proto test_log test_packet test_noise test_keys test_session test_nginxmap test_tcpgate
 
 # Rebuild the tests when any project header changes
 HEADERS = $(wildcard $(SRC)/*.h)
@@ -23,6 +23,9 @@ test_net_tcp: test_net_tcp.c $(SRC)/net.c $(SRC)/util.c $(SRC)/log.c \
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
 
 test_pake: test_pake.c $(SRC)/pake.c $(SRC)/netw.c $(SRC)/log.c $(SRC)/monocypher.c $(HEADERS)
+	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
+
+test_cpaceguard: test_cpaceguard.c $(SRC)/cpaceguard.c $(SRC)/util.c $(SRC)/log.c $(SRC)/monocypher.c $(HEADERS)
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
 
 test_netw: test_netw.c $(SRC)/netw.c $(SRC)/pake.c $(SRC)/proto.c $(SRC)/config.c $(SRC)/nginxmap.c $(SRC)/slotidx.c $(SRC)/util.c $(SRC)/log.c \

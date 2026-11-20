@@ -79,10 +79,12 @@ cat > "$BUILD_CTX/camex.conf" <<'EOF'
 local_cidr = 10.200.0.1/24
 
 [network mesh]
+weak_name = yes
 mesh = yes
 pool = 10.90.0.0/24
 
 [network tapmesh]
+weak_name = yes
 mesh = yes
 mode = tap
 pool = 10.91.0.0/24

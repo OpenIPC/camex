@@ -261,13 +261,26 @@ static void test_config(void)
     }
     fp = fdopen(fd, "w");
     fputs("[server]\nallow_new_networks = yes\nnetwork_supernet = "
-          "10.64.0.0/10\nnetwork_prefix = 20\n\n"
+          "10.64.0.0/10\nnetwork_prefix = 20\ncpace_per_ip = 5\n"
+          "cpace_total = 0\ncpace_ban_after = 12\ncpace_ban_time = 60\n\n"
           "[network my cams]\npool = 10.77.0.0/24\nclient_isolation = yes\n"
-          "label = cams\n\n[network lab]\n", fp);
+          "label = cams\nweak_name = yes\n\n[network lab]\nweak_name = yes\n"
+          "\n[network a name of 20 chars!!]\n", fp);
     fclose(fp);
     CHECK(config_db_load_file(path) == 0, "a file with networks");
-    CHECK(server_db.net_count == 2U, "two [network] blocks, got %u",
+    CHECK(server_db.net_count == 3U, "three [network] blocks, got %u",
           (unsigned)server_db.net_count);
+    CHECK(server_db.net_count == 3U && server_db.nets[0].weak_name &&
+              server_db.nets[0].name_len == 7U &&
+              !server_db.nets[2].weak_name && server_db.nets[2].name_len == 20U,
+          "weak_name and the name's length read wrong");
+    CHECK(server_db.globals.cpace_per_ip_set &&
+              server_db.globals.cpace_per_ip == 5U &&
+              server_db.globals.cpace_total_set &&
+              server_db.globals.cpace_total == 0U &&
+              server_db.globals.cpace_ban_after == 12U &&
+              server_db.globals.cpace_ban_time == 60U,
+          "the cpace_* keys read wrong");
     netw_id_from_name("my cams", id);
     CHECK(server_db.net_count > 0U &&
               memcmp(server_db.nets[0].id, id, sizeof(id)) == 0 &&
@@ -294,6 +307,31 @@ static void test_config(void)
     fputs("[network lab]\ncolour = red\n", fp);
     fclose(fp);
     CHECK(config_db_load_file(path) != 0, "an unknown [network] key");
+    config_db_free(&server_db);
+
+    /* A name below CAMEX_NET_NAME_MIN only with weak_name = yes */
+    fp = fopen(path, "w");
+    fputs("[network fifteen chars!!]\n", fp);
+    fclose(fp);
+    CHECK(config_db_load_file(path) != 0, "a short name without weak_name");
+    config_db_free(&server_db);
+
+    fp = fopen(path, "w");
+    fputs("[network sixteen chars!!!]\n", fp);
+    fclose(fp);
+    CHECK(config_db_load_file(path) == 0, "a name of 16 characters");
+    config_db_free(&server_db);
+
+    fp = fopen(path, "w");
+    fputs("[network lab]\nweak_name = maybe\n", fp);
+    fclose(fp);
+    CHECK(config_db_load_file(path) != 0, "a bad weak_name value");
+    config_db_free(&server_db);
+
+    fp = fopen(path, "w");
+    fputs("[server]\ncpace_per_ip = many\n", fp);
+    fclose(fp);
+    CHECK(config_db_load_file(path) != 0, "a bad cpace_per_ip value");
     config_db_free(&server_db);
     unlink(path);
 }

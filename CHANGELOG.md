@@ -13,6 +13,18 @@ clients (see the MTU item below; whether it stays the global default is
 [#198](https://github.com/OpenIPC/camex/issues/198)). Everything else is compatible: a 4.x client
 or server works with a 5.0.0 one as before.
 
+- Guessing a network's name is limited (`cpaceguard.c`, [docs](docs/networks.md#guessing-a-name)).
+  A wrong guess shows on the server only as a `PAKE1` that no `PAKE3` follows; the server now
+  counts those. At most `cpace_per_ip` (20) unconfirmed attempts a minute from one address and
+  `cpace_total` (300) from all addresses (not counting an address whose client confirmed within
+  the hour); `cpace_ban_after` (30) attempts in a row with none confirmed ban the address for
+  `cpace_ban_time` (600) seconds, never an address with a confirmed client (a NAT with real
+  cameras). A confirmed `PAKE3` gives its attempt back, so real clients spend nothing.
+  `camex --status` shows the counts (`cpace: ...`), `--status --json` has `cpace`.
+- A `[network NAME]` block refuses a name shorter than 16 characters unless it has
+  `weak_name = yes`; a client with a shorter `--network` warns, and `install.sh --network`
+  takes 16 characters or more.
+
 
 - `camex --top` grouped by network: a summary (`Clients 3 of 256   In 0.7 Mbit/s   Out 0.7 Mbit/s
   Relayed 0.0 Mbit/s`), then each network's clients (rates in Mbit/s, `-` when idle, UDP/TCP)

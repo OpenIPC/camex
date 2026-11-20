@@ -484,8 +484,43 @@ static camex_net_conf_t *config_db_add_network(const char *name)
     memset(n, 0, sizeof(*n));
     memcpy(n->id, id, sizeof(id));
     n->isolation = -1;
+    n->name_len = (uint8_t)(strlen(name) > 255U ? 255U : strlen(name));
     crypto_wipe(id, sizeof(id));
     return n;
+}
+
+/* A short network name can be guessed one CPace attempt at a time: a
+ * [network] block takes one only with weak_name = yes. The name is a
+ * secret: the messages give the label */
+static int config_db_check_names(void)
+{
+    size_t i;
+
+    for (i = 0U; i < server_db.net_count; ++i) {
+        const camex_net_conf_t *n = &server_db.nets[i];
+        char label[CAMEX_NET_LABEL_MAX + 1U];
+
+        if (n->name_len >= CAMEX_NET_NAME_MIN) {
+            continue;
+        }
+        if (n->label[0] != '\0') {
+            snprintf(label, sizeof(label), "%s", n->label);
+        } else {
+            netw_default_label(n->id, label, sizeof(label));
+        }
+        if (!n->weak_name) {
+            log_message(LOG_ERR, "Network %s: its name has %u characters, "
+                        "fewer than %u, and could be guessed; choose a "
+                        "longer one, or set weak_name = yes in its block",
+                        label, (unsigned)n->name_len,
+                        (unsigned)CAMEX_NET_NAME_MIN);
+            return -1;
+        }
+        log_message(LOG_WARNING, "Network %s: its name has %u characters "
+                    "(weak_name = yes): it could be guessed",
+                    label, (unsigned)n->name_len);
+    }
+    return 0;
 }
 
 static int config_db_parse_file(const char *path, char *line,
@@ -693,6 +728,30 @@ static int config_db_parse_file(const char *path, char *line,
                 } else {
                     g->allow_new_networks = (uint8_t)yn;
                 }
+            } else if (strcmp(content, "cpace_per_ip") == 0 ||
+                       strcmp(content, "cpace_total") == 0 ||
+                       strcmp(content, "cpace_ban_after") == 0 ||
+                       strcmp(content, "cpace_ban_time") == 0) {
+                char *end = NULL;
+                unsigned long v = strtoul(val, &end, 10);
+
+                if (end == val || *end != '\0' || v > 1000000UL) {
+                    log_message(LOG_ERR, "Invalid %s: %s (0 to 1000000, 0 "
+                                "turns it off)", content, val);
+                    rc = -1;
+                } else if (strcmp(content, "cpace_per_ip") == 0) {
+                    g->cpace_per_ip = (unsigned int)v;
+                    g->cpace_per_ip_set = 1U;
+                } else if (strcmp(content, "cpace_total") == 0) {
+                    g->cpace_total = (unsigned int)v;
+                    g->cpace_total_set = 1U;
+                } else if (strcmp(content, "cpace_ban_after") == 0) {
+                    g->cpace_ban_after = (unsigned int)v;
+                    g->cpace_ban_after_set = 1U;
+                } else {
+                    g->cpace_ban_time = (unsigned int)v;
+                    g->cpace_ban_time_set = 1U;
+                }
             } else if (strcmp(content, "network_supernet") == 0) {
                 rc = config_parse_cidr_key(val, "network_supernet",
                                            &g->net_supernet,
@@ -833,6 +892,16 @@ static int config_db_parse_file(const char *path, char *line,
                                 "none)", val);
                     rc = -1;
                 }
+            } else if (strcmp(content, "weak_name") == 0) {
+                int yn = parse_yes_no(val);
+
+                if (yn < 0) {
+                    log_message(LOG_ERR, "Invalid value for weak_name: %s",
+                                val);
+                    rc = -1;
+                } else {
+                    network->weak_name = (uint8_t)yn;
+                }
             } else if (strcmp(content, "label") == 0) {
                 if (strlen(val) > CAMEX_NET_LABEL_MAX ||
                     !camex_name_valid(val) || strchr(val, ' ') != NULL) {
@@ -892,6 +961,9 @@ static int config_db_parse_file(const char *path, char *line,
     }
 
     fclose(fp);
+    if (config_db_check_names() != 0) {
+        return -1;
+    }
     if (config_db_index_ips() != 0) {
         return -1;
     }

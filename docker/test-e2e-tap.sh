@@ -75,6 +75,7 @@ cat > "$BUILD_CTX/camex.conf" <<'EOF'
 local_cidr = 10.200.0.1/24
 
 [network lan]
+weak_name = yes
 mode = tap
 pool = 10.66.0.0/24
 EOF
