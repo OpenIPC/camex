@@ -1293,6 +1293,7 @@ int config_apply_profile(camex_config_t *config, const camex_profile_t *profile)
     }
     if (profile->mtu > 0) {
         config->mtu = profile->mtu;
+        config->mtu_given = 1U;   /* the server's: a TAP device keeps it */
     }
     config->l2 = profile->l2;
     config->mesh = profile->mesh;

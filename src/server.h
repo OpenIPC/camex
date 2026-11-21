@@ -56,6 +56,7 @@ typedef struct {
                            * then a TCP slot is pre-auth (#9) */
     uint8_t auto_client;  /* registered in auto mode (#15) */
     uint16_t net1;        /* its network's slot + 1 (netw.h), 0 = none */
+    uint32_t net_gen;     /* that slot's gen when it joined */
     uint8_t mesh;         /* it can go peer to peer (REGISTER MESH=1) */
     uint8_t pake;         /* its key came from CPace (pake.h) */
     int web_port;         /* the port of its web UI it announced (#174), 0 = none */

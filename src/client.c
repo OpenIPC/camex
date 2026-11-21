@@ -44,6 +44,8 @@ static l2_reasm_t *client_reasm = NULL;   /* the frame in assembly */
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <sys/file.h>
+#include <fcntl.h>
 #else
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -164,17 +166,51 @@ static void client_known_store(const char *pub_b64, int pake_mark)
     char line[256];
     FILE *in;
     FILE *out;
+#ifndef _WIN32
+    int lockfd;
+#endif
 
     if (path == NULL) {
         return;
     }
     client_known_name(name, sizeof(name));
+#ifndef _WIN32
+    /* Two clients of one host share the file: one at a time reads it and
+     * puts it back (<path>.lock), each through a file of its own, never
+     * a fixed name another one, or a planted link, could be at */
+    snprintf(tmp, sizeof(tmp), "%s.lock", path);
+    lockfd = open(tmp, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (lockfd >= 0) {
+        int tries;
+
+        for (tries = 0; tries < 40 && flock(lockfd, LOCK_EX | LOCK_NB) != 0;
+             ++tries) {
+            usleep(50000);
+        }
+    }
+    snprintf(tmp, sizeof(tmp), "%s.XXXXXX", path);
+    {
+        int fd = mkstemp(tmp);
+
+        out = fd >= 0 ? fdopen(fd, "w") : NULL;
+        if (fd >= 0 && out == NULL) {
+            close(fd);
+            (void)remove(tmp);
+        }
+    }
+#else
     snprintf(tmp, sizeof(tmp), "%s.new", path);
     out = fopen(tmp, "w");
+#endif
     if (out == NULL) {
         log_message(LOG_WARNING, "Cannot keep the server key in %s (%s): "
                     "it is asked for again at the next start", path,
                     strerror(errno));
+#ifndef _WIN32
+        if (lockfd >= 0) {
+            close(lockfd);
+        }
+#endif
         return;
     }
     in = fopen(path, "r");
@@ -201,9 +237,14 @@ static void client_known_store(const char *pub_b64, int pake_mark)
         log_message(LOG_WARNING, "Cannot keep the server key in %s (%s)",
                     path, strerror(errno));
         (void)remove(tmp);
-        return;
+    } else {
+        log_message(LOG_DEBUG, "Server key of %s kept in %s", name, path);
     }
-    log_message(LOG_DEBUG, "Server key of %s kept in %s", name, path);
+#ifndef _WIN32
+    if (lockfd >= 0) {
+        close(lockfd);   /* and its lock */
+    }
+#endif
 }
 
 /* First contact without the server's key: ask for it. The request is

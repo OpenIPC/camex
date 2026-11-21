@@ -320,15 +320,36 @@ static bridge_remote_t *remote_find(const uint8_t mac[6])
     return NULL;
 }
 
+static void neigh_set(uint32_t ip_be, const uint8_t mac[6], int add);
+
+/* A remote device not heard for BRIDGE_REMOTE_AGE: forgotten, and its
+ * neighbour entry with it */
+static void remote_expire(bridge_remote_t *r)
+{
+    if (r->neigh_ip_be != 0U && br.ifindex != 0) {
+        neigh_set(r->neigh_ip_be, r->mac, 0);
+    }
+    r->neigh_ip_be = 0U;
+    r->ip_be = 0U;
+    r->used = 0U;
+}
+
 static bridge_remote_t *remote_by_ip(uint32_t ip_be)
 {
     size_t i;
 
     for (i = 0U; i < BRIDGE_REMOTES; ++i) {
-        if (br.remotes[i].used && br.remotes[i].ip_be == ip_be &&
-            ip_be != 0U) {
-            return &br.remotes[i];
+        bridge_remote_t *r = &br.remotes[i];
+
+        if (!r->used || r->ip_be != ip_be || ip_be == 0U) {
+            continue;
         }
+        /* Gone (or its address now another's): not sent to any more */
+        if (difftime(time(NULL), r->seen) > (double)BRIDGE_REMOTE_AGE) {
+            remote_expire(r);
+            continue;
+        }
+        return r;
     }
     return NULL;
 }

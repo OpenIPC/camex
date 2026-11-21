@@ -6,6 +6,29 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 5.0.1 — unreleased
+
+Fixes from the review of 5.0.0 ([#202](https://github.com/OpenIPC/camex/pull/202)).
+
+- A server reload never keeps a client in a network it did not join: a network slot that takes
+  another network, or a network whose mode changes (`mode = tap`, `addresses = none`), ends the
+  sessions it had (a generation per slot); before, a client of a removed network could stay on
+  as a member of the one that took its slot.
+- Client isolation turned on by a reload ends the sessions of the network's mesh clients: a
+  direct path set up before went on carrying their packets past the server. They come back and
+  get no peer keys.
+- A reload takes the gateway address off the tunnel when the network gets `addresses = none` or
+  another pool size, not only when it goes or its gateway moves.
+- A TAP client keeps an MTU it was given (`--mtu`, `mtu=`, the server's CONFIG) instead of the
+  LAN's 1500; 1500 stays the default.
+- `known_servers`: two clients on one host write it one at a time (`<file>.lock`), each through a
+  temporary file of its own (`mkstemp`), never a fixed `.new` another client or a planted link
+  could be at; before, one could lose the other's line and its CPace mark.
+- `--bridge-mode nat`: a LAN packet for a device that left the tunnel 10 minutes ago no longer
+  goes to it, and its neighbour entry is removed.
+- `camex.ko`: a packet queued while the offloads were on is linearised before an ordinary read
+  (CAMEX_IOC_VNET turned off), so the copy never reads past its linear part.
+
 ## 5.0.0 — 2026-11-20
 
 A major version: the default tunnel MTU over UDP is 1420 (was 1500; over TCP it stays 1500,

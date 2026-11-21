@@ -83,7 +83,7 @@ int packet_open(const camex_packet_open_t *params)
     if (backend_open) {
         return -1;  /* already open: close it first */
     }
-    if (params->l2 && params->mtu == CAMEX_DEFAULT_MTU) {
+    if (params->l2 && !params->mtu_given) {
         /* A TAP device: the LAN's 1500 unless an MTU was set (camex.h) */
         camex_packet_open_t tap = *params;
 

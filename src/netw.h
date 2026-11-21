@@ -74,7 +74,12 @@ typedef struct {
     uint8_t mesh;           /* clients go peer to peer where they can */
     uint8_t alias_up;       /* the server put alias_ip on its tunnel */
     uint32_t alias_ip;      /* that address, host order */
+    uint8_t alias_prefix;   /* and its prefix */
+    uint8_t iso_applied;    /* client isolation as server_networks_apply()
+                             * last saw it (1 = on) */
     time_t created;
+    uint32_t gen;           /* changes when the slot takes another network
+                             * or its mode: its clients' sessions end */
 } camex_network_t;
 
 /* The server's networks: CAMEX_NET_MAX entries from netw_alloc() (a client

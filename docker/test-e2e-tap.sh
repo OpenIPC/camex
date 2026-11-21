@@ -153,6 +153,13 @@ max=$(sed -n 's/.*UDP, length \([0-9]*\).*/\1/p' "$BUILD_CTX/wire.txt" | sort -n
 [ -n "$max" ] && [ "$max" -le 1400 ]
 check $? "the largest datagram is $max bytes (at most 1400)"
 
+echo "== 3a. an MTU given to a TAP client stays (Qodo on #202)"
+client mtu -- --name TAP-M --mtu 1420
+read -r IFM _ _ <<<"$(tap_of "$P-mtu")"
+[ -n "$IFM" ] && [ "$(docker exec "$P-mtu" cat /sys/class/net/$IFM/mtu)" = 1420 ]
+check $? "--mtu 1420 on a TAP network: the TAP device has 1420, not the LAN's 1500"
+docker rm -f "$P-mtu" >/dev/null
+
 echo "== 4. unicast only to the client behind the MAC"
 client c -- --name TAP-C
 read -r IFC MACC C <<<"$(tap_of "$P-c")"
