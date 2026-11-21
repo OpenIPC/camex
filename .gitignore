@@ -45,3 +45,6 @@ tests/test_chacha_neon
 tests/test_offload
 tests/test_pake
 tests/test_cpaceguard
+
+# The server key and settings of deploy/compose.yaml
+/deploy/data/

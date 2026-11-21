@@ -13,6 +13,10 @@ clients (see the MTU item below; whether it stays the global default is
 [#198](https://github.com/OpenIPC/camex/issues/198)). Everything else is compatible: a 4.x client
 or server works with a 5.0.0 one as before.
 
+- `deploy/compose.yaml`: the server in Docker (Alpine, host networking) with the static binary
+  of the latest release; the
+  first start makes its key pair and settings in `deploy/data/` as `install.sh` does
+  (docs/install.md#docker). `docker/README.md` says that `docker/` holds the tests.
 - Guessing a network's name is limited (`cpaceguard.c`, [docs](docs/networks.md#guessing-a-name)).
   A wrong guess shows on the server only as a `PAKE1` that no `PAKE3` follows; the server now
   counts those. At most `cpace_per_ip` (20) unconfirmed attempts a minute from one address and

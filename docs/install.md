@@ -148,6 +148,48 @@ directory, is its `RuntimeDirectory=`.
 
 nginx by hand: [nginx.md](nginx.md#nginx).
 
+## Docker
+
+[deploy/compose.yaml](../deploy/compose.yaml) runs the server in Alpine with
+the static camex of the [`latest`](../README.md#permanent-links) release
+(`camex-<arch>-full` where the release has it: TAP networks, `--bridge`, mesh).
+It needs only the three files of [deploy/](../deploy):
+
+```sh
+mkdir camex && cd camex
+for f in compose.yaml Dockerfile entrypoint.sh; do
+    curl -fsSLO https://raw.githubusercontent.com/OpenIPC/camex/master/deploy/$f
+done
+chmod 755 entrypoint.sh
+docker compose up -d --build
+docker compose logs camex          # how clients join: the network's name
+```
+
+On the first start it makes the server's key pair and settings in
+`data/` (`server.key`, `camex.conf`, mode 0600, owned by root), as
+`install.sh` does: a `[network NAME]` block of a random name (with camex
+5.0.0 and later; an older release gets only `psk=`, and the log prints the
+client's `--server-pubkey` and `--psk`), the pool
+`10.200.0.0/24` with the server at `10.200.0.1`, a new `psk=`. `CAMEX_PORT`,
+`CAMEX_POOL` and `CAMEX_NETWORK` in the compose file change them, on the first
+start only; later, edit `data/camex.conf`.
+
+- **Host networking** (`network_mode: host`): the tunnel interface is on the
+  host, as with `install.sh`, so the host reaches the clients and the port
+  needs no publishing. Open UDP and TCP 5800 in the firewall.
+- **Needs** `/dev/net/tun`, `NET_ADMIN` and `IPC_LOCK` (camex locks its
+  memory); the compose file gives them.
+- **Day to day:**
+
+  ```sh
+  docker compose exec camex camex --status   # --top for a live view (5.0.0)
+  docker compose kill -s HUP camex           # read data/camex.conf again
+  docker compose build --pull --no-cache && docker compose up -d   # update
+  ```
+
+nginx in front of the clients is not in the container: install it on the
+host ([nginx.md](nginx.md)).
+
 ## Files on the server
 
 Where everything lands on a Linux server. `install.sh --uninstall` prints the
@@ -237,4 +279,4 @@ sudo nginx -t && sudo systemctl reload nginx
 - The packages stay; `sudo apt-get purge nginx nginx-common` if nothing else
   uses nginx.
 
-The scripts in `docker/`, `tests/` and `ci/` are for building and testing only.
+The scripts in `docker/`, `tests/` and `ci/` are for building and testing only; to run the server in Docker, see [Docker](#docker).

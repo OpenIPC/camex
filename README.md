@@ -57,7 +57,7 @@ curl -fsSL https://raw.githubusercontent.com/OpenIPC/camex/master/install.sh | s
 
 Run it again to update camex; `--uninstall` lists every file of camex and how
 to remove them. The steps, the files on the server, installing by hand on other
-systems: [docs/install.md](docs/install.md).
+systems, and Docker Compose (`deploy/compose.yaml`): [docs/install.md](docs/install.md).
 
 ### Client
 
@@ -128,7 +128,7 @@ The change history is in [CHANGELOG.md](CHANGELOG.md).
 
 | Document                                       | Contents                                                                   |
 |------------------------------------------------|----------------------------------------------------------------------------|
-| [Installation](docs/install.md)                | `install.sh`, installing by hand, the files on the server, clean reinstall |
+| [Installation](docs/install.md)                | `install.sh`, installing by hand, Docker, the files on the server, clean reinstall |
 | [Usage](docs/usage.md)                         | the command line: keys, modes, every option, TUN backends                  |
 | [Server configuration](docs/server.md)         | `camex.conf`, `camex --status`, the auto pool and the number of clients    |
 | [nginx in front of the clients](docs/nginx.md) | each device's web UI by name, the start page, firewall, DNS, TLS           |

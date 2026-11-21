@@ -1,0 +1,37 @@
+#
+# Copyright (c) OpenIPC  https://openipc.org  MIT License
+#
+# compose.yaml — the camex server in Docker (docs/install.md#docker)
+#
+#   docker compose up -d --build       # in this directory
+#   docker compose logs camex          # the network's name, the server's key
+#   docker compose exec camex camex --status   # --top from 5.0.0
+#   docker compose kill -s HUP camex   # read data/camex.conf again
+#
+# The key pair and the settings are made in ./data on the first start.
+#
+
+services:
+  camex:
+    # Alpine with the static camex of the latest release; to update:
+    # docker compose build --pull --no-cache && docker compose up -d
+    build: .
+    image: camex:local
+    container_name: camex
+    restart: unless-stopped
+    init: true
+    # The tunnel interface on the host itself, as with install.sh: the host
+    # reaches the clients, and the port needs no publishing
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - IPC_LOCK
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./data:/etc/camex
+    environment:
+      # First start only (then data/camex.conf has them):
+      CAMEX_PORT: "5800"
+      # CAMEX_POOL: "10.200.0.0/24"
+      # CAMEX_NETWORK: "a-name-of-16-characters-or-more"
