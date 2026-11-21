@@ -32,7 +32,18 @@
 #define CAMEX_CLIENT_ID_LEN 32
 #define CAMEX_CONFIG_PATH_LEN 256
 #define CAMEX_DEFAULT_CONFIG_PATH "/etc/camex/camex.conf"
-#define CAMEX_DEFAULT_MTU 1500
+/* Over UDP 1420: a tunnel packet (MTU + 57 bytes of IPv4, UDP and camex)
+ * fits a 1500-byte link and PPPoE's 1492 whole, never two IP fragments.
+ * Over TCP 1500: the outer TCP cuts the stream to the path's MSS, so a big
+ * inner packet makes no fragments there and a smaller one only costs
+ * (#198). The default when no MTU is set: --mtu, mtu= in [server], or the
+ * server's CONFIG */
+#define CAMEX_DEFAULT_MTU 1420
+#define CAMEX_TCP_MTU 1500
+/* A TAP device carries the frames of a 1500-byte LAN (camex cuts them into
+ * pieces of its own, l2.h): it keeps 1500 unless an MTU is set */
+#define CAMEX_L2_MTU 1500
+#define CAMEX_DEFAULT_PORT 5800
 
 typedef enum {
     CAMEX_MODE_CLIENT = 0,
@@ -64,6 +75,24 @@ typedef struct {
     int web_port;        /* client: --web-port, nginx's port on it (#174), 0 = none */
     char server_key_file[256]; /* server: file with its base64 private key */
     char server_pubkey[64];    /* client: the server's base64 public key */
+    char network[64];          /* client: --network, the network's name */
+    char known_servers[256];   /* client: --known-servers, where the keys of
+                                * servers first met are kept; "none" = off */
+    uint8_t top;               /* --top: a live view of the server(s) */
+    uint8_t pake;              /* client: --network without --psk: CPace
+                                * (pake.h) */
+    uint8_t pinned;            /* client: --server-pubkey: the server's key
+                                * is known, no trust on first use */
+    uint8_t mtu_given;         /* --mtu: no default by the transport (#198) */
+    uint8_t pake_ok;           /* this connection's CPace succeeded */
+    uint8_t send_net_name;     /* the server asked for the network's name
+                                * (PAKE_FLAG_NAME) and its key is pinned */
+    char bridge_if[IFNAMSIZ];  /* client: --bridge, the LAN interface */
+    uint8_t bridge_mode;       /* --bridge-mode: bridge_mode_t */
+    uint8_t mesh;              /* client: the server's CONFIG said MESH=1 */
+    uint8_t l2;                /* client: the server's CONFIG said MODE=TAP */
+    uint8_t l2_mac[6];         /* the MAC it gave for the TAP interface */
+    int top_interval;          /* --top -d <seconds> (default 1) */
     char control_path[108];    /* control socket (#82): "" default, "none" */
     uint8_t status_query;      /* --status: ask the server(s), then exit */
     uint8_t status_json;       /* --json */
@@ -94,6 +123,9 @@ void camex_stop(void);
 void camex_cleanup(void);
 int camex_add_route(const char *cidr, const char *gateway);
 
+/* Server: notice a changed config file and ask for a reload */
+void camex_config_watch(void);
+
 /* Client: apply a changed CONFIG (address, gateway, MTU, routes) to the
  * live tunnel: old routes off, tunnel reopened, new routes on (#49). On
  * failure the old settings are restored; returns 0 or -1. Refused for a
@@ -113,6 +145,14 @@ int derive_client_id(char *client_id, size_t client_id_size);
 /* A pause of about a second (Sleep on Windows, where select() without
  * sockets does not wait) */
 void camex_pause_1s(void);
+
+/* Where a client keeps the public keys of the servers it met first
+ * without --server-pubkey: "<host>:<port> <base64 key>" lines */
+#ifdef _WIN32
+#define CAMEX_KNOWN_SERVERS_PATH "camex-known-servers"
+#else
+#define CAMEX_KNOWN_SERVERS_PATH "/etc/camex/known_servers"
+#endif
 
 /* Where a client keeps the ID it took from the MAC until a reboot (#121) */
 #define CAMEX_ID_FILE "/tmp/camex-id"

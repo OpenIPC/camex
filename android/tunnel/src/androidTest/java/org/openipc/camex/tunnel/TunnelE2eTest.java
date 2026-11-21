@@ -56,7 +56,29 @@ public class TunnelE2eTest {
         v.put(CamexTunnel.PUBKEY, args.getString("pubkey"));
         v.put(CamexTunnel.PSK, args.getString("psk"));
         v.put(CamexTunnel.WEB_PORT, args.getString("web", ""));
+        v.put(CamexTunnel.NETWORK, args.getString("network", ""));
         return v;
+    }
+
+    /**
+     * step=network (camex 4.6): the server's address and the network's name only, no key and
+     * no psk (CPace checks the server). CONNECTED with an address of the network's pool, then
+     * stop().
+     */
+    @Test
+    public void network() throws Exception {
+        Assume.assumeTrue("network".equals(args.getString("step")));
+        Map<String, String> v = values();
+        v.put(CamexTunnel.PUBKEY, "");
+        v.put(CamexTunnel.PSK, "");
+        assertNull(CamexTunnel.check(v));
+        assertTrue(CamexTunnel.start(context, v));
+        await(CamexTunnel.State.CONNECTED, 90);
+        assertTrue(CamexTunnel.address(), CamexTunnel.address().startsWith(args.getString("pool")));
+        Log.i(TAG, "network connected " + CamexTunnel.address());
+        CamexTunnel.stop();
+        await(CamexTunnel.State.STOPPED, 15);
+        Log.i(TAG, "network OK");
     }
 
     /** Waits for the state; fails with the last one after the timeout. */

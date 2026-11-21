@@ -48,6 +48,7 @@ public final class CamexTunnel {
     public static final String NAME = Values.NAME;
     public static final String TRANSPORT = Values.TRANSPORT;
     public static final String PUBKEY = Values.PUBKEY;
+    public static final String NETWORK = Values.NETWORK;
     public static final String PSK = Values.PSK;
     public static final String MTU = Values.MTU;
     public static final String KEEPALIVE = Values.KEEPALIVE;

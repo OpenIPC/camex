@@ -8,6 +8,13 @@
 
 #include "camex.h"
 #include "client.h"
+#include "netw.h"
+#ifdef CAMEX_L2
+#include "bridge.h"
+#endif
+#ifdef CAMEX_MESH
+#include "mesh.h"
+#endif
 #include "server.h"
 #include "control.h"
 #include "config.h"
@@ -21,6 +28,8 @@
 #include "tun.h"
 #include "util.h"
 #include "version.h"
+
+#include <sys/stat.h>   /* stat(): the config file watch, Windows too */
 
 #ifndef _WIN32
 #include <arpa/inet.h>
@@ -677,6 +686,10 @@ int camex_init(camex_config_t *config)
     client_mode = (config->mode == CAMEX_MODE_CLIENT) ? 1U : 0U;
     server_mode = (config->mode == CAMEX_MODE_SERVER) ? 1U : 0U;
     client_state_init(&client_state);
+    if (server_mode) {
+        log_message(LOG_INFO, "camex %s, %s", CAMEX_VERSION,
+                    mode_to_string(current_config.mode));
+    }
 
     if (client_mode && current_config.keepalive == 0) {
         log_message(LOG_INFO,
@@ -732,7 +745,7 @@ int camex_init(camex_config_t *config)
                 snprintf(current_config.psk, sizeof(current_config.psk),
                          "%s", g->psk);
             }
-            if (current_config.mtu == CAMEX_DEFAULT_MTU && g->mtu > 0) {
+            if (!current_config.mtu_given && g->mtu > 0) {
                 current_config.mtu = g->mtu;
             }
         }
@@ -769,6 +782,34 @@ int camex_init(camex_config_t *config)
         }
     }
 
+    /* A client that joins a network by name without --psk: the fixed
+     * network handshake key (the name travels inside message 1) */
+    if (client_mode && current_config.network[0] != '\0' &&
+        strlen(current_config.network) < CAMEX_NET_NAME_MIN) {
+        /* the server takes such a name only with weak_name = yes */
+        log_message(LOG_WARNING, "The network's name has fewer than %u "
+                    "characters: it could be guessed",
+                    (unsigned)CAMEX_NET_NAME_MIN);
+    }
+    if (client_mode && current_config.network[0] != '\0' &&
+        current_config.psk[0] == '\0') {
+        uint8_t k[32];
+
+        /* Without --server-pubkey: CPace proves the server knows the
+         * network's name before the name's ID goes anywhere. With it,
+         * CPace still runs: the server's flags say whether it wants the
+         * name, which goes only to a pinned key */
+        current_config.pake = 1U;
+        current_config.pinned = current_config.server_pubkey[0] != '\0';
+        char hex[65];
+
+        netw_handshake_key(k);
+        hex_encode(k, sizeof(k), hex, sizeof(hex));
+        snprintf(current_config.psk, sizeof(current_config.psk), "hex:%s",
+                 hex);
+        crypto_wipe(k, sizeof(k));
+    }
+
     /* Protocol v2 is always encrypted (#17) */
     {
         int keys_ok = crypto_init(current_config.psk) == 0 &&
@@ -780,11 +821,21 @@ int camex_init(camex_config_t *config)
                         "(create one with --genkey)");
             keys_ok = 0;
         }
-        if (keys_ok && client_mode && (!crypto_get_ctx()->has_server_pub ||
-                                       !crypto_get_ctx()->has_global)) {
-            log_message(LOG_ERR, "The client needs --psk and the server's "
-                        "public key (--server-pubkey)");
+        if (keys_ok && client_mode && !crypto_get_ctx()->has_global) {
+            log_message(LOG_ERR, "The client needs --network or --psk");
             keys_ok = 0;
+        }
+        /* Without --server-pubkey: the key kept from the first contact,
+         * else the server is asked for it (trust on first use) */
+        if (keys_ok && client_mode && current_config.pake &&
+            !current_config.pinned) {
+            client_pake_load_mark();
+        } else if (keys_ok && client_mode &&
+                   !crypto_get_ctx()->has_server_pub &&
+                   client_known_load() != 0) {
+            log_message(LOG_NOTICE, "No --server-pubkey: the key server "
+                        "%s:%d gives on first contact is trusted",
+                        current_config.server_host, current_config.port);
         }
         /* The key texts are not needed any more; on failure the derived
          * keys go too (on Android the process outlives this start) */
@@ -813,6 +864,14 @@ int camex_init(camex_config_t *config)
             camex_client_id_wait(current_config.client_id,
                                  sizeof(current_config.client_id)) != 0) {
             return -1;
+        }
+        if (current_config.client_id[0] != '\0') {
+            log_message(LOG_INFO, "camex %s, %s %s", CAMEX_VERSION,
+                        mode_to_string(current_config.mode),
+                        current_config.client_id);
+        } else {
+            log_message(LOG_INFO, "camex %s, %s", CAMEX_VERSION,
+                        mode_to_string(current_config.mode));
         }
 
         {
@@ -864,9 +923,43 @@ int camex_init(camex_config_t *config)
 #endif
         }
 
-        if (parse_local_cidr(current_config.local_cidr, local_ip,
-                             sizeof(local_ip), local_netmask,
-                             sizeof(local_netmask)) != 0) {
+#ifdef CAMEX_L2
+        /* --bridge: the TAP network goes onto a LAN interface, no device */
+        if (current_config.bridge_if[0] != '\0') {
+            uint8_t nid[CAMEX_NET_ID_LEN];
+
+            if (!current_config.l2) {
+                log_message(LOG_ERR, "--bridge needs a TAP network: the "
+                            "server's network is a TUN one");
+                net_close();
+                return -1;
+            }
+            netw_id_from_name(current_config.network, nid);
+            if (bridge_open(current_config.bridge_if,
+                            (bridge_mode_t)current_config.bridge_mode, nid,
+                            current_config.client_id,
+                            client_handle_tun_packet) != 0) {
+                net_close();
+                return -1;
+            }
+            client_link_up = 1U;
+#ifdef CAMEX_MESH
+            if (current_config.mesh) {
+                (void)mesh_client_start(1);
+            }
+#endif
+            log_message(LOG_NOTICE, "Tunnel started, bridged to %s",
+                        current_config.bridge_if);
+            return 0;
+        }
+#endif
+        /* A TAP network without addresses: the device gets none */
+        if (current_config.l2 && current_config.local_cidr[0] == '\0') {
+            snprintf(local_ip, sizeof(local_ip), "0.0.0.0");
+            snprintf(local_netmask, sizeof(local_netmask), "0.0.0.0");
+        } else if (parse_local_cidr(current_config.local_cidr, local_ip,
+                                    sizeof(local_ip), local_netmask,
+                                    sizeof(local_netmask)) != 0) {
             net_close();
             return -1;
         }
@@ -883,6 +976,8 @@ int camex_init(camex_config_t *config)
             open_params.route_count = current_config.route_count;
             open_params.device = current_config.tun_dev;
             open_params.use_provider = 1U;
+            open_params.l2 = current_config.l2;
+            open_params.mac = current_config.l2_mac;
             if (packet_open(&open_params) != 0) {
                 net_close();
                 return -1;
@@ -895,19 +990,16 @@ int camex_init(camex_config_t *config)
         }
 
         client_link_up = 1U;
-        log_message(LOG_NOTICE,
-                    "Tunnel started, awaiting response from server %s:%d",
-                    current_config.server_host, current_config.port);
-        log_message(LOG_INFO, "Tunnel initialized");
-        log_message(LOG_INFO, "  Mode: %s", mode_to_string(current_config.mode));
-        log_message(LOG_INFO, "  Server: %s:%d",
-                    current_config.server_host, current_config.port);
-        log_message(LOG_INFO, "  Local CIDR: %s", current_config.local_cidr);
-        log_message(LOG_INFO, "  Tunnel device: %s", tun_name);
-        log_message(LOG_INFO, "  MTU: %d", current_config.mtu);
-        log_message(LOG_INFO, "  Protocol: v%u (%s)", (unsigned)CAMEX_PROTO_VER,
+#ifdef CAMEX_MESH
+        if (current_config.mesh) {
+            (void)mesh_client_start(current_config.l2);
+        }
+#endif
+        log_message(LOG_DEBUG, "Protocol v%u (%s)", (unsigned)CAMEX_PROTO_VER,
                     "Noise_NKpsk0_25519_ChaChaPoly_BLAKE2b");
-        log_message(LOG_INFO, "  Transport: %s",
+        log_message(LOG_INFO, "Tunnel up: %s %s, MTU %d, server %s:%d (%s)",
+                    tun_name, current_config.local_cidr, current_config.mtu,
+                    current_config.server_host, current_config.port,
                     current_config.transport == CAMEX_TRANSPORT_TCP
                         ? "TCP" : "UDP");
         return 0;
@@ -950,20 +1042,39 @@ int camex_init(camex_config_t *config)
         }
     }
 
-    log_message(LOG_INFO, "Tunnel initialized");
-    log_message(LOG_INFO, "  Mode: %s", mode_to_string(current_config.mode));
-    log_message(LOG_INFO, "  Listen endpoint: %s", endpoint);
-    if (current_config.local_cidr[0] != '\0') {
-        log_message(LOG_INFO, "  Local CIDR: %s", current_config.local_cidr);
-        log_message(LOG_INFO, "  Tunnel device: %s", tun_name);
+    /* Named networks: their pools, their gateways on the tunnel (the
+     * table only on a server) */
+    if (netw_alloc() != 0) {
+        log_message(LOG_ERR, "No memory for the networks");
+        packet_close();
+        net_close();
+        return -1;
     }
-    log_message(LOG_INFO, "  MTU: %d", current_config.mtu);
-    log_message(LOG_INFO, "  Protocol: v%u (%s)", (unsigned)CAMEX_PROTO_VER,
+    if (server_networks_sync() != 0) {
+        packet_close();
+        net_close();
+        return -1;
+    }
+    server_networks_apply();
+    camex_config_watch();
+
+    log_message(LOG_DEBUG, "Protocol v%u (%s)", (unsigned)CAMEX_PROTO_VER,
                 "Noise_NKpsk0_25519_ChaChaPoly_BLAKE2b");
-    log_message(LOG_INFO, "  Transport: %s",
-                current_config.transport == CAMEX_TRANSPORT_TCP  ? "TCP"
-                : current_config.transport == CAMEX_TRANSPORT_BOTH ? "UDP and TCP"
-                                                                   : "UDP");
+    {
+        const char *tr = current_config.transport == CAMEX_TRANSPORT_TCP
+                             ? "TCP"
+                         : current_config.transport == CAMEX_TRANSPORT_BOTH
+                             ? "UDP and TCP" : "UDP";
+
+        if (current_config.local_cidr[0] != '\0') {
+            log_message(LOG_INFO, "Tunnel up: %s %s, MTU %d, listening on %s "
+                        "(%s)", tun_name, current_config.local_cidr,
+                        current_config.mtu, endpoint, tr);
+        } else {
+            log_message(LOG_INFO, "Listening on %s (%s), no tunnel interface",
+                        endpoint, tr);
+        }
+    }
     g_now = time(NULL);
     return 0;
 }
@@ -1015,7 +1126,7 @@ static void drain_udp_packets(void)
         if (rc == 0) {
             if (!client_link_confirmed) {
                 client_link_confirmed = 1U;
-                log_message(LOG_NOTICE,
+                log_message(LOG_DEBUG,
                     "Connection to server %s:%d established "
                     "(first response received)",
                     current_config.server_host, current_config.port);
@@ -1039,7 +1150,7 @@ static void drain_udp_packets(void)
         if (len > 0) {
             if (!client_link_confirmed) {
                 client_link_confirmed = 1U;
-                log_message(LOG_NOTICE,
+                log_message(LOG_DEBUG,
                     "Connection to server %s:%d established "
                     "(first response received)",
                     current_config.server_host, current_config.port);
@@ -1363,6 +1474,49 @@ static void handle_tun_packet(void)
     }
 }
 
+/* The server's file is read again when it changes (its time, size or
+ * inode), checked every CAMEX_CONFIG_WATCH seconds; a file that does not
+ * parse leaves the configuration as it was. kill -HUP still works. */
+#define CAMEX_CONFIG_WATCH 2
+void camex_config_watch(void)
+{
+    static time_t last_check = 0;
+    static int have = 0;
+    static time_t seen_mtime = 0;
+    static off_t seen_size = 0;
+    static unsigned long seen_ino = 0UL;
+    struct stat st;
+    time_t now = time(NULL);
+    int exists;
+
+    if (current_config.config_path[0] == '\0') {
+        return;
+    }
+    if (have && difftime(now, last_check) < (double)CAMEX_CONFIG_WATCH) {
+        return;
+    }
+    last_check = now;
+    exists = stat(current_config.config_path, &st) == 0;
+    if (!have) {
+        have = 1;
+        seen_mtime = exists ? st.st_mtime : 0;
+        seen_size = exists ? st.st_size : 0;
+        seen_ino = exists ? (unsigned long)st.st_ino : 0UL;
+        return;
+    }
+    if (!exists) {
+        return;   /* being replaced: the new one is seen next time */
+    }
+    if (st.st_mtime != seen_mtime || st.st_size != seen_size ||
+        (unsigned long)st.st_ino != seen_ino) {
+        seen_mtime = st.st_mtime;
+        seen_size = st.st_size;
+        seen_ino = (unsigned long)st.st_ino;
+        log_message(LOG_INFO, "Config file changed");
+        reload_config = 1;
+    }
+}
+
 void camex_run(void)
 {
     fd_set readset;
@@ -1382,7 +1536,7 @@ void camex_run(void)
             log_message(LOG_INFO, "Client isolation: packets between "
                         "clients are dropped (#83)");
         }
-        log_message(LOG_INFO, "Server started. Press Ctrl+C to stop.");
+        log_message(LOG_DEBUG, "Server started");
         while (running) {
             size_t si;
 
@@ -1430,6 +1584,12 @@ void camex_run(void)
 
             tv.tv_sec = 1;
             tv.tv_usec = 0;
+            /* Joined TCP packets out before sleeping; a TSO packet with
+             * packets left: no sleeping at all */
+            packet_flush();
+            if (packet_pending()) {
+                tv.tv_sec = 0;
+            }
 
             ready = select(maxfd + 1, &readset, &writeset, NULL, &tv);
             if (ready > 0) {
@@ -1462,9 +1622,14 @@ void camex_run(void)
             } else if (ready < 0 && errno != EINTR) {
                 print_errno_message(LOG_ERR, "select");
             }
+            if (packet_pending()) {
+                handle_tun_packet();
+            }
 
             server_expire_clients();
+            server_rates_tick();
             log_limit_tick();
+            camex_config_watch();
             if (reload_config) {
                 /* The previous configuration stays allocated until the new
                  * one is in place: a failed reload switches back to it */
@@ -1525,7 +1690,13 @@ void camex_run(void)
                     if (!restore && config_build_keystore() != 0) {
                         restore = 1;
                     }
+                    /* The networks of the new file (their table changes
+                     * only when it succeeds) */
+                    if (!restore && server_networks_sync() != 0) {
+                        restore = 1;
+                    }
                     if (!restore) {
+                        server_networks_apply();
                         server_revalidate_keys();
                         server_revalidate_unknown_clients();
                         server_revalidate_profile_addresses();
@@ -1595,11 +1766,11 @@ void camex_run(void)
             }
         }
 
-        log_message(LOG_INFO, "Server stopped.");
+        log_message(LOG_INFO, "Server stopped");
         return;
     }
 
-    log_message(LOG_INFO, "Client started. Press Ctrl+C to stop.");
+    log_message(LOG_DEBUG, "Client started");
     while (running) {
         g_now = time(NULL);
         log_limit_tick();
@@ -1619,11 +1790,33 @@ void camex_run(void)
 
         tv.tv_sec = 1;
         tv.tv_usec = 0;
+        /* As in the server's loop: joined TCP packets out, and no sleeping
+         * while a TSO packet has packets left */
+        packet_flush();
+        if (packet_pending()) {
+            tv.tv_sec = 0;
+        }
 
         maxfd = net_fd;
         if ((int)packet_fd() > maxfd) {
             maxfd = (int)packet_fd();
         }
+#ifdef CAMEX_L2
+        if (bridge_fd() >= 0) {
+            FD_SET(bridge_fd(), &readset);
+            if (bridge_fd() > maxfd) {
+                maxfd = bridge_fd();
+            }
+        }
+#endif
+#ifdef CAMEX_MESH
+        if (mesh_fd() >= 0) {
+            FD_SET(mesh_fd(), &readset);
+            if (mesh_fd() > maxfd) {
+                maxfd = mesh_fd();
+            }
+        }
+#endif
         /* Monitor TCP socket writability for pending sends */
         maxfd = net_tcp_pending_fdset(&writeset, maxfd);
 
@@ -1637,14 +1830,33 @@ void camex_run(void)
             if (packet_fd() >= 0 && FD_ISSET(packet_fd(), &readset)) {
                 handle_tun_packet();
             }
+#ifdef CAMEX_L2
+            if (bridge_fd() >= 0 && FD_ISSET(bridge_fd(), &readset)) {
+                bridge_readable();
+            }
+#endif
+#ifdef CAMEX_MESH
+            if (mesh_fd() >= 0 && FD_ISSET(mesh_fd(), &readset)) {
+                mesh_readable();
+            }
+#endif
         } else if (ready < 0 && errno != EINTR) {
             print_errno_message(LOG_ERR, "select");
         }
+        if (packet_pending()) {
+            handle_tun_packet();
+        }
+#ifdef CAMEX_L2
+        bridge_tick();
+#endif
+#ifdef CAMEX_MESH
+        mesh_tick();
+#endif
 
         client_tick();
     }
 
-    log_message(LOG_INFO, "Client stopped.");
+    log_message(LOG_INFO, "Client stopped");
 }
 
 void camex_stop(void)
@@ -1672,6 +1884,15 @@ void camex_stop(void)
 
 void camex_cleanup(void)
 {
+    if (server_mode) {
+        server_networks_down();
+    }
+#ifdef CAMEX_L2
+    bridge_close();
+#endif
+#ifdef CAMEX_MESH
+    mesh_client_stop();
+#endif
     /* Wipe all key material from memory */
     crypto_wipe_ctx();
     {
@@ -1839,8 +2060,11 @@ static int client_open_tunnel(const camex_config_t *cfg)
     char local_ip[16];
     char local_netmask[16];
 
-    if (parse_local_cidr(cfg->local_cidr, local_ip, sizeof(local_ip),
-                         local_netmask, sizeof(local_netmask)) != 0) {
+    if (cfg->l2 && cfg->local_cidr[0] == '\0') {
+        snprintf(local_ip, sizeof(local_ip), "0.0.0.0");
+        snprintf(local_netmask, sizeof(local_netmask), "0.0.0.0");
+    } else if (parse_local_cidr(cfg->local_cidr, local_ip, sizeof(local_ip),
+                                local_netmask, sizeof(local_netmask)) != 0) {
         return -1;
     }
     memset(&open_params, 0, sizeof(open_params));
@@ -1851,6 +2075,8 @@ static int client_open_tunnel(const camex_config_t *cfg)
     open_params.route_count = cfg->route_count;
     open_params.device = cfg->tun_dev;
     open_params.use_provider = 1U;
+    open_params.l2 = cfg->l2;
+    open_params.mac = cfg->l2_mac;
     return packet_open(&open_params);
 }
 
@@ -1901,7 +2127,8 @@ static int client_config_same(const camex_config_t *a,
            strcmp(a->gateway_ip, b->gateway_ip) == 0 &&
            a->mtu == b->mtu && a->route_count == b->route_count &&
            memcmp(a->route_cidrs, b->route_cidrs,
-                  sizeof(a->route_cidrs)) == 0;
+                  sizeof(a->route_cidrs)) == 0 &&
+           a->l2 == b->l2 && memcmp(a->l2_mac, b->l2_mac, 6) == 0;
 }
 
 int camex_client_reconfigure(const camex_config_t *next)
@@ -1931,8 +2158,9 @@ int camex_client_reconfigure(const camex_config_t *next)
         return client_reconfig_pending ? -1 : 0;
     }
     log_message(LOG_NOTICE, "Applying the new tunnel configuration from the "
-                "server: CIDR=%s GW=%s MTU=%d routes=%u", next->local_cidr,
-                next->gateway_ip, next->mtu, (unsigned)next->route_count);
+                "server: %s, gateway %s, MTU %d, %u route(s)",
+                next->local_cidr, next->gateway_ip, next->mtu,
+                (unsigned)next->route_count);
 
     /* Routes go with the old device: remove them while it exists. A
      * route that cannot be removed stays (logged): it points at the old
@@ -1972,6 +2200,14 @@ int camex_client_reconfigure(const camex_config_t *next)
         return -1;
     }
     client_reconfig_pending = 0;
+#ifdef CAMEX_MESH
+    /* A new address: the peers start over */
+    if (current_config.mesh) {
+        (void)mesh_client_start(current_config.l2);
+    } else {
+        mesh_client_stop();
+    }
+#endif
     return 0;
 }
 

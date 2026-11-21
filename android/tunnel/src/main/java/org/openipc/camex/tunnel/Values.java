@@ -24,6 +24,7 @@ final class Values {
     static final String TRANSPORT = "transport";
     static final String PUBKEY = "pubkey";
     static final String PSK = "psk";
+    static final String NETWORK = "network";
     static final String MTU = "mtu";
     static final String KEEPALIVE = "keepalive";
     static final String SERVER_TIMEOUT = "server_timeout";
@@ -37,8 +38,11 @@ final class Values {
             Field.hostPort(SERVER, "Server (host:port)", ""),
             Field.text(NAME, "Client name", "", true),
             Field.choice(TRANSPORT, "Proto", "UDP", "UDP", "TCP"),
-            Field.text(PUBKEY, "Server public key", "", true),
-            Field.secret(PSK, "Pre-shared key"),
+            // camex 4.6: the server's address and the network's name are enough; the key
+            // and psk only without a network (or as extra protection)
+            Field.secret(NETWORK, "Network name", "empty: server key and psk below"),
+            Field.text(PUBKEY, "Server public key", "empty with a network: checked by its name"),
+            Field.secret(PSK, "Pre-shared key", "empty with a network"),
             Field.text(MTU, "MTU (576\u20139000)", "empty: the server's"),
             Field.text(KEEPALIVE, "Keepalive, sec (0\u20133600)", "empty: 10"),
             Field.text(SERVER_TIMEOUT, "Server timeout, sec (5\u20133600)", "empty: 20"),
@@ -92,11 +96,21 @@ final class Values {
         if (transport(get(v, TRANSPORT)) == null) {
             return new String[]{TRANSPORT, "UDP or TCP"};
         }
-        if (!isKey(get(v, PUBKEY).trim())) {
-            return new String[]{PUBKEY, "44 characters of camex --genkey"};
+        String network = get(v, NETWORK);
+        if (!network.isEmpty() && !isNetwork(network)) {
+            return new String[]{NETWORK, "1 to 63 bytes, no control character, no blank at the ends"};
         }
-        if (!isPsk(get(v, PSK))) {
-            return new String[]{PSK, "the server's psk: one line below 128 bytes"};
+        // With a network both are optional: the name is the key, the server is checked by it
+        String key = get(v, PUBKEY).trim();
+        if ((network.isEmpty() || !key.isEmpty()) && !isKey(key)) {
+            return new String[]{PUBKEY, network.isEmpty() ? "44 characters of camex --genkey"
+                    : "44 characters of camex --genkey, or empty"};
+        }
+        String psk = get(v, PSK);
+        if ((network.isEmpty() || !psk.isEmpty()) && !isPsk(psk)) {
+            return new String[]{PSK, network.isEmpty()
+                    ? "the server's psk: one line below 128 bytes"
+                    : "the client's own psk: one line below 128 bytes, or empty"};
         }
         String mtu = get(v, MTU).trim();
         if (!mtu.isEmpty() && range(mtu, 576, 9000) == null) {
@@ -131,9 +145,23 @@ final class Values {
                 "--transport", transport(get(v, TRANSPORT)),
                 "--keepalive", keepalive.isEmpty() ? "10" : keepalive,
                 "--server-timeout", timeout.isEmpty() ? "20"
-                        : String.valueOf(Integer.parseInt(timeout)),
-                "--server-pubkey", get(v, PUBKEY).trim(),
-                "--psk", get(v, PSK)));
+                        : String.valueOf(Integer.parseInt(timeout))));
+        String network = get(v, NETWORK);
+        if (!network.isEmpty()) {
+            a.add("--network");
+            a.add(network);
+            // No file of known servers here: CPace checks the server at every start
+            a.add("--known-servers");
+            a.add("none");
+        }
+        if (!get(v, PUBKEY).trim().isEmpty()) {
+            a.add("--server-pubkey");
+            a.add(get(v, PUBKEY).trim());
+        }
+        if (!get(v, PSK).isEmpty()) {
+            a.add("--psk");
+            a.add(get(v, PSK));
+        }
         String mtu = get(v, MTU).trim();
         if (!mtu.isEmpty()) {
             a.add("--mtu");
@@ -160,6 +188,12 @@ final class Values {
     }
 
     /** The client ID as camex takes it: up to 31 bytes (its client_id[32]). */
+    /** As camex takes --network: 1 to 63 bytes, no control character, no blank at the ends. */
+    static boolean isNetwork(String n) {
+        return !n.isEmpty() && n.equals(n.trim())
+                && n.getBytes(StandardCharsets.UTF_8).length <= 63 && plain(n);
+    }
+
     static boolean isName(String n) {
         return !n.isEmpty() && n.equals(n.trim())
                 && n.getBytes(StandardCharsets.UTF_8).length <= 31 && plain(n);

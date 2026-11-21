@@ -6,6 +6,165 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 5.0.0 — 2026-11-20
+
+A major version: the default tunnel MTU over UDP is 1420 (was 1500; over TCP it stays 1500,
+[#198](https://github.com/OpenIPC/camex/issues/198)), see the MTU item below. Everything else is
+compatible: a 4.x client or server works with a 5.0.0 one as before.
+
+- `deploy/compose.yaml`: the server in Docker (Alpine, host networking) with the static binary
+  of the latest release; the
+  first start makes its key pair and settings in `deploy/data/` as `install.sh` does
+  (docs/install.md#docker). `docker/README.md` says that `docker/` holds the tests.
+- Guessing a network's name is limited (`cpaceguard.c`, [docs](docs/networks.md#guessing-a-name)).
+  A wrong guess shows on the server only as a `PAKE1` that no `PAKE3` follows; the server now
+  counts those. At most `cpace_per_ip` (20) unconfirmed attempts a minute from one address and
+  `cpace_total` (300) from all addresses (not counting an address whose client confirmed within
+  the hour); `cpace_ban_after` (30) attempts in a row with none confirmed ban the address for
+  `cpace_ban_time` (600) seconds, never an address with a confirmed client (a NAT with real
+  cameras). A confirmed `PAKE3` gives its attempt back, so real clients spend nothing.
+  `camex --status` shows the counts (`cpace: ...`), `--status --json` has `cpace`.
+- A `[network NAME]` block refuses a name shorter than 16 characters unless it has
+  `weak_name = yes`; a client with a shorter `--network` warns, and `install.sh --network`
+  takes 16 characters or more.
+  The error and the warning show the network by its ID (`net-...`), never by its name.
+
+
+- Networks are shown by their names on the server (logs, `--status`, `--top`) instead of
+  `net-` and 4 bytes of the ID: a `[network NAME]` block shows NAME unless `label=` is given,
+  and a client sends the name (`NAME=` in REGISTER, checked against the network's ID) only to a
+  key it was given (`--server-pubkey`) and only when the server's PAKE2 has `PAKE_FLAG_NAME`;
+  a key believed on first use may be an impostor's, so such a client's network shows as `net-`.
+  With `--server-pubkey` the client now runs CPace too (no KEYREQ, nothing kept), to learn those
+  flags.
+- `camex --top` grouped by network: a summary (`Clients 3 of 256   In 0.7 Mbit/s   Out 0.7 Mbit/s
+  Relayed 0.0 Mbit/s`), then each network's clients (rates in Mbit/s, `-` when idle, UDP/TCP)
+  and its mesh pairs (`Mesh  CAM-BACK <-> CAM-FRONT  direct  3.9 Mbit/s`: the clients' reports
+  for a direct path, which the server cannot see, its own count for a relayed one). Redrawn in
+  place without flicker. `--status` and `--status --json` are unchanged.
+- Mesh peers with a direct path keep talking when the server is gone or being restarted: a
+  client without a server session used to drop every packet it sent, its peers' included.
+  `test-e2e-mesh.sh` pauses the server and pings over a TUN and a TAP direct path.
+- The console log: every line starts with the time and its level (`18:31:02 [INFO]  ...`,
+  `[WARN]`, `[ERROR]`, `[DEBUG]`); syslog and logcat get the plain sentence. The start is shorter:
+  `camex 5.0.0, client CAM-a`, one `Tunnel up: tun0 10.77.0.148/24, MTU 1420, server ... (UDP)`
+  line instead of an eight-line block, one `TUN backend: ..., offloads on` line, `Received config
+  from server: 10.77.0.148/24, gateway 10.77.0.1, MTU 1420`; the encryption fingerprint, the
+  protocol, the known-servers file and other details only with `--verbose` (`--quiet`: warnings
+  and errors only). The server says where a client came from (`Registered auto client CAM-a:
+  10.77.0.148 in network net-8a386ca1, from 172.28.0.3:37186 (UDP)`) and no longer warns about the
+  auto pool when only networks are configured.
+- Memory: camex locks all of it (`mlockall`), so every static buffer is resident on every
+  camera. The tables only a server uses (networks, CPace sessions) are allocated by the server,
+  and the offload buffers (64 KB to read a TSO packet, 32 KB to join packets) only when a device
+  takes offloads. `camex-arm` on a hi3516ev300: 540 KB resident without offloads, 644 KB with
+  them (608 KB before this release's offloads).
+- The mesh socket asks for the same UDP buffers as the server's (the kernel caps both at
+  `rmem_max`/`wmem_max`). Forcing them past the cap (`SO_*BUFFORCE`, 1 MB) and waiting for room on
+  a full send buffer were both tried on a stock camera and made no difference (41-45 Mbit/s with
+  each), so camex keeps the kernel's limits.
+- `camex.ko` offloads (`CAMEX_IOC_VNET`, kernels 4.1+): tun's vnet header and TSO/checksum
+  offload on `/dev/camex`, GSO writes of joined TCP packets built of single pages; camex asks for
+  them as with `tun.ko`. A full queue now stops the interface's transmit queue instead of
+  dropping packets (`tx_dropped` grew under load). Two OpenIPC cameras on one LAN, iperf3 TCP
+  through a direct mesh with `tun.ko`: 35/33 Mbit/s without offloads, 60/52 with them (the
+  plain network: 94/90); stock firmware has no `tun.ko`, so this is for `camex.ko`.
+  `tests/kmod/run-vm.sh` moves 4 MB each way through `camex.ko` and checks the bytes.
+- The default tunnel MTU over UDP is 1420 (was 1500): a tunnel packet, the MTU plus 57 bytes of
+  IPv4, UDP and camex, now fits a 1500-byte link and PPPoE's 1492 whole. With 1500 every full
+  packet went as two IP fragments: on a Cortex-A7 camera ~7 points more CPU at 25 Mbit/s and
+  slower TCP (13.7 against 17.2 Mbit/s down at MTU 1300). Over TCP alone (`--transport tcp`) it
+  stays 1500: the outer TCP cuts the stream to the path's MSS, no fragments there (#198). A server
+  on both transports takes 1420. TAP devices keep 1500 (their frames are cut by camex itself). An
+  `mtu` set on either side (`--mtu`, `mtu=` in `[server]` or a client's section) still wins.
+- TUN offloads on Linux (`offload.c`): a TUN device camex makes through `/dev/net/tun` takes
+  `IFF_VNET_HDR` with TSO and checksum offload; camex cuts the kernel's TCP of up to 64 KB into
+  packets of the MTU, completes checksums left to it, and writes the TCP packets of one connection
+  that arrive together as one (GRO rules: the same ACK, window and options, data of one size,
+  contiguous sequence). Nothing changes on the wire. x86 to x86: 935 → 1280 and 1134 → 1352
+  Mbit/s of TCP, less CPU; on a Cortex-A7 camera about 2 points less CPU at 20 Mbit/s.
+  `--no-tun-offload` turns them off. `docker/test-e2e-tun-provider.sh` builds with `netw.c`,
+  `pake.c` and `offload.c` (it had not been given the first two).
+- CPace (`pake.c`): a client with `--network` and without `--server-pubkey` checks the server by
+  the network's name at every connection, with nothing more to give. KEYREQ, then PAKE1 (the
+  client's share on an Elligator2 point of the network's ID and session, 1200 bytes), PAKE2 (one
+  answer and tag per network the server knows, at most 24; the tags cover the server's key), PAKE3
+  (the client's tag); the shared key is the Noise PSK, and REGISTER no longer carries the network's
+  ID. A fake server cannot complete the handshake and gets nothing to test guesses offline; a
+  server's new key is proven by the name and kept (`known_servers` lines get a `pake` mark).
+  A network the server does not know but may create (`allow_new_networks`), or a server without
+  CPace, gets the ID the old way (trust on first use), and only while that server never proved
+  the network: one that did and then claims to be open is refused as an impostor.
+- `install.sh`: a new `camex.conf` starts with a `[network NAME]` block of a random name (20
+  letters and digits; `--network` gives one), and the installer prints the short command line,
+  `camex --server-host <host> --network '<name>'`, before the one with the key and psk.
+- Android app and library: a **Network name** field (`--network`, hidden like the key); with it the
+  server's public key and psk may stay empty (the server is checked by CPace; no known servers
+  file on the phone, `--known-servers none`). Links take `w=<network>`; `install.sh` adds it.
+- Poly1305 with NEON on 32-bit ARM (`chacha_neon.c`, two blocks at a time in 26-bit limbs, the
+  lanes put together as `a·r² + b·r`), taken like NEON ChaCha20 only when the CPU has NEON. On a
+  Cortex-A7 (hi3516ev300) ChaCha20-Poly1305 of 1400-byte packets: 142 → 175 Mbit/s.
+- Tested on two hi3516ev300 cameras (Cortex-A7, kernel 4.9.37, `tun.ko`): CPace, a direct mesh
+  path for TUN and TAP networks, 10 MB over it at ~12 Mbit/s, key renewal after 10 minutes; NEON
+  ChaCha20 there: 33.8 → 48.8 MB/s. The ~12 Mbit/s was not the path alone: that path carries
+  ~24 Mbit/s of plain TCP, the default MTU of 1500 makes every full packet two IP fragments, and
+  the camera's CPU was saturated (`top` showed idle time it did not have).
+
+## 4.6.0 — 2026-11-20
+
+- The full camex, `camex-<arch>-full` next to every `camex-<arch>` (`make CAMEX_L2=1
+  CAMEX_MESH=1`); without the flags the build is the core camex as before. A core camex refuses
+  `mode = tap`, `mesh = yes` and a server's `MODE=TAP`, and says it needs the full one.
+- TAP networks (`mode = tap`, CAMEX_L2): Ethernet frames, a TAP interface with a derived MAC on each
+  client; the server is the network's switch (learned MACs, floods broadcast, multicast and unknown
+  destinations; `client_isolation` floods nothing) and its gateway (ARP for the gateway, IPv4 to its
+  MAC into the tunnel interface). Frames over 1300 bytes go in camex's own pieces (up to 8), so a
+  1514-byte frame of an MTU 1500 LAN never needs an IP fragment; `addresses = none` gives no
+  addresses (a bridged LAN's devices take theirs). `camex.ko mode=tap`: an Ethernet interface.
+- `--bridge <iface>` (CAMEX_L2): a client bridges its TAP network to a LAN without a bridge or TAP
+  device: a packet socket on the interface (promiscuous through the socket); IPv4 to the host through
+  a raw socket, ARP for the host answered, the remote devices as permanent neighbour entries
+  (removed at the stop); checksum offload and TSO/GRO segments completed and cut to the MTU
+  (`PACKET_VNET_HDR`); loop probes (EtherType 0x88B5): of two bridges of a network on one LAN, the
+  higher client ID stops. `--bridge-mode nat` (auto on Wi-Fi): relayd-like, the host's MAC towards
+  the LAN, ARP rewritten, DHCP asks for broadcast answers.
+- Mesh networks (`mesh = yes`, CAMEX_MESH): each client has a peer socket whose public endpoint the
+  server learns (ENDPOINT, sealed with the session) and its LAN one; on traffic to a peer the client
+  asks the server (PEER?), the server gives both peers each other's endpoints and a pair key, both
+  punch at once; a direct path carries P2P packets (ChaCha20-Poly1305, a key and counter per
+  direction, replay window); a silent one (35 s) goes back through the server, a failed punch is
+  tried again after 60 s. The first punches to a public endpoint have TTL 2: they open this side's
+  NAT and die before the peer's, so no early inbound entry in its connection tracking makes Linux
+  NAT give the peer's mapping another port. `--status`/`--top`: relayed pairs and the peers clients
+  report.
+- ChaCha20 with NEON on 32-bit ARM (`chacha_neon.c`, four blocks at a time), used only when the
+  CPU has NEON (AT_HWCAP), so one `camex-arm` still runs on ARMv5/ARMv6; `CAMEX_NEON=0` leaves it
+  out. `camex --bench-crypto`: packets a second of 1400 bytes, and whether NEON is used.
+
+## 4.5.0 — 2026-11-20
+
+- Named networks ([docs/networks.md](docs/networks.md)): a client joins with the server's address
+  and the network's name, `camex --server-host <host> --network <name>` (client and auto mode and
+  port 5800 are the defaults; the ID is the MAC unless `--name`). The name is the key: the client
+  sends its ID (BLAKE2b-256) inside Noise message 1 with a fixed network key, so only the
+  server's private key opens it; the name is never logged nor left in the client's command line.
+  `[network NAME]` blocks list them (`pool=`, `client_isolation=`, `label=`);
+  `allow_new_networks=yes` takes any name as a new network.
+- Stable addresses: a client's address comes from the network's ID and its client ID (BLAKE2b,
+  modulo the pool), the same after a client or server restart; another client ID on it moves
+  the later one to +1, −1, +2 …; the same client ID coming back always gets its own address, also
+  while its old session still looks live. Derived pools are /16 of 10.0.0.0/8 by default
+  (`network_supernet=`, `network_prefix=`); each network's gateway is an alias on the server's
+  tunnel. Networks never meet: packets between them, or into the auto pool, are dropped.
+- The server's key on first contact: a client without `--server-pubkey` asks for it (KEYREQ, 64
+  bytes, answered with 37), trusts it and keeps it in `/etc/camex/known_servers`
+  (`--known-servers`); a kept key is used from then on and never replaced on its own, and the
+  client says how to forget it when the server's key changed.
+- The server reads its file again when it changes (every 2 s; `kill -HUP` still works); a file
+  that does not parse keeps the configuration.
+- `camex --top`: a live view of the clients, busiest first, with RX/s and TX/s (`--interval`);
+  `camex --status` lists the networks, `--json` adds `networks`, and per client `network`,
+  `rx_rate` and `tx_rate`.
 ## 4.4.1 — 2026-11-20
 
 - Android library: the owner of a VPN is read with `NetworkCapabilities.getOwnerUid()` only from

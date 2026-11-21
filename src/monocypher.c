@@ -60,6 +60,9 @@
 // <https://creativecommons.org/publicdomain/zero/1.0/>
 
 #include "monocypher.h"
+#ifdef CAMEX_CHACHA_NEON
+#include "chacha_neon.h"
+#endif
 
 #ifdef MONOCYPHER_CPP_NAMESPACE
 namespace MONOCYPHER_CPP_NAMESPACE {
@@ -239,6 +242,19 @@ u64 crypto_chacha20_djb(u8 *cipher_text, const u8 *plain_text,
 	// Whole blocks
 	u32    pool[16];
 	size_t nb_blocks = text_size >> 6;
+#ifdef CAMEX_CHACHA_NEON
+	// camex: four blocks at a time with NEON where the CPU has it
+	// (chacha_neon.c); the rest below, as always
+	if (nb_blocks >= 4 && camex_chacha_neon_ok()) {
+		size_t done = camex_chacha20_neon(cipher_text, plain_text,
+		                                  nb_blocks, input);
+		cipher_text += done * 64;
+		if (plain_text != NULL) {
+			plain_text += done * 64;
+		}
+		nb_blocks -= done;
+	}
+#endif
 	FOR (i, 0, nb_blocks) {
 		chacha20_rounds(pool, input);
 		if (plain_text != NULL) {
@@ -408,6 +424,17 @@ void crypto_poly1305_update(crypto_poly1305_ctx *ctx,
 
 	// Process the message block by block
 	size_t nb_blocks = message_size >> 4;
+#ifdef CAMEX_CHACHA_NEON
+	// camex: pairs of blocks with NEON where the CPU has it
+	// (chacha_neon.c); an odd last block below, as always
+	if (nb_blocks >= 4 && camex_chacha_neon_ok()) {
+		size_t done = camex_poly1305_neon(ctx->h, ctx->r, message,
+		                                  nb_blocks);
+		message      += done << 4;
+		message_size -= done << 4;
+		nb_blocks    -= done;
+	}
+#endif
 	poly_blocks(ctx, message, nb_blocks, 1);
 	message      += nb_blocks << 4;
 	message_size &= 15;

@@ -214,7 +214,9 @@ Since 4.4.0 the library takes the VPN only when the user asks:
   comes back when that app's VPN ends. A tunnel that is reconnecting never asks
   for the VPN while another app's is up, and keeps its own VPN while camex
   reconnects or starts again (the library holds the TUN; camex gets a copy), so
-  an app waiting for the VPN does not take it in that gap.
+  an app waiting for the VPN does not take it in that gap. A restart with new
+  values makes the new TUN before the old one goes, so the interface's name may
+  change (`tun0`, then `tun1`): look for the tunnel's address on any `tun*`.
 - `stop()` ends a wait; `start()` during a wait takes the VPN now.
 - A VPN the user turned off in the system settings, with no other VPN after
   it, is not followed by a start: the state stays `WAITING` until the app's

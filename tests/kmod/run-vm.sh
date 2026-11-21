@@ -48,7 +48,8 @@ make -s -C "$K" M=/tmp/mbad modules 2>&1 | grep -v "compiler differs\|built by\|
 
 mkdir -p rootfs/bin rootfs/dev rootfs/proc rootfs/sys rootfs/mod rootfs/tmp
 cp /bin/busybox rootfs/bin/busybox
-for a in sh mount insmod rmmod dmesg ip chmod sleep poweroff cat grep sed ping kill; do
+for a in sh mount insmod rmmod dmesg ip chmod sleep poweroff cat grep sed ping kill \
+         wget md5sum httpd dd cut; do
     ln -s busybox rootfs/bin/$a
 done
 cp /tmp/m/camex.ko kmodtest rootfs/
@@ -80,7 +81,14 @@ if [ -n "$CLIENT" ]; then
     CAMEX_POOL_HOLD=0 /k/camex --mode server --port 5800 --local-cidr 10.200.0.1/24 \
         --server-key-file /tmp/server.key --psk vm-test > /tmp/server.log 2>&1 &
     cp /k/camex rootfs/camex
+    # 4 MB to the guest through the tunnel (camex.ko's joined writes) and 4
+    # MB back from it (its TSO): the same bytes both ways
+    mkdir -p /tmp/www
+    dd if=/dev/urandom of=/tmp/www/f bs=1024 count=4096 2>/dev/null
+    busybox httpd -p 10.200.0.1:8080 -h /tmp/www 2>/dev/null ||
+        { sleep 2; busybox httpd -p 8080 -h /tmp/www; }
     echo "PUB=$PUB" > rootfs/client.env
+    echo "MD5=$(md5sum /tmp/www/f | cut -c1-32)" >> rootfs/client.env
 fi
 cat > rootfs/init <<'INIT'
 #!/bin/sh
@@ -142,8 +150,20 @@ if [ -n "$PUB" ]; then
     ping -c 3 -W 2 10.200.0.1 >/dev/null &&
         echo "ok: client: guest pings the server through camex.ko" ||
         echo "FAIL: client: guest cannot ping the server"
+    grep -q "offloads on (camex.ko)" /tmp/log &&
+        echo "ok: client: offloads on through camex.ko" ||
+        echo "FAIL: client: no offloads through camex.ko"
+    wget -q -O /tmp/f http://10.200.0.1:8080/f &&
+        [ "$(md5sum /tmp/f | cut -c1-32)" = "$MD5" ] &&
+        echo "ok: client: 4 MB from the server, the same bytes" ||
+        echo "FAIL: client: 4 MB from the server"
+    rm -f /tmp/f
+    mkdir -p /tmp/up
+    dd if=/dev/urandom of=/tmp/up/u bs=1024 count=4096 2>/dev/null
+    echo "guest-md5: $(md5sum /tmp/up/u | cut -c1-32)"
+    httpd -p 8081 -h /tmp/up
     echo "client-up"
-    sleep 6         # the server pings the guest meanwhile
+    sleep 20        # the server pings the guest and fetches /tmp/up/u
     kill -TERM $cx
     i=0
     while kill -0 $cx 2>/dev/null && [ $i -lt 10 ]; do sleep 1; i=$((i + 1)); done
@@ -161,6 +181,24 @@ if [ -n "$PUB" ]; then
             echo "FAIL: client: IPv6 left off on camex"
     fi
     sed 's/^/guest-log: /' /tmp/log | grep -iE "backend|config|interface|error|warn"
+fi
+# mode=tap: an Ethernet interface whose MAC can be set (TAP networks of
+# the full camex)
+rmmod camex 2>/dev/null
+if insmod /camex.ko mode=tap; then
+    ip link show camex | grep -q "link/ether" &&
+        echo "ok: kmod tap: camex is an Ethernet interface" ||
+        echo "FAIL: kmod tap: camex is not an Ethernet interface"
+    ip link set camex address 02:ca:00:00:00:01 &&
+        ip link show camex | grep -q "02:ca:00:00:00:01" &&
+        echo "ok: kmod tap: its MAC can be set" ||
+        echo "FAIL: kmod tap: its MAC cannot be set"
+    ip link set camex up && echo "ok: kmod tap: up" || echo "FAIL: kmod tap: not up"
+    dmesg | grep -qiE "Oops|BUG:|Unable to handle" &&
+        echo "FAIL: kmod tap: the kernel oopsed" || echo "ok: kmod tap: no oops"
+    rmmod camex && echo "ok: kmod tap: unloads" || echo "FAIL: kmod tap: does not unload"
+else
+    echo "FAIL: kmod tap: insmod camex.ko mode=tap"
 fi
 poweroff -f
 INIT
@@ -184,6 +222,12 @@ if [ -n "$CLIENT" ]; then
         sleep 1; i=$((i + 1))
     done
     ping -c 3 -W 2 10.200.0.2 >/dev/null 2>&1 && PINGED=1
+    sleep 1
+    want_md5=$(tr -d '\r' < vm.log | sed -n 's/^guest-md5: //p' | head -1)
+    UPLOADED=0
+    busybox wget -q -O /tmp/u http://10.200.0.2:8081/u 2>/dev/null &&
+        [ -n "$want_md5" ] && [ "$(md5sum /tmp/u | cut -c1-32)" = "$want_md5" ] &&
+        UPLOADED=1
 fi
 wait $qemu || true
 tr -d '\r' < vm.log | grep -E "^ok:|^FAIL:|^mode:|^concurrent|^read |^RESULT|^guest-log" \
@@ -202,6 +246,11 @@ if [ -n "$CLIENT" ]; then
     else
         echo "FAIL: client: the server cannot ping 10.200.0.2" | tee -a result.txt
         tail -5 /tmp/server.log
+    fi
+    if [ $UPLOADED = 1 ]; then
+        echo "ok: client: 4 MB from the guest, the same bytes" | tee -a result.txt
+    else
+        echo "FAIL: client: 4 MB from the guest" | tee -a result.txt
     fi
     grep -q "^ok: client: no route on camex after SIGTERM" result.txt ||
         echo "FAIL: client: phase did not finish" | tee -a result.txt

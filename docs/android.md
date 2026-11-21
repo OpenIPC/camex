@@ -41,6 +41,11 @@ defaults shown in an empty field are the same in every app on camex.
 - **Proto** — UDP (the default) or TCP, for networks that block UDP; a
   server on both (the default since camex 4.0.0) takes either, an older one
   only the one it was started with.
+- **Network name** — `--network` (camex 4.6, [networks.md](networks.md)): with
+  it, the server and the network's name are enough. The server is checked by
+  the name (CPace), and the two fields below may stay empty. It is hidden like
+  the key. The app keeps no file of known servers, so CPace runs at every
+  start.
 - **Server public key** and **Pre-shared key** — `--server-pubkey --psk`; the
   key must match the client's `psk=` (or the global key); it is hidden, **Show
   the key** under it shows it.
@@ -62,8 +67,11 @@ command line:
 
 ```
 Android: open this link on the phone (Telegram, mail, anything):
-  https://openipc.github.io/camex/connect/#h=vpn.example.org&p=5800&t=udp&k=<server public key>&s=<psk>
+  https://openipc.github.io/camex/connect/#h=vpn.example.org&p=5800&t=udp&k=<server public key>&s=<psk>&w=<network>
 ```
+
+`w` is the network's name; `install.sh` adds it when `camex.conf` has a
+`[network NAME]` block. A link with `h` and `w` alone is enough for camex 4.6.
 
 Tapped on the phone, it opens the app's settings with the link's values filled
 in and their fields marked; nothing is saved or connected until **Save**. A

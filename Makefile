@@ -31,7 +31,11 @@ ifeq ($(origin BUILD_DIR),command line)
 else
   MAKE_BUILDDIR_ARG =
 endif
-MAKE_ARGS = $(MAKE_CC_ARG) $(MAKE_STRIP_ARG) $(MAKE_TARGET_ARG) $(MAKE_BUILDDIR_ARG)
+# The optional features (src/Makefile): passed on when given
+MAKE_FEATURE_ARGS = $(if $(CAMEX_L2),CAMEX_L2='$(CAMEX_L2)') \
+                    $(if $(CAMEX_MESH),CAMEX_MESH='$(CAMEX_MESH)')
+MAKE_ARGS = $(MAKE_CC_ARG) $(MAKE_STRIP_ARG) $(MAKE_TARGET_ARG) $(MAKE_BUILDDIR_ARG) \
+            $(MAKE_FEATURE_ARGS)
 
 all:
 	$(MAKE) -C src all $(MAKE_ARGS)

@@ -20,12 +20,56 @@
 #include <android/log.h>
 #endif
 
+/* Messages above this priority are left out: LOG_INFO by default (notices
+ * and information), LOG_WARNING with --quiet, LOG_DEBUG with --verbose */
+static int log_level = LOG_INFO;
+
+void log_set_level(int level)
+{
+    log_level = level;
+}
+
+int log_get_level(void)
+{
+    return log_level;
+}
+
+/* The console's prefix: the time and the level, fixed width
+ * ("18:31:02 [INFO]  "); syslog and logcat keep their own */
+static void log_prefix(char *out, size_t size, int priority)
+{
+    const char *tag = priority <= LOG_ERR     ? "[ERROR]"
+                      : priority <= LOG_WARNING ? "[WARN] "
+                      : priority <= LOG_INFO    ? "[INFO] "
+                                                : "[DEBUG]";
+    time_t now = time(NULL);
+    struct tm tmv;
+    struct tm *t;
+
+#ifdef _WIN32
+    t = localtime(&now);
+#else
+    t = localtime_r(&now, &tmv);
+#endif
+    (void)tmv;
+    if (t != NULL) {
+        snprintf(out, size, "%02d:%02d:%02d %s ", t->tm_hour, t->tm_min,
+                 t->tm_sec, tag);
+    } else {
+        snprintf(out, size, "%s ", tag);
+    }
+}
+
 void log_message(int priority, const char *fmt, ...)
 {
     char message[512];
+    char prefix[32];
     va_list ap;
     FILE *stream = (priority <= LOG_WARNING) ? stderr : stdout;
 
+    if (priority > log_level) {
+        return;
+    }
     va_start(ap, fmt);
     vsnprintf(message, sizeof(message), fmt, ap);
     va_end(ap);
@@ -39,7 +83,8 @@ void log_message(int priority, const char *fmt, ...)
 #elif !defined(_WIN32)
     syslog(priority, "%s", message);
 #endif
-    fprintf(stream, "%s\n", message);
+    log_prefix(prefix, sizeof(prefix), priority);
+    fprintf(stream, "%s%s\n", prefix, message);
     fflush(stream);
 }
 

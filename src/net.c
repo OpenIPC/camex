@@ -425,6 +425,10 @@ int net_create_socket(camex_transport_t transport)
     return socket(AF_INET, type, 0);
 }
 
+/* UDP buffers: asked large, capped by the kernel at rmem_max/wmem_max
+ * (160 KB on cameras). Forcing them past it (SO_*BUFFORCE, 1 MB) was
+ * measured on a stock camera and made no difference, so camex keeps the
+ * kernel's limits and its memory */
 int net_tune_udp_socket(int fd)
 {
     int bufsize;
@@ -489,6 +493,19 @@ void net_close(void)
     }
 }
 
+/* A datagram on a non-blocking socket; a full buffer drops it (waiting for
+ * room stops camex's single loop, receiving included, and measured no
+ * better on a stock camera) */
+ssize_t net_sendto_one(int fd, const void *data, size_t len,
+                        const struct sockaddr_in *to)
+{
+    if (to == NULL) {
+        return send(fd, SEND_CAST data, len, 0);
+    }
+    return sendto(fd, SEND_CAST data, len, 0, (const struct sockaddr *)to,
+                  sizeof(*to));
+}
+
 int net_send_payload(int fd, const struct sockaddr_in *to,
                      const uint8_t *data, size_t len)
 {
@@ -498,12 +515,7 @@ int net_send_payload(int fd, const struct sockaddr_in *to,
         return -1;
     }
 
-    if (to == NULL) {
-        sent = send(fd, SEND_CAST data, len, 0);
-    } else {
-        sent = sendto(fd, SEND_CAST data, len, 0,
-                      (const struct sockaddr *)to, sizeof(*to));
-    }
+    sent = net_sendto_one(fd, data, len, to);
 
     if (sent < 0 || (size_t)sent != len) {
         return -1;
@@ -515,6 +527,24 @@ int net_send_payload(int fd, const struct sockaddr_in *to,
 int net_send_text(int fd, const struct sockaddr_in *to, const char *text)
 {
     return net_send_payload(fd, to, (const uint8_t *)text, strlen(text));
+}
+
+int net_client_peer_addr(struct sockaddr_in *out)
+{
+    socklen_t l = sizeof(*out);
+
+    return net_fd >= 0 &&
+           getpeername(net_fd, (struct sockaddr *)out, &l) == 0 &&
+           out->sin_family == AF_INET ? 0 : -1;
+}
+
+int net_client_local_addr(struct sockaddr_in *out)
+{
+    socklen_t l = sizeof(*out);
+
+    return net_fd >= 0 &&
+           getsockname(net_fd, (struct sockaddr *)out, &l) == 0 &&
+           out->sin_family == AF_INET ? 0 : -1;
 }
 
 int net_client_send(const uint8_t *data, size_t len)

@@ -36,6 +36,11 @@ void log_message(int priority, const char *fmt, ...)
 
 void print_errno_message(int priority, const char *what);
 
+/* The most detailed priority shown: LOG_INFO by default, LOG_WARNING
+ * (--quiet), LOG_DEBUG (--verbose) */
+void log_set_level(int level);
+int log_get_level(void);
+
 /* Rate limit for messages that a peer can trigger at will, e.g. one per
  * dropped packet (#16 L1): at most LOG_LIMIT_BURST messages per second per
  * call site. The number suppressed is logged, at the highest priority among

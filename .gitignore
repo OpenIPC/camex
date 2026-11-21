@@ -37,3 +37,14 @@ _DOCKER.md
 _NOTES.md
 _PLAN.md
 
+tests/test_netw
+tests/test_tcpgate
+tests/test_l2
+tests/test_bridge
+tests/test_chacha_neon
+tests/test_offload
+tests/test_pake
+tests/test_cpaceguard
+
+# The server key and settings of deploy/compose.yaml
+/deploy/data/

@@ -88,6 +88,14 @@ void config_server_db_reset(void)
     config_profile_reset(&server_db.defaults);
     server_db.globals.pool_net = CAMEX_AUTO_POOL_DEFAULT_NET;
     server_db.globals.pool_prefix = CAMEX_AUTO_POOL_DEFAULT_PREFIX;
+    server_db.globals.net_supernet = CAMEX_NET_SUPERNET_DEFAULT_NET;
+    server_db.globals.net_super_prefix = CAMEX_NET_SUPERNET_DEFAULT_PREFIX;
+    server_db.globals.net_pool_prefix = CAMEX_NET_POOL_PREFIX_DEFAULT;
+}
+
+int config_networks_enabled(void)
+{
+    return server_db.net_count > 0U || server_db.globals.allow_new_networks;
 }
 
 void config_db_free(camex_server_db_t *db)
@@ -98,6 +106,10 @@ void config_db_free(camex_server_db_t *db)
     if (db->clients != NULL) {
         crypto_wipe(db->clients, db->client_cap * sizeof(*db->clients));
         free(db->clients);
+    }
+    if (db->nets != NULL) {
+        crypto_wipe(db->nets, db->net_cap * sizeof(*db->nets));
+        free(db->nets);
     }
     slotidx_free(&db->by_id);
     slotidx_free(&db->by_ip);
@@ -216,6 +228,12 @@ camex_server_profile_t *config_db_get_client_slot(const char *client_id)
 
 int config_parse_pool(const char *value, uint32_t *net, uint8_t *prefix)
 {
+    return config_parse_cidr_key(value, "auto_pool", net, prefix);
+}
+
+int config_parse_cidr_key(const char *value, const char *what,
+                          uint32_t *net, uint8_t *prefix)
+{
     char addr[16];
     const char *slash;
     char *end = NULL;
@@ -226,8 +244,8 @@ int config_parse_pool(const char *value, uint32_t *net, uint8_t *prefix)
 
     slash = value != NULL ? strchr(value, '/') : NULL;
     if (slash == NULL || (size_t)(slash - value) >= sizeof(addr)) {
-        log_message(LOG_ERR, "Invalid auto_pool: %s (network/prefix, "
-                    "e.g. 10.200.0.0/24)", value != NULL ? value : "");
+        log_message(LOG_ERR, "Invalid %s: %s (network/prefix, "
+                    "e.g. 10.200.0.0/24)", what, value != NULL ? value : "");
         return -1;
     }
     memcpy(addr, value, (size_t)(slash - value));
@@ -237,8 +255,8 @@ int config_parse_pool(const char *value, uint32_t *net, uint8_t *prefix)
     if (inet_pton(AF_INET, addr, &a) != 1 || slash[1] == '\0' ||
         end == NULL || *end != '\0' || errno != 0 ||
         p < CAMEX_AUTO_POOL_MIN_PREFIX || p > CAMEX_AUTO_POOL_MAX_PREFIX) {
-        log_message(LOG_ERR, "Invalid auto_pool: %s (network/prefix with "
-                    "a prefix of /%u to /%u)", value,
+        log_message(LOG_ERR, "Invalid %s: %s (network/prefix with "
+                    "a prefix of /%u to /%u)", what, value,
                     (unsigned)CAMEX_AUTO_POOL_MIN_PREFIX,
                     (unsigned)CAMEX_AUTO_POOL_MAX_PREFIX);
         return -1;
@@ -246,8 +264,8 @@ int config_parse_pool(const char *value, uint32_t *net, uint8_t *prefix)
     mask = 0xFFFFFFFFU << (32U - (unsigned)p);
     host = ntohl(a.s_addr);
     if ((host & ~mask) != 0U) {
-        log_message(LOG_ERR, "Invalid auto_pool: %s has host bits set "
-                    "(the network is %u.%u.%u.%u/%lu)", value,
+        log_message(LOG_ERR, "Invalid %s: %s has host bits set "
+                    "(the network is %u.%u.%u.%u/%lu)", what, value,
                     (unsigned)((host & mask) >> 24),
                     (unsigned)(((host & mask) >> 16) & 0xFFU),
                     (unsigned)(((host & mask) >> 8) & 0xFFU),
@@ -407,18 +425,117 @@ int config_db_apply_kv(camex_profile_t *profile,
 
 /* The parser proper; line is the caller's buffer, wiped by the caller
  * on every exit (it can hold psk= and server_key= text) */
+/* yes/true/1 or no/false/0; -1 otherwise */
+static int parse_yes_no(const char *val)
+{
+    if (strcasecmp(val, "yes") == 0 || strcasecmp(val, "true") == 0 ||
+        strcmp(val, "1") == 0) {
+        return 1;
+    }
+    if (strcasecmp(val, "no") == 0 || strcasecmp(val, "false") == 0 ||
+        strcmp(val, "0") == 0) {
+        return 0;
+    }
+    return -1;
+}
+
+/* A new [network NAME] block; NULL with a logged reason */
+static camex_net_conf_t *config_db_add_network(const char *name)
+{
+    camex_net_conf_t *n;
+    uint8_t id[CAMEX_NET_ID_LEN];
+    size_t i;
+
+    if (!netw_name_valid(name)) {
+        log_message(LOG_ERR, "Invalid network name: 1 to %u bytes without "
+                    "control characters", (unsigned)CAMEX_NET_NAME_MAX);
+        return NULL;
+    }
+    netw_id_from_name(name, id);
+    for (i = 0U; i < server_db.net_count; ++i) {
+        if (memcmp(server_db.nets[i].id, id, sizeof(id)) == 0) {
+            log_message(LOG_ERR, "A [network] block is given twice");
+            return NULL;
+        }
+    }
+    if (server_db.net_count >= CAMEX_NET_MAX) {
+        log_message(LOG_ERR, "More than %u [network] blocks",
+                    (unsigned)CAMEX_NET_MAX);
+        return NULL;
+    }
+    if (server_db.net_count == server_db.net_cap) {
+        size_t cap = server_db.net_cap != 0U ? server_db.net_cap * 2U : 8U;
+        camex_net_conf_t *grown = calloc(cap, sizeof(*grown));
+
+        if (grown == NULL) {
+            log_message(LOG_ERR, "Out of memory for [network] blocks");
+            return NULL;
+        }
+        if (server_db.nets != NULL) {
+            memcpy(grown, server_db.nets,
+                   server_db.net_count * sizeof(*grown));
+            crypto_wipe(server_db.nets, server_db.net_cap * sizeof(*grown));
+            free(server_db.nets);
+        }
+        server_db.nets = grown;
+        server_db.net_cap = cap;
+    }
+    n = &server_db.nets[server_db.net_count++];
+    memset(n, 0, sizeof(*n));
+    memcpy(n->id, id, sizeof(id));
+    /* Shown by its name unless label= says otherwise */
+    netw_label_from_name(name, n->label, sizeof(n->label));
+    n->isolation = -1;
+    n->name_len = (uint8_t)(strlen(name) > 255U ? 255U : strlen(name));
+    crypto_wipe(id, sizeof(id));
+    return n;
+}
+
+/* A short network name can be guessed one CPace attempt at a time: a
+ * [network] block takes one only with weak_name = yes. The name is a
+ * secret: the messages give the label */
+static int config_db_check_names(void)
+{
+    size_t i;
+
+    for (i = 0U; i < server_db.net_count; ++i) {
+        const camex_net_conf_t *n = &server_db.nets[i];
+        char label[CAMEX_NET_LABEL_MAX + 1U];
+
+        if (n->name_len >= CAMEX_NET_NAME_MIN) {
+            continue;
+        }
+        /* By its ID: without label= the label is the name itself */
+        netw_default_label(n->id, label, sizeof(label));
+        if (!n->weak_name) {
+            log_message(LOG_ERR, "Network %s: its name has %u characters, "
+                        "fewer than %u, and could be guessed; choose a "
+                        "longer one, or set weak_name = yes in its block",
+                        label, (unsigned)n->name_len,
+                        (unsigned)CAMEX_NET_NAME_MIN);
+            return -1;
+        }
+        log_message(LOG_WARNING, "Network %s: its name has %u characters "
+                    "(weak_name = yes): it could be guessed",
+                    label, (unsigned)n->name_len);
+    }
+    return 0;
+}
+
 static int config_db_parse_file(const char *path, char *line,
                                 size_t line_size)
 {
     FILE *fp;
     camex_profile_t *current = NULL;
     camex_server_profile_t *client = NULL;
+    camex_net_conf_t *network = NULL;
     unsigned long lineno = 0UL;   /* for the errors of a value */
     enum {
         SECTION_NONE = 0,
         SECTION_DEFAULTS,
         SECTION_CLIENT,
-        SECTION_SERVER
+        SECTION_SERVER,
+        SECTION_NETWORK
     } section = SECTION_NONE;
 
     config_server_db_reset();
@@ -459,6 +576,24 @@ static int config_db_parse_file(const char *path, char *line,
             line[len - 1U] = '\0';
             content = line + 1;
             trim_whitespace(content);
+
+            if (strncasecmp(content, "network", 7) == 0 &&
+                (content[7] == '\0' || isspace((unsigned char)content[7]))) {
+                char *name = content + 7;
+
+                trim_whitespace(name);
+                network = config_db_add_network(name);
+                if (network == NULL) {
+                    log_message(LOG_ERR, "%s, line %lu: [network]", path,
+                                lineno);
+                    fclose(fp);
+                    return -1;
+                }
+                section = SECTION_NETWORK;
+                current = NULL;
+                client = NULL;
+                continue;
+            }
 
             if (strcasecmp(content, "server") == 0) {
                 section = SECTION_SERVER;
@@ -581,6 +716,56 @@ static int config_db_parse_file(const char *path, char *line,
                                 val);
                     rc = -1;
                 }
+            } else if (strcmp(content, "allow_new_networks") == 0) {
+                int yn = parse_yes_no(val);
+
+                if (yn < 0) {
+                    log_message(LOG_ERR,
+                                "Invalid value for allow_new_networks: %s",
+                                val);
+                    rc = -1;
+                } else {
+                    g->allow_new_networks = (uint8_t)yn;
+                }
+            } else if (strcmp(content, "cpace_per_ip") == 0 ||
+                       strcmp(content, "cpace_total") == 0 ||
+                       strcmp(content, "cpace_ban_after") == 0 ||
+                       strcmp(content, "cpace_ban_time") == 0) {
+                char *end = NULL;
+                unsigned long v = strtoul(val, &end, 10);
+
+                if (end == val || *end != '\0' || v > 1000000UL) {
+                    log_message(LOG_ERR, "Invalid %s: %s (0 to 1000000, 0 "
+                                "turns it off)", content, val);
+                    rc = -1;
+                } else if (strcmp(content, "cpace_per_ip") == 0) {
+                    g->cpace_per_ip = (unsigned int)v;
+                    g->cpace_per_ip_set = 1U;
+                } else if (strcmp(content, "cpace_total") == 0) {
+                    g->cpace_total = (unsigned int)v;
+                    g->cpace_total_set = 1U;
+                } else if (strcmp(content, "cpace_ban_after") == 0) {
+                    g->cpace_ban_after = (unsigned int)v;
+                    g->cpace_ban_after_set = 1U;
+                } else {
+                    g->cpace_ban_time = (unsigned int)v;
+                    g->cpace_ban_time_set = 1U;
+                }
+            } else if (strcmp(content, "network_supernet") == 0) {
+                rc = config_parse_cidr_key(val, "network_supernet",
+                                           &g->net_supernet,
+                                           &g->net_super_prefix);
+            } else if (strcmp(content, "network_prefix") == 0) {
+                char *end = NULL;
+                unsigned long p = strtoul(val, &end, 10);
+
+                if (end == val || *end != '\0' || p < 9UL || p > 30UL) {
+                    log_message(LOG_ERR, "Invalid network_prefix: %s (9 to "
+                                "30)", val);
+                    rc = -1;
+                } else {
+                    g->net_pool_prefix = (uint8_t)p;
+                }
             } else if (strcmp(content, "server_key") == 0) {
                 rc = copy_option(g->server_key, sizeof(g->server_key), val,
                                  "server key");
@@ -645,6 +830,101 @@ static int config_db_parse_file(const char *path, char *line,
             continue;
         }
 
+        if (section == SECTION_NETWORK) {
+            const char *val = equals + 1;
+            int rc = 0;
+
+            if (strcmp(content, "pool") == 0) {
+                rc = config_parse_cidr_key(val, "pool", &network->pool_net,
+                                           &network->pool_prefix);
+                network->pool_set = rc == 0 ? 1U : 0U;
+            } else if (strcmp(content, "client_isolation") == 0) {
+                int yn = parse_yes_no(val);
+
+                if (yn < 0) {
+                    log_message(LOG_ERR, "Invalid value for "
+                                "client_isolation: %s", val);
+                    rc = -1;
+                } else {
+                    network->isolation = (int8_t)yn;
+                }
+            } else if (strcmp(content, "mode") == 0) {
+                if (strcasecmp(val, "tun") == 0) {
+                    network->tap = 0U;
+                } else if (strcasecmp(val, "tap") == 0) {
+#ifdef CAMEX_L2
+                    network->tap = 1U;
+#else
+                    log_message(LOG_ERR, "mode = tap needs a camex built "
+                                "with CAMEX_L2=1 (camex-<arch>-full)");
+                    rc = -1;
+#endif
+                } else {
+                    log_message(LOG_ERR, "Invalid mode: %s (tun or tap)",
+                                val);
+                    rc = -1;
+                }
+            } else if (strcmp(content, "mesh") == 0) {
+                int yn = parse_yes_no(val);
+
+                if (yn < 0) {
+                    log_message(LOG_ERR, "Invalid value for mesh: %s", val);
+                    rc = -1;
+                } else {
+#ifdef CAMEX_MESH
+                    network->mesh = (uint8_t)yn;
+#else
+                    if (yn) {
+                        log_message(LOG_ERR, "mesh = yes needs a camex built "
+                                    "with CAMEX_MESH=1 (camex-<arch>-full)");
+                        rc = -1;
+                    }
+#endif
+                }
+            } else if (strcmp(content, "addresses") == 0) {
+                if (strcasecmp(val, "pool") == 0) {
+                    network->noaddr = 0U;
+                } else if (strcasecmp(val, "none") == 0) {
+                    network->noaddr = 1U;
+                } else {
+                    log_message(LOG_ERR, "Invalid addresses: %s (pool or "
+                                "none)", val);
+                    rc = -1;
+                }
+            } else if (strcmp(content, "weak_name") == 0) {
+                int yn = parse_yes_no(val);
+
+                if (yn < 0) {
+                    log_message(LOG_ERR, "Invalid value for weak_name: %s",
+                                val);
+                    rc = -1;
+                } else {
+                    network->weak_name = (uint8_t)yn;
+                }
+            } else if (strcmp(content, "label") == 0) {
+                if (strlen(val) > CAMEX_NET_LABEL_MAX ||
+                    !camex_name_valid(val) || strchr(val, ' ') != NULL) {
+                    log_message(LOG_ERR, "Invalid label=: up to %u bytes "
+                                "without spaces or control characters",
+                                (unsigned)CAMEX_NET_LABEL_MAX);
+                    rc = -1;
+                } else {
+                    snprintf(network->label, sizeof(network->label), "%s",
+                             val);
+                }
+            } else {
+                log_message(LOG_ERR, "Unknown [network] key: %s", content);
+                rc = -1;
+            }
+            if (rc != 0) {
+                log_message(LOG_ERR, "%s, line %lu: [network] %s=", path,
+                            lineno, content);
+                fclose(fp);
+                return -1;
+            }
+            continue;
+        }
+
         if (current == NULL) {
             log_message(LOG_ERR,
                         "Config value outside of a section: %s", line);
@@ -680,6 +960,9 @@ static int config_db_parse_file(const char *path, char *line,
     }
 
     fclose(fp);
+    if (config_db_check_names() != 0) {
+        return -1;
+    }
     if (config_db_index_ips() != 0) {
         return -1;
     }
@@ -970,14 +1253,14 @@ int config_build_keystore(void)
             }
         }
         /* Without a key no client can ever connect: say so instead of
-         * dropping every handshake */
-        if (usable == 0U) {
+         * dropping every handshake. Clients of named networks need none */
+        if (usable == 0U && !config_networks_enabled()) {
             log_message(LOG_ERR, "No usable PSK: give --psk, psk= in "
                         "[server], or psk= for each client");
             return -1;
         }
     }
-    log_message(LOG_INFO, "Server keystore: %u PSK(s) loaded",
+    log_message(server_ks.count > 0U ? LOG_INFO : LOG_DEBUG, "Server keystore: %u PSK(s) loaded",
                 (unsigned)ks->count);
     return 0;
 }
@@ -990,7 +1273,10 @@ int config_apply_profile(camex_config_t *config, const camex_profile_t *profile)
         return -1;
     }
 
-    if (profile->local_cidr[0] == '\0' || profile->gateway_ip[0] == '\0') {
+    /* A TAP network without addresses (addresses = none) has neither */
+    if ((profile->local_cidr[0] == '\0' || profile->gateway_ip[0] == '\0') &&
+        !(profile->l2 && profile->local_cidr[0] == '\0' &&
+          profile->gateway_ip[0] == '\0')) {
         return -1;
     }
 
@@ -1008,6 +1294,9 @@ int config_apply_profile(camex_config_t *config, const camex_profile_t *profile)
     if (profile->mtu > 0) {
         config->mtu = profile->mtu;
     }
+    config->l2 = profile->l2;
+    config->mesh = profile->mesh;
+    memcpy(config->l2_mac, profile->mac, sizeof(config->l2_mac));
 
     return 0;
 }

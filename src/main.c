@@ -10,6 +10,11 @@
 #include "client.h"
 #include "server.h"
 #include "main.h"
+#include "netw.h"
+#include "noise.h"
+#ifdef CAMEX_CHACHA_NEON
+#include "chacha_neon.h"
+#endif
 #include "config.h"
 #include "crypto.h"
 #include "keys.h"
@@ -79,6 +84,56 @@ static int parse_mode(const char *value, camex_mode_t *mode)
     return -1;
 }
 
+/* camex --bench-crypto: how fast this CPU seals tunnel packets of 1400
+ * bytes (ChaCha20-Poly1305, as every DATA packet), for a few seconds.
+ * Returns 1 (done, exit). */
+/* Seconds of a monotonic clock */
+static double bench_now(void)
+{
+#ifdef _WIN32
+    return (double)GetTickCount64() / 1000.0;
+#else
+    struct timespec t;
+
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)t.tv_sec + (double)t.tv_nsec / 1e9;
+#endif
+}
+
+static int bench_crypto(void)
+{
+    static uint8_t plain[1400];
+    static uint8_t out[1400 + 16];
+    uint8_t key[32];
+    uint8_t ad[17];
+    unsigned long n = 0UL;
+    double secs = 0.0;
+    double t0;
+
+    memset(key, 0x42, sizeof(key));
+    memset(ad, 0x17, sizeof(ad));
+    memset(plain, 0x5A, sizeof(plain));
+    t0 = bench_now();
+    do {
+        unsigned int k;
+
+        for (k = 0U; k < 256U; ++k) {
+            noise_encrypt(key, (uint64_t)n++, ad, sizeof(ad), plain,
+                          sizeof(plain), out);
+        }
+        secs = bench_now() - t0;
+    } while (secs < 3.0);
+    printf("ChaCha20-Poly1305, 1400-byte packets: %.0f packets/s, %.1f MB/s"
+           " (%.0f Mbit/s)\n", (double)n / secs,
+           (double)n * sizeof(plain) / secs / 1e6,
+           (double)n * sizeof(plain) * 8.0 / secs / 1e6);
+#ifdef CAMEX_CHACHA_NEON
+    printf("ChaCha20 and Poly1305 with NEON: %s\n",
+           camex_chacha_neon_ok() ? "yes" : "no (this CPU has none)");
+#endif
+    return 1;
+}
+
 int parse_arguments(int argc, char **argv, camex_config_t *config)
 {
     static const struct option long_options[] = {
@@ -118,6 +173,16 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         { "wait-timeout", required_argument, NULL, 'x' },
         { "http-port", required_argument, NULL, 'z' },
         { "web-port", required_argument, NULL, 'y' },
+        { "network", required_argument, NULL, 1001 },
+        { "known-servers", required_argument, NULL, 1002 },
+        { "top", no_argument, NULL, 1003 },
+        { "interval", required_argument, NULL, 1004 },
+        { "bridge", required_argument, NULL, 1005 },
+        { "bridge-mode", required_argument, NULL, 1006 },
+        { "bench-crypto", no_argument, NULL, 1007 },
+        { "no-tun-offload", no_argument, NULL, 1008 },
+        { "verbose", no_argument, NULL, 1009 },
+        { "quiet", no_argument, NULL, 1010 },
         { NULL, 0, NULL, 0 }
     };
     int opt;
@@ -129,6 +194,8 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
      * its position from the previous run (glibc, musl, bionic and the BSDs
      * all reinitialise on optind 0) */
     optind = 0;
+    tun_set_offload(1);   /* a library run starts from the default */
+    log_set_level(LOG_INFO);
     config->transport = CAMEX_TRANSPORT_UNSET;
     while ((opt = getopt_long(argc, argv, "M:b:an:f:l:g:p:s:c:t:k:evhP:d:T:R:K:W:GS:Y:QJC:IF:D:U:E:",
                              long_options, &option_index)) != -1) {
@@ -195,6 +262,7 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
                 log_message(LOG_ERR, "Invalid MTU: %s", optarg);
                 return -1;
             }
+            config->mtu_given = 1U;
             break;
         case 'k':
             if (copy_option(config->psk, sizeof(config->psk),
@@ -227,6 +295,72 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
                             "server key file") != 0) {
                 return -1;
             }
+            break;
+        case 1001:
+            if (!netw_name_valid(optarg)) {
+                log_message(LOG_ERR, "Invalid --network: 1 to %u bytes "
+                            "without control characters",
+                            (unsigned)CAMEX_NET_NAME_MAX);
+                return -1;
+            }
+            snprintf(config->network, sizeof(config->network), "%s", optarg);
+            /* The name is the network's key: not left in argv for ps */
+            memset(optarg, 'x', strlen(optarg));
+            config->auto_config = 1U;
+            break;
+        case 1002:
+            if (copy_option(config->known_servers,
+                            sizeof(config->known_servers), optarg,
+                            "known servers file") != 0) {
+                return -1;
+            }
+            break;
+        case 1003:
+            config->top = 1U;
+            config->status_query = 1U;
+            break;
+        case 1004:
+            {
+                char *end = NULL;
+                long val = strtol(optarg, &end, 10);
+
+                if (end == optarg || *end != '\0' || val < 1 || val > 60) {
+                    log_message(LOG_ERR, "--interval must be 1..60 seconds, "
+                                "got: %s", optarg);
+                    return -1;
+                }
+                config->top_interval = (int)val;
+            }
+            break;
+        case 1005:
+            if (copy_option(config->bridge_if, sizeof(config->bridge_if),
+                            optarg, "bridge interface") != 0) {
+                return -1;
+            }
+            break;
+        case 1006:
+            if (strcmp(optarg, "auto") == 0) {
+                config->bridge_mode = 0U;
+            } else if (strcmp(optarg, "full") == 0) {
+                config->bridge_mode = 1U;
+            } else if (strcmp(optarg, "nat") == 0) {
+                config->bridge_mode = 2U;
+            } else {
+                log_message(LOG_ERR, "Invalid --bridge-mode: %s (auto, full "
+                            "or nat)", optarg);
+                return -1;
+            }
+            break;
+        case 1007:
+            return bench_crypto();
+        case 1008:
+            tun_set_offload(0);
+            break;
+        case 1009:
+            log_set_level(LOG_DEBUG);
+            break;
+        case 1010:
+            log_set_level(LOG_WARNING);
             break;
         case 'Y':
             if (copy_option(config->server_pubkey,
@@ -433,16 +567,20 @@ int validate_config(camex_config_t *config)
         return -1;
     }
 
-    if (config->mtu < 576 || config->mtu > 9000) {
-        log_message(LOG_ERR, "MTU must be in the range 576..9000");
-        return -1;
-    }
-
     /* A server listens on UDP and TCP unless told one; a client uses UDP
      * unless told TCP, and never both (#178) */
     if (config->transport == CAMEX_TRANSPORT_UNSET) {
         config->transport = config->mode == CAMEX_MODE_SERVER
                                 ? CAMEX_TRANSPORT_BOTH : CAMEX_TRANSPORT_UDP;
+    }
+    /* No MTU given: 1500 over TCP alone, 1420 when UDP carries it (#198) */
+    if (!config->mtu_given) {
+        config->mtu = config->transport == CAMEX_TRANSPORT_TCP
+                          ? CAMEX_TCP_MTU : CAMEX_DEFAULT_MTU;
+    }
+    if (config->mtu < 576 || config->mtu > 9000) {
+        log_message(LOG_ERR, "MTU must be in the range 576..9000");
+        return -1;
     }
     if (config->transport == CAMEX_TRANSPORT_BOTH &&
         config->mode != CAMEX_MODE_SERVER) {
@@ -457,11 +595,38 @@ int validate_config(camex_config_t *config)
         return -1;
     }
 
-    /* Protocol v2 is always encrypted: a client needs its key. A server
-     * may do without a global key when every client has its own psk=. */
-    if (config->mode == CAMEX_MODE_CLIENT && config->psk[0] == '\0') {
-        log_message(LOG_ERR, "The client needs a key: --psk");
+    /* Protocol v2 is always encrypted: a client needs its key, or the
+     * name of its network (which is the key then). A server may do
+     * without a global key when every client has its own psk=. */
+    if (config->mode == CAMEX_MODE_CLIENT && config->psk[0] == '\0' &&
+        config->network[0] == '\0') {
+        log_message(LOG_ERR, "The client needs a network (--network) or a "
+                    "key (--psk)");
         return -1;
+    }
+    if (config->mode == CAMEX_MODE_SERVER &&
+        (config->network[0] != '\0' || config->known_servers[0] != '\0')) {
+        log_message(LOG_ERR, "--network and --known-servers are for the "
+                    "client; a server lists its networks in [network NAME] "
+                    "blocks");
+        return -1;
+    }
+    if (config->bridge_if[0] != '\0') {
+#ifdef CAMEX_L2
+        if (config->mode != CAMEX_MODE_CLIENT || config->network[0] == '\0') {
+            log_message(LOG_ERR, "--bridge is for a client of a TAP network "
+                        "(--network)");
+            return -1;
+        }
+#else
+        log_message(LOG_ERR, "--bridge needs a camex built with CAMEX_L2=1 "
+                    "(camex-<arch>-full)");
+        return -1;
+#endif
+    }
+    /* A client without --port talks to the default one */
+    if (config->mode == CAMEX_MODE_CLIENT && config->port <= 0) {
+        config->port = CAMEX_DEFAULT_PORT;
     }
 
     /* Each side has its own key option: a misplaced one is a mistake */
@@ -597,6 +762,21 @@ void print_usage(const char *progname)
     printf("Client options:\n");
     printf("  -a, --auto              "
            "Fetch tunnel parameters from the server\n");
+    printf("      --network <name>    Join the server's network of this name"
+           " (the name is its key;\n"
+           "                          implies --auto; with --psk: the"
+           " client's own key too)\n");
+    printf("      --known-servers <path> Keys of servers first met without"
+           " --server-pubkey\n"
+           "                          (default: %s; none = not kept)\n",
+           CAMEX_KNOWN_SERVERS_PATH);
+#ifdef CAMEX_L2
+    printf("      --bridge <iface>    A TAP network: bridge it to this LAN"
+           " interface (no bridge\n"
+           "                          device; the host keeps its settings)\n");
+    printf("      --bridge-mode <m>   auto (nat on Wi-Fi, else full), full or"
+           " nat\n");
+#endif
     printf("  -n, --name <id>         Client ID (auto mode; optional in manual mode)\n");
     printf("      --web-port <port>   Auto client: the port of its web UI, for nginx\n"
            "                          on the server (#174; needs a server 3.19.0+)\n");
@@ -629,6 +809,10 @@ void print_usage(const char *progname)
     printf("      --status         List the connected clients of every"
            " server on this host\n");
     printf("      --json           The same as JSON, for scripts\n");
+    printf("      --top            A live view of the clients and their"
+           " traffic (q quits)\n");
+    printf("      --interval <s>   With --top: seconds between updates"
+           " (default 1)\n");
     printf("      --control <path> Ask only the server at this socket\n");
     printf("      --format nginx-map  An nginx map of the clients"
            " (<id>[.<domain>] -> <address>:<port>)\n");
@@ -653,7 +837,9 @@ void print_usage(const char *progname)
     printf("      --wait-timeout <s>  The longest wait (default 60)\n\n");
 
     printf("Common options:\n");
-    printf("  -t, --mtu <size>     Tunnel MTU, 576-9000 (default: 1500)\n");
+    printf("  -t, --mtu <size>     Tunnel MTU, 576-9000 (default: 1420 over UDP,"
+           " 1500 over TCP;\n"
+           "                       TAP: 1500)\n");
     printf("  -k, --psk <key>      Pre-shared key: hex:<64 hex digits>,"
            " base64:<32 bytes>,\n"
            "                       or a passphrase (stretched with Argon2id)\n");
@@ -671,9 +857,21 @@ void print_usage(const char *progname)
     printf("      --genkey         Print a new server key pair and exit\n");
     printf("      --server-key-file <path> Server: file with its private key\n"
            "                       (or server_key= in [server])\n");
-    printf("      --server-pubkey <key> Client: the server's public key\n");
+    printf("      --server-pubkey <key> Client: the server's public key"
+           " (without it the key\n"
+           "                       the server gives on first contact is"
+           " kept, --known-servers)\n");
     printf("  -W, --server-timeout <s> Connection timeout in seconds"
            " (default: 20)\n");
+    printf("      --verbose        Details too: handshakes, keys, backends, "
+           "mesh attempts\n");
+    printf("      --quiet          Warnings and errors only\n");
+    printf("      --no-tun-offload Linux: no TUN offloads (TCP of up to 64 KB"
+           " at once,\n"
+           "                       joined writes); for kernels that get them"
+           " wrong\n");
+    printf("      --bench-crypto   How fast this CPU encrypts tunnel packets"
+           " (3 s), then exit\n");
     printf("  -v, --version        Show version and exit\n");
     printf("  -h, --help           Show this help message and exit\n\n");
 
@@ -690,6 +888,10 @@ void print_usage(const char *progname)
     printf("  %s --mode server --port 5800 --transport tcp"
            " --config /etc/camex/camex.conf"
            " --server-key-file /etc/camex/server.key --psk secret\n\n",
+           progname);
+    printf("  # Client joining a network: the server, the network's name;"
+           " the ID is the MAC\n");
+    printf("  %s --server-host cloud.openipc.org --network my-cams\n\n",
            progname);
     printf("  # Client (auto-config, UDP)\n");
     printf("  %s --mode client --auto --name 0203A104B5AE"
@@ -732,7 +934,7 @@ int main(int argc, char *argv[])
 
     memset(&config, 0, sizeof(config));
     config.mode = CAMEX_MODE_CLIENT;
-    config.mtu = 1500;
+    config.mtu = CAMEX_DEFAULT_MTU;
     config.server_timeout = 20;
     config.keepalive = 10;
     snprintf(config.config_path, sizeof(config.config_path), "%s",
@@ -749,7 +951,9 @@ int main(int argc, char *argv[])
     parse_result = parse_arguments(argc, argv, &config);
     if (parse_result == 0 && config.status_query) {
         /* camex --status (#82): ask the running server(s), nothing else */
-        int rc = config.status_wait != NULL
+        int rc = config.top
+                     ? control_top(config.control_path, config.top_interval)
+                 : config.status_wait != NULL
                      ? control_wait(config.control_path, config.status_wait,
                                     config.status_wait_timeout > 0
                                         ? config.status_wait_timeout : 60)

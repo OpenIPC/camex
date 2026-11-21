@@ -132,7 +132,7 @@ check $? "the status header says udp+tcp"
 check $? "the JSON says both"
 docker exec "$P-srv" test -S /run/camex/camex-both-5800.sock
 check $? "the socket is camex-both-5800.sock"
-docker logs "$P-srv" 2>&1 | grep -q "Transport: UDP and TCP"
+docker logs "$P-srv" 2>&1 | grep -q "(UDP and TCP)"
 check $? "the log names both transports"
 
 echo "== 2. a UDP and a TCP client at once"
@@ -143,6 +143,10 @@ check $? "the status shows CAM-U over udp and CAM-T over tcp"
 u_ip=$(tun_addr U); t_ip=$(tun_addr T)
 [ -n "$u_ip" ] && [ -n "$t_ip" ] && [ "$u_ip" != "$t_ip" ]
 check $? "both have an address from the one pool ($u_ip, $t_ip)"
+docker logs "$P-U" 2>&1 | grep -q "Tunnel up: .*, MTU 1420, .*(UDP)" &&
+    docker logs "$P-T" 2>&1 | grep -q "Tunnel up: .*, MTU 1500, .*(TCP)" &&
+    docker logs "$P-srv" 2>&1 | grep -q "Tunnel up: .*, MTU 1420, listening"
+check $? "no MTU given: 1420 over UDP and on the server of both, 1500 over TCP (#198)"
 docker exec "$P-U" ping -c 2 -W 2 10.200.0.1 >/dev/null 2>&1 &&
     docker exec "$P-T" ping -c 2 -W 2 10.200.0.1 >/dev/null 2>&1
 check $? "both reach the server"

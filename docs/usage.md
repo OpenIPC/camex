@@ -80,18 +80,26 @@ sudo ./camex \
 |----------------------------|-------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `--mode <mode>`            | `-M`  | Operation mode: `client` or `server` (required)                                                                                                                                                                                                                             |
 | `--auto`                   | `-a`  | Fetch tunnel parameters from the server                                                                                                                                                                                                                                     |
+| `--bridge <iface>`         |       | Client of a TAP network (the full camex): bridge it to this LAN interface, no bridge or TAP device ([networks.md](networks.md#bridging-a-lan---bridge))                                                                                                                     |
+| `--bridge-mode <m>`        |       | With `--bridge`: `auto` (default: `nat` on Wi-Fi, else `full`), `full` or `nat`                                                                                                                                                                                             |
+| `--network <name>`         |       | Client: join the server's network of this name ([networks.md](networks.md)); the name is the network's key, so `--psk` is not needed (given too, it is the client's own key). Implies `--auto`                                                                              |
 | `--name <id>`              | `-n`  | Client ID (auto mode). Without it: the MAC of the default route's interface, kept in `/tmp/camex-id` until a reboot                                                                                                                                                         |
 | `--local-cidr <cidr>`      | `-l`  | Tunnel address in `address/prefix` form                                                                                                                                                                                                                                     |
 | `--gateway-ip <addr>`      | `-g`  | Client gateway inside the tunnel                                                                                                                                                                                                                                            |
 | `--server-host <addr>`     | `-s`  | Server hostname or IP for client mode                                                                                                                                                                                                                                       |
-| `--port <port>`            | `-p`  | Server port for client or listen port for server                                                                                                                                                                                                                            |
+| `--port <port>`            | `-p`  | Server port for client (default: 5800) or listen port for server                                                                                                                                                                                                            |
 | `--bind-ip <addr>`         | `-b`  | Server bind address (default: 0.0.0.0)                                                                                                                                                                                                                                      |
 | `--config <path>`          | `-f`  | Server config file path                                                                                                                                                                                                                                                     |
 | `--route-cidr <cidr>`      | `-c`  | Extra route to install on the client; repeatable                                                                                                                                                                                                                            |
-| `--mtu <size>`             | `-t`  | Tunnel MTU, 576–9000 (default: 1500)                                                                                                                                                                                                                                        |
-| `--psk <key>`              | `-k`  | Pre-shared key: `hex:<64 hex digits>`, `base64:<44 chars>`, or a passphrase (stretched with Argon2id). Required on clients                                                                                                                                                  |
-| `--server-pubkey <key>`    |       | Client: the server's public key (from `--genkey`)                                                                                                                                                                                                                           |
+| `--mtu <size>`             | `-t`  | Tunnel MTU, 576–9000 (default: 1420 over UDP, 1500 over TCP; TAP: 1500)                                                                                                                                                                                                     |
+| `--psk <key>`              | `-k`  | Pre-shared key: `hex:<64 hex digits>`, `base64:<44 chars>`, or a passphrase (stretched with Argon2id). Required on clients without `--network`                                                                                                                              |
+| `--server-pubkey <key>`    |       | Client: the server's public key (from `--genkey`); without it the key the server gives on first contact is trusted and kept ([networks.md](networks.md#the-servers-key))                                                                                                    |
+| `--known-servers <path>`   |       | Client: where the keys of servers met without `--server-pubkey` are kept (default: `/etc/camex/known_servers`; `none`: not kept)                                                                                                                                            |
 | `--server-key-file <path>` |       | Server: file with its private key (or `server_key=` in `[server]`)                                                                                                                                                                                                          |
+| `--verbose`                |       | Details too: handshakes, key renewals, backends, mesh attempts (see [Log](#log))                                                                                                                                                                                            |
+| `--quiet`                  |       | Warnings and errors only                                                                                                                                                                                                                                                    |
+| `--no-tun-offload`         |       | Linux: no TUN offloads (see [TUN driver support](#tun-driver-support)); for a kernel that gets them wrong                                                                                                                                                                   |
+| `--bench-crypto`           |       | How fast this CPU seals 1400-byte tunnel packets (ChaCha20-Poly1305, 3 s), and whether NEON is used; then exit                                                                                                                                                              |
 | `--genkey`                 |       | Print a new server key pair (`server_key=`, `public_key=`) and exit                                                                                                                                                                                                         |
 | `--encrypt`                | `-e`  | Accepted for compatibility; protocol v2 is always encrypted                                                                                                                                                                                                                 |
 | `--tun-dev <path>`         | `-T`  | TUN device path (default: auto-detect `/dev/net/tun` then `/dev/camex`)                                                                                                                                                                                                     |
@@ -100,6 +108,8 @@ sudo ./camex \
 | `--web-port <port>`        |       | Auto client: the port of its web UI, for nginx on the server (#174); needs a server 3.19.0 or later, an older one refuses the client with it                                                                                                                                |
 | `--server-timeout <s>`     | `-W`  | Client: seconds without an answer from the server before it reconnects, 5–3600 (default: 20)                                                                                                                                                                                |
 | `--status`                 |       | Print the connected clients of every server on this host and exit (as the server's user, normally root)                                                                                                                                                                     |
+| `--top`                    |       | A live view of the clients of every server on this host (or of `--control`), busiest first, with their traffic rates; `q` quits ([networks.md](networks.md#status))                                                                                                         |
+| `--interval <s>`           |       | With `--top`: seconds between updates, 1–60 (default: 1)                                                                                                                                                                                                                    |
 | `--json`                   |       | With `--status`: the same as JSON, for scripts                                                                                                                                                                                                                              |
 | `--control <path>`         |       | Server: control socket for `--status` (default `/run/camex/camex-<transport>-<port>.sock`, `<transport>` is `both`, `udp` or `tcp`; `none` = off); with `--status`: ask only that server                                                                                    |
 | `--format <fmt>`           |       | With `--status`: `table` (default), `json` (same as `--json`), `nginx-map` or `nginx-index`, see [nginx in front of the clients](nginx.md#reference)                                                                                                                        |
@@ -136,6 +146,41 @@ sudo ./camex --mode client ... --tun-dev /dev/camex
 | IPv6                     | Yes                               | No (IPv4 only)          |
 | Multiple instances       | Yes                               | No (one)                |
 | Bare IPv4 packets        | Yes (with `IFF_NO_PI`)            | Yes                     |
+| Offloads (TSO, GRO)      | Yes (`IFF_VNET_HDR`)              | No                      |
+
+**Offloads.** On Linux, a TUN device camex makes itself through `/dev/net/tun`
+takes offloads (`IFF_VNET_HDR`, `TUNSETOFFLOAD`): the kernel hands camex TCP
+data of up to 64 KB at once and checksums still to compute, and camex cuts it
+into packets of the tunnel's MTU; TCP packets of one connection that arrive
+together are written as one, as the kernel's GRO joins them. Nothing changes on
+the wire, so old peers are not affected. The log says `TUN backend: tun0 (/dev/net/tun), offloads on`.
+Between two x86 hosts this carries 19–37% more TCP; on a camera (Cortex-A7)
+it saves a little CPU, since the UDP packets and their encryption cost the
+most there. Not used for TAP networks, `/dev/camex`, a device given from
+outside (Android, `CAMEX_TUN_FD`), macOS or Windows. `--no-tun-offload` turns
+them off.
+
+## Log
+
+On the console each line starts with the time and its level, then a plain
+sentence:
+
+```
+18:31:02 [INFO]  camex 5.0.0, client CAM-a
+18:31:02 [INFO]  Server 172.28.0.2:5800 proved it knows the network (CPace); its key ... is kept
+18:31:02 [INFO]  Received config from server: 10.77.0.148/24, gateway 10.77.0.1, MTU 1420
+18:31:02 [INFO]  Connection to server 172.28.0.2:5800 established (UDP)
+18:31:02 [INFO]  TUN backend: tun0 (/dev/net/tun), offloads on
+18:31:02 [INFO]  Tunnel up: tun0 10.77.0.148/24, MTU 1420, server 172.28.0.2:5800 (UDP)
+18:31:03 [INFO]  Mesh: peer CAM-b direct at 172.28.0.4:55043
+18:40:11 [WARN]  ...
+```
+
+Warnings and errors go to stderr, the rest to stdout. Syslog (and logcat on
+Android) gets the same sentences without the time and level, which it adds
+itself. `--quiet` keeps warnings and errors only; `--verbose` adds the details
+(`[DEBUG]`): handshakes, key renewals, the protocol, the server key file, mesh
+attempts.
 
 ## Notes
 

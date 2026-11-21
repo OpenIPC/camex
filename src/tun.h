@@ -34,6 +34,11 @@ extern char tun_name[];
 #define TUN_PACKET_MAX 9216U
 #endif
 
+/* The next tun_create_device() makes a TAP device (Ethernet frames) with
+ * this MAC (Linux; /dev/net/tun, or /dev/camex of a camex.ko loaded with
+ * mode=tap), or a TUN device again with l2 = 0 */
+void tun_set_l2(int l2, const uint8_t *mac);
+
 /* Create TUN device */
 int tun_create_device(const char *local_ip, const char *netmask, int mtu,
                       const char *tun_dev_override);
@@ -64,6 +69,14 @@ int tun_is_external(void);
  * again, so the tunnel cannot be reopened with new settings */
 int tun_is_inherited(void);
 
+/* Server, Linux: a further IPv4 address on the tunnel (an alias
+ * "<tun>:<slot>"), the gateway of a named network; its connected route
+ * comes with it. 0, or -1 (logged; not supported elsewhere) */
+int tun_alias_set(unsigned int slot, uint32_t ip_host, uint8_t prefix);
+
+/* Take that address off again */
+void tun_alias_clear(unsigned int slot);
+
 /* Close TUN device */
 void tun_close_device(void);
 
@@ -72,5 +85,13 @@ ssize_t tun_read_packet(uint8_t *buffer, size_t size);
 
 /* Write a packet to TUN */
 int tun_write_packet(const uint8_t *buffer, size_t len);
+
+/* TUN offloads (offload.h): off for devices made after tun_set_offload(0)
+ * (--no-tun-offload). tun_flush() writes the TCP packets waiting to be
+ * joined; tun_pending() is 1 while a TSO packet has packets left to read
+ * (the event loop must not wait for the descriptor then). */
+void tun_set_offload(int on);
+void tun_flush(void);
+int tun_pending(void);
 
 #endif /* CAMEX_TUN_H */

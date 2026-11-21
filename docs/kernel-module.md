@@ -164,6 +164,18 @@ ip link show camex
 # camex: <POINTOPOINT,NOARP> mtu 1500 ...
 ```
 
+### TAP mode
+
+```sh
+insmod camex.ko mode=tap
+```
+
+With `mode=tap` the `camex` interface is an Ethernet one, like tun's
+`IFF_TAP`: `read()` and `write()` carry whole frames, its MAC can be set, and
+ARP runs on it. A client of a TAP network of the full camex uses it as it uses
+`/dev/net/tun` ([networks.md](networks.md#tap-networks-mode--tap)). The mode
+is chosen at load time, so one module serves one kind of network.
+
 ### Persistent load at boot
 
 ```bash
@@ -286,6 +298,31 @@ sed -i '/^config WIRELESS_EXT$/a\	default y' net/wireless/Kconfig
 | `write()` non-IPv4      | Returns `EINVAL`                                           |
 | `poll()`                | `POLLIN` when a packet is available; `POLLOUT` always      |
 | `close()`               | Flushes the queue, clears carrier, releases the slot       |
+| `ioctl(CAMEX_IOC_VNET)` | Offloads on (`1`) or off (`0`), see below; kernels 4.1+    |
+
+### Offloads (`CAMEX_IOC_VNET`)
+
+`ioctl(fd, _IOW(0xCA, 1, int), &on)` puts tun's 10-byte
+`struct virtio_net_hdr` (host byte order) before every packet read and
+written, as `IFF_VNET_HDR` does, and turns on TSO and checksum offload
+(`NETIF_F_SG | NETIF_F_HW_CSUM | NETIF_F_TSO | NETIF_F_TSO_ECN`) while it
+is on:
+
+- `read()` may return a TSO packet of up to 64 KB (`gso_type` TCPV4,
+  `gso_size` the MSS) or one whose checksum is left to userspace
+  (`NEEDS_CSUM`, `csum_start`, `csum_offset`); camex cuts and completes them.
+- `write()` takes a packet of up to 64 KB with `gso_type` TCPV4 and
+  `NEEDS_CSUM`: TCP packets camex joined, which the stack takes as GRO would
+  give them. It is built of single pages, through a buffer allocated with
+  `vmalloc()` when offloads are turned on, so no high-order allocation is
+  needed on a camera with little memory.
+- Header and packet go in one `write()`: the device has no `writev()` of its
+  own, and the kernel would split one into two writes.
+
+camex asks for it on `/dev/camex` unless `--no-tun-offload` is given, and logs
+`TUN backend: camex (/dev/camex), offloads on (camex.ko)`. A module without the ioctl answers
+`ENOTTY`, and camex runs without offloads as before. On kernels before 4.1
+the module has no offloads. Closing the descriptor turns them off again.
 
 ### Error codes
 
@@ -330,13 +367,19 @@ sed -i '/^config WIRELESS_EXT$/a\	default y' net/wireless/Kconfig
 
 ### Queue and Memory
 
-- **Queue depth is 64 packets.** When full, new packets are silently
-  dropped and `tx_dropped` is incremented (visible in `ip -s link`).
-  Adjust the `QUEUE_LIMIT` constant in the source.
+- **Queue depth is 64 packets.** When it is full the interface's transmit
+  queue stops until `read()` has taken half of them, so the stack holds the
+  next packets in the qdisc (`txqueuelen` 500) instead of their being dropped.
+  `tx_dropped` grows only while no process holds `/dev/camex`. Adjust the
+  `QUEUE_LIMIT` constant in the source.
 
 - **Each queued packet is stored as an `sk_buff`.** Every `sk_buff`
   consumes ~200 bytes of header plus packet data. At 64 × 1500 bytes
-  the maximum queue memory footprint is approximately 96–110 KB.
+  the maximum queue memory footprint is approximately 96–110 KB; with
+  offloads a queued TSO packet can be up to 64 KB, though the kernel's TCP
+  keeps far less in flight per connection. The two offload buffers take
+  2 × 64 KB of `vmalloc` memory, only while offloads are on; closing the
+  descriptor gives them back.
 
 - **A `read()` with a too-small buffer destroys the packet.** If the
   buffer is smaller than the packet length, the packet is lost and

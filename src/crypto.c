@@ -66,12 +66,25 @@ int crypto_set_server_pub(const char *pub_b64)
     return 0;
 }
 
+void crypto_clear_server_pub(void)
+{
+    crypto_wipe(crypto_ctx.server_pub, sizeof(crypto_ctx.server_pub));
+    crypto_ctx.has_server_pub = 0U;
+}
+
+void crypto_set_psk(const uint8_t key[32])
+{
+    memcpy(crypto_ctx.psk_key, key, 32U);
+    crypto_ctx.has_global = 1U;
+    crypto_ctx.ready = 1U;
+}
+
 void crypto_log_fingerprint(void)
 {
     char fp[33];
     hex_encode(crypto_ctx.fingerprint, sizeof(crypto_ctx.fingerprint),
                fp, sizeof(fp));
-    log_message(LOG_INFO, "Encryption fingerprint: %s", fp);
+    log_message(LOG_DEBUG, "Encryption fingerprint: %s", fp);
 }
 
 const camex_crypto_t *crypto_get_ctx(void)

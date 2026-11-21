@@ -12,6 +12,7 @@
 #include "camex.h"
 #include "nginxmap.h"
 #include "slotidx.h"
+#include "netw.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -34,6 +35,9 @@ typedef struct {
     int peer_port;   /* peer_port= (#119): 0 = not set, -1 = none */
     int web_port;    /* web_port= (#174): nginx's port on the client, 0 = not set */
     char psk[128];   /* hex: + 64 digits fits; passphrases too */
+    uint8_t l2;      /* CONFIG of a TAP network: MODE=TAP */
+    uint8_t mesh;    /* CONFIG of a mesh network: MESH=1 */
+    uint8_t mac[6];  /* and the client's MAC there */
 } camex_profile_t;
 
 /* The port of the start page's peer link without peer_port= (#119) */
@@ -71,6 +75,20 @@ typedef struct {
     uint8_t pool_set;              /* auto_pool= was given */
     unsigned int max_clients;      /* max_clients=, 0 = not given */
     unsigned int client_timeout;   /* client_timeout= (#143), 0 = not given */
+    uint8_t allow_new_networks;    /* allow_new_networks = yes */
+    uint32_t net_supernet;         /* network_supernet=, host order */
+    uint8_t net_super_prefix;
+    uint8_t net_pool_prefix;       /* network_prefix= */
+    /* CPace limits (cpaceguard.h): cpace_per_ip=, cpace_total=,
+     * cpace_ban_after=, cpace_ban_time=; *_set: given in the file */
+    unsigned int cpace_per_ip;
+    unsigned int cpace_total;
+    unsigned int cpace_ban_after;
+    unsigned int cpace_ban_time;
+    uint8_t cpace_per_ip_set;
+    uint8_t cpace_total_set;
+    uint8_t cpace_ban_after_set;
+    uint8_t cpace_ban_time_set;
 } camex_server_globals_t;
 
 /* Default auto pool (#15, #75): 10.200.0.0/24 */
@@ -90,6 +108,9 @@ typedef struct {
     slotidx_t by_id;         /* client ID -> entry */
     slotidx_t by_ip;         /* address of local_cidr -> entry */
     camex_server_globals_t globals;
+    camex_net_conf_t *nets;  /* [network NAME] blocks */
+    size_t net_count;
+    size_t net_cap;
     uint8_t loaded;
 } camex_server_db_t;
 
@@ -130,6 +151,14 @@ void config_keystore_free(camex_keystore_t *ks);
 /* Parse "network/prefix" of auto_pool= (#75): prefix 8..30, the network
  * address without host bits. 0, or -1 with a logged reason. */
 int config_parse_pool(const char *value, uint32_t *net, uint8_t *prefix);
+
+/* The same for another key (pool=, network_supernet=): what names it in
+ * the errors */
+int config_parse_cidr_key(const char *value, const char *what,
+                          uint32_t *net, uint8_t *prefix);
+
+/* 1 when the server has named networks or takes new ones */
+int config_networks_enabled(void);
 
 /* [client ID] profile whose local_cidr address is ip_be, or NULL */
 camex_server_profile_t *config_db_find_profile_by_ip(uint32_t ip_be);

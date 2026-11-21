@@ -106,7 +106,7 @@ wait_log() {  # wait_log <box> <pattern> <seconds>
 registered() {  # registered <id> <seconds>: the server registered it
     local _
     for _ in $(seq 1 "$2"); do
-        docker logs "$P-srv" 2>&1 | grep -q "Registered auto client $1\$" && return 0
+        docker logs "$P-srv" 2>&1 | grep -q "Registered auto client $1:" && return 0
         sleep 1
     done
     return 1

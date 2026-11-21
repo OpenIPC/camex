@@ -25,6 +25,10 @@ device's web UI by name, with a start page of all of them.
 
 - **Client/server architecture** over UDP or TCP: the server listens on both on one port, with one address pool
 - **Auto-config mode** — client fetches tunnel parameters from the server
+- **Named networks** — a client joins with the server's address and the network's name; its
+  address follows from the name and its ID, the same after any restart ([docs/networks.md](docs/networks.md))
+- **The full camex** (`camex-<arch>-full`) — TAP networks, a LAN bridged without a bridge device
+  (`--bridge`, Wi-Fi too), and mesh networks: peers go direct through NATs, through the server otherwise
 - **Protocol v2** — Noise handshake (`NKpsk0`, X25519, ChaCha20-Poly1305,
   BLAKE2b), fresh keys per session and direction, always encrypted
 - **No external dependencies** — only libc required
@@ -53,7 +57,7 @@ curl -fsSL https://raw.githubusercontent.com/OpenIPC/camex/master/install.sh | s
 
 Run it again to update camex; `--uninstall` lists every file of camex and how
 to remove them. The steps, the files on the server, installing by hand on other
-systems: [docs/install.md](docs/install.md).
+systems, and Docker Compose (`deploy/compose.yaml`): [docs/install.md](docs/install.md).
 
 ### Client
 
@@ -124,7 +128,7 @@ The change history is in [CHANGELOG.md](CHANGELOG.md).
 
 | Document                                       | Contents                                                                   |
 |------------------------------------------------|----------------------------------------------------------------------------|
-| [Installation](docs/install.md)                | `install.sh`, installing by hand, the files on the server, clean reinstall |
+| [Installation](docs/install.md)                | `install.sh`, installing by hand, Docker, the files on the server, clean reinstall |
 | [Usage](docs/usage.md)                         | the command line: keys, modes, every option, TUN backends                  |
 | [Server configuration](docs/server.md)         | `camex.conf`, `camex --status`, the auto pool and the number of clients    |
 | [nginx in front of the clients](docs/nginx.md) | each device's web UI by name, the start page, firewall, DNS, TLS           |
