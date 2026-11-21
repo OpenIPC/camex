@@ -4,7 +4,7 @@
 # compose.yaml — the camex server in Docker (docs/install.md#docker)
 #
 #   docker compose up -d --build       # in this directory
-#   docker compose logs camex          # the network's name, the server's key
+#   docker compose logs camex          # how clients join (the name: data/camex.conf)
 #   docker compose exec camex camex --status   # --top from 5.0.0
 #   docker compose kill -s HUP camex   # read data/camex.conf again
 #

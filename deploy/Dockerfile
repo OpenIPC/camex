@@ -9,7 +9,7 @@
 #   docker build --build-arg CAMEX_RELEASE=<url> .   # another one
 #
 
-FROM alpine:3.20
+FROM alpine:3.22
 ARG CAMEX_RELEASE=https://github.com/OpenIPC/camex/releases/latest/download
 # Set by docker build for the platform: amd64, arm64, arm
 ARG TARGETARCH

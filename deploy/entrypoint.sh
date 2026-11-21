@@ -63,14 +63,17 @@ CONF
     } > "$CONF.new"
     mv -f "$CONF.new" "$CONF"
     echo "camex: created $CONF"
+    # The network's name is its key, and the psk is one too: they stay in
+    # camex.conf, not in the container's log, which Docker keeps
+    PUB=$(sed -n 's/^public_key=//p' "$KEY")
     if [ -n "$NET" ]; then
-        echo "camex: clients join with: camex --server-host <this host> --port $PORT --network $NET" \
-            "--server-pubkey $(sed -n 's/^public_key=//p' "$KEY")"
-        echo "camex: the key is public (fine in firmware); --network alone works too, but then" \
-            "networks a client makes show as net-... instead of their names"
+        echo "camex: clients join with: camex --server-host <this host> --port $PORT" \
+            "--network <name> --server-pubkey $PUB"
+        echo "camex: <name> is that of the [network NAME] block in data/camex.conf (keep it" \
+            "secret: it is the network's key); the server's key is public (fine in firmware)"
     else
-        echo "camex: clients join with: camex --mode client --auto --server-host <this host> --port $PORT" \
-            "--server-pubkey $(sed -n 's/^public_key=//p' "$KEY") --psk '$PSK'"
+        echo "camex: clients join with: camex --mode client --auto --server-host <this host>" \
+            "--port $PORT --server-pubkey $PUB --psk <psk= of data/camex.conf>"
     fi
 fi
 

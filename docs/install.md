@@ -162,17 +162,18 @@ for f in compose.yaml Dockerfile entrypoint.sh; do
 done
 chmod 755 entrypoint.sh
 docker compose up -d --build
-docker compose logs camex          # how clients join: the network's name
+docker compose logs camex          # how clients join; the name is in data/camex.conf
 ```
 
 On the first start it makes the server's key pair and settings in
 `data/` (`server.key`, `camex.conf`, mode 0600, owned by root), as
 `install.sh` does: a `[network NAME]` block of a random name (with camex
-5.0.0 and later; an older release gets only `psk=`, and the log prints the
-client's `--server-pubkey` and `--psk`), the pool
-`10.200.0.0/24` with the server at `10.200.0.1`, a new `psk=`. `CAMEX_PORT`,
-`CAMEX_POOL` and `CAMEX_NETWORK` in the compose file change them, on the first
-start only; later, edit `data/camex.conf`.
+5.0.0 and later; an older release gets only `psk=`), the pool
+`10.200.0.0/24` with the server at `10.200.0.1`, a new `psk=`. The log says
+how clients join, with the server's public key; the network's name and the
+psk, which are keys, stay in `data/camex.conf` and never go to the
+container's log. `CAMEX_PORT`, `CAMEX_POOL` and `CAMEX_NETWORK` in the compose
+file change them, on the first start only; later, edit `data/camex.conf`.
 
 - **Host networking** (`network_mode: host`): the tunnel interface is on the
   host, as with `install.sh`, so the host reaches the clients and the port
