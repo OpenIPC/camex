@@ -6,6 +6,41 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 5.2.0 — 2026-11-22
+
+The start page and nginx's lookup served by camex itself
+([#203](https://github.com/OpenIPC/camex/issues/203), [docs](docs/nginx.md)): no map file, no
+sync script, no reloads of nginx.
+
+- `web_listen=` in `[server]`: `yes` is `127.0.0.1:5801`, also `<port>` or `<IPv4>:<port>`. camex
+  answers `GET /` (the start page, from the state of the moment), `/status.json` (as
+  `camex --status --json`) and, from 127.0.0.1 only, `/resolve`: for nginx's `auth_request`, 204
+  with `X-Camex-Upstream: <address>:<port>` of the device `X-Camex-Host` names, 403 for none.
+  GET and HEAD only, a head of up to 8 KB, one request per connection, in the server's own
+  loop.
+- `examples/nginx-camex.conf` asks camex where each name goes (`auth_request`) and proxies there
+  straight, the device's traffic never through camex; the bare domain proxies to camex's start
+  page behind nginx's password. A device that comes or goes is seen at once.
+- Every server on the host: the one with `web_listen=` asks the others through their control
+  sockets, every 2 s in the background, and lists and resolves their clients;
+  `web_scope = self` only its own.
+- A page on a LAN without nginx: `web_listen=` beyond 127.0.0.1 needs `web_password=`, an argon2id
+  hash from the new `camex --hash-password` (or `none`, on purpose, with a warning); HTTP Basic
+  with any user name, a matched password remembered for the run, 5 wrong ones from an address
+  shut it out for 60 s. Its links are the tunnel addresses and web ports of the devices.
+- `device_port=`: a device's web port when it gives none (was the sync script's `UPSTREAM_PORT`).
+- `install.sh --domain`: `web_listen=yes` (and `device_port=` with `--upstream-port`) in
+  `camex.conf`, the new nginx file, no sync script, the start page opened through nginx as the
+  check. A server set up by camex 5.1.0 or before (the map, `camex-nginx-sync`) is kept as it is,
+  with a word on [moving over](docs/nginx.md#moving-to-web_listen), which lists the files to remove.
+- Deprecated until 6.0.0: `examples/camex-nginx-sync.sh` and `.service`, `--format nginx-map` /
+  `nginx-index`; the old nginx file is `examples/nginx-camex-map.conf`.
+- `CAMEX_WEB` (#204): in the full profile, not in the client one; `features:` of `--version` says
+  `web`. ~12 KB on ARM.
+- Tests: `docker/test-e2e-web.sh` (nginx with `auth_request`, two servers on one host, the LAN
+  page and its password, refused requests); `test-e2e-install.sh` installs the new way and keeps
+  a server of 5.1.0; unit tests of `/resolve`, the page's links and the password hash.
+
 ## 5.1.0 — 2026-11-22
 
 Build profiles ([#204](https://github.com/OpenIPC/camex/issues/204),

@@ -74,4 +74,11 @@ int key_server_from_b64(const char *priv_b64, uint8_t priv[KEY_LEN],
 int key_generate(char priv_b64[KEY_B64_LEN + 1U],
                  char pub_b64[KEY_B64_LEN + 1U]);
 
+/* The start page's password (#203): its hash for web_password=
+ * (argon2id$<salt>$<hash>, base64) into out; 0 or -1 */
+int key_password_hash(const char *pass, char *out, size_t size);
+
+/* 1 when pass matches a hash of key_password_hash(), else 0 */
+int key_password_check(const char *pass, const char *hash);
+
 #endif /* CAMEX_KEYS_H */

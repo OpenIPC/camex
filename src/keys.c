@@ -254,7 +254,8 @@ static void relock_memory(int relock)
 #endif
 }
 
-static int argon2id(const char *pass, uint8_t key[KEY_LEN])
+static int argon2id_salt(const char *pass, const uint8_t *salt,
+                         uint32_t salt_size, uint8_t key[KEY_LEN])
 {
     crypto_argon2_config config;
     crypto_argon2_inputs inputs;
@@ -282,14 +283,72 @@ static int argon2id(const char *pass, uint8_t key[KEY_LEN])
     config.nb_lanes = 1U;
     inputs.pass = (const uint8_t *)pass;
     inputs.pass_size = (uint32_t)strlen(pass);
-    inputs.salt = (const uint8_t *)KEY_ARGON2_SALT;
-    inputs.salt_size = (uint32_t)(sizeof(KEY_ARGON2_SALT) - 1U);
+    inputs.salt = salt;
+    inputs.salt_size = salt_size;
     crypto_argon2(key, KEY_LEN, work, config, inputs,
                   crypto_argon2_no_extras);
     crypto_wipe(work, (size_t)KEY_ARGON2_BLOCKS * 1024U);
     free(work);
     relock_memory(relock);
     return 0;
+}
+
+static int argon2id(const char *pass, uint8_t key[KEY_LEN])
+{
+    return argon2id_salt(pass, (const uint8_t *)KEY_ARGON2_SALT,
+                         (uint32_t)(sizeof(KEY_ARGON2_SALT) - 1U), key);
+}
+
+/* The page's password (#203): argon2id$<salt>$<hash>, both base64, the
+ * passphrase's work area (8 MiB) with a salt of its own */
+#define KEY_PW_SALT 16U
+
+int key_password_hash(const char *pass, char *out, size_t size)
+{
+    uint8_t salt[KEY_PW_SALT], h[KEY_LEN];
+    char s64[32], h64[KEY_B64_LEN + 1U];
+    int rc;
+
+    if (pass == NULL || pass[0] == '\0' ||
+        get_random_bytes(salt, sizeof(salt)) != 0) {
+        return -1;
+    }
+    rc = argon2id_salt(pass, salt, (uint32_t)sizeof(salt), h);
+    if (rc != 0) {
+        return -1;
+    }
+    key_base64_encode(salt, sizeof(salt), s64, sizeof(s64));
+    key_base64_encode(h, sizeof(h), h64, sizeof(h64));
+    crypto_wipe(h, sizeof(h));
+    rc = snprintf(out, size, "argon2id$%s$%s", s64, h64);
+    return rc > 0 && (size_t)rc < size ? 0 : -1;
+}
+
+int key_password_check(const char *pass, const char *hash)
+{
+    uint8_t salt[KEY_PW_SALT + 2U], want[KEY_LEN + 2U], got[KEY_LEN];
+    char s64[32];
+    const char *p, *d;
+    int ok;
+
+    if (pass == NULL || hash == NULL || strncmp(hash, "argon2id$", 9) != 0) {
+        return 0;
+    }
+    p = hash + 9;
+    d = strchr(p, '$');
+    if (d == NULL || (size_t)(d - p) >= sizeof(s64)) {
+        return 0;
+    }
+    memcpy(s64, p, (size_t)(d - p));
+    s64[d - p] = '\0';
+    if (key_base64_decode(s64, salt, sizeof(salt)) != (int)KEY_PW_SALT ||
+        key_base64_decode(d + 1, want, sizeof(want)) != (int)KEY_LEN ||
+        argon2id_salt(pass, salt, KEY_PW_SALT, got) != 0) {
+        return 0;
+    }
+    ok = crypto_verify32(got, want) == 0;
+    crypto_wipe(got, sizeof(got));
+    return ok;
 }
 
 /* An all-zero key means "no key" in the server's tables: refuse it */

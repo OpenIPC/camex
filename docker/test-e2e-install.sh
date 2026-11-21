@@ -13,15 +13,18 @@
 # 2. camex alone: key, settings, service; a client connects with the
 #    printed public key and psk; camex --status answers.
 # 3. Run again: nothing changes, camex is not restarted.
-# 4. --domain: nginx in front of the client, domain= added to camex.conf,
-#    the start page behind a generated password.
+# 4. --domain: nginx in front of the client, domain= and web_listen=yes
+#    added to camex.conf (camex tells nginx where each name goes, #203; no
+#    map, no sync script), the start page behind a generated password.
 # 5. Run again without --domain: nginx's part stays and is kept up to date;
 #    an edit of nginx's file stays; another domain is refused (also one in
 #    another script, in its IDNA form, #151).
-# 5a. The sync service follows a restarted server (#130).
-# 6. The layout of camex-nginx-setup.sh (3.9 and before) moves to the new
-#    names; a unit with its own CAMEX_ARGS keeps them in /etc/default/camex;
-#    camex 3.10's timer is removed.
+# 5a. nginx follows a restarted server.
+# 6. An nginx of camex 5.1.0 and before (the map and camex-nginx-sync) is
+#    kept as it is, with a word on moving over; its older layouts: that of
+#    camex-nginx-setup.sh (3.9 and before) moves to the new names; a unit
+#    with its own CAMEX_ARGS keeps them in /etc/default/camex; camex 3.10's
+#    timer is removed.
 # 7. --uninstall lists the files and removes nothing.
 # 8. Every option on a new host (#141): TCP, port, pool, psk, password,
 #    nginx's port and the cameras' port; a backslash in the psk and the
@@ -204,13 +207,14 @@ out=$(run --domain "$DOMAIN")
 rc=$?
 echo "$out" | sed 's/^/      /'
 [ $rc -eq 0 ] && x "grep -qx 'domain=$DOMAIN' /etc/camex/camex.conf" &&
+    x "grep -qx 'web_listen=yes' /etc/camex/camex.conf" &&
     [ "$(x "sed -n 's/^psk=//p' /etc/camex/camex.conf")" = "$PSK" ]
-check $? "domain= added to camex.conf, the rest kept"
-x 'systemctl is-active --quiet nginx && systemctl is-active --quiet camex-nginx-sync.service &&
-   systemctl is-enabled --quiet camex-nginx-sync.service && test ! -e /etc/systemd/system/camex-nginx-sync.timer &&
-   test -x /usr/local/bin/camex-nginx-sync && test -f /etc/nginx/conf.d/camex-nginx.conf &&
-   test ! -e /etc/nginx/conf.d/camex.conf'
-check $? "nginx and the sync script's service run (no timer), under the new names"
+check $? "domain= and web_listen=yes added to camex.conf, the rest kept"
+x 'systemctl is-active --quiet nginx && test -f /etc/nginx/conf.d/camex-nginx.conf &&
+   grep -q "auth_request /_camex_resolve;" /etc/nginx/conf.d/camex-nginx.conf &&
+   test ! -e /etc/nginx/camex-map.conf && test ! -e /usr/local/bin/camex-nginx-sync &&
+   test ! -e /etc/systemd/system/camex-nginx-sync.service && test ! -e /etc/nginx/conf.d/camex.conf'
+check $? "nginx asks camex (auth_request): no map, no sync script or service"
 x "grep -q 'server_name \*\.$DOMAIN;' /etc/nginx/conf.d/camex-nginx.conf"
 check $? "nginx's file has the domain"
 PW=$(x 'cat /etc/camex/nginx-password')
@@ -218,8 +222,8 @@ PW=$(x 'cat /etc/camex/nginx-password')
     [ "$(x 'stat -c "%a %G" /etc/nginx/camex.htpasswd')" = "640 www-data" ] &&
     echo "$out" | grep -q "user camex, password $PW"
 check $? "the start page's password: made, kept for root, printed"
-echo "$out" | grep -q "ok    nginx sends camex-check-[0-9]*\.$DOMAIN to camex"
-check $? "the installer's --check sees nginx answer for the domain"
+echo "$out" | grep -q "checked: the start page answers through nginx"
+check $? "the installer opens the start page through nginx"
 page() {    # page <host> [<user:password>]: status and body from nginx
     x "curl -s -m 10 -w '\n%{http_code}' ${2:+-u '$2'} -H 'Host: $1' http://127.0.0.1/"
 }
@@ -233,8 +237,8 @@ x 'echo "# my edit" >> /etc/nginx/conf.d/camex-nginx.conf'
 out=$(run)
 rc=$?
 [ $rc -eq 0 ] && echo "$out" | grep -q "kept: /etc/nginx/conf.d/camex-nginx.conf" &&
-    echo "$out" | grep -q "unchanged: /usr/local/bin/camex-nginx-sync" &&
     x 'grep -qx "# my edit" /etc/nginx/conf.d/camex-nginx.conf' &&
+    [ "$(x 'grep -c "^web_listen=" /etc/camex/camex.conf')" = 1 ] &&
     [ "$(x 'cat /etc/camex/nginx-password')" = "$PW" ]
 check $? "nginx's part is kept up to date, the edit and the password stay"
 # Another user in nginx's file, a new password, a per-client psk=
@@ -272,16 +276,31 @@ out=$(run --domain "мой домен.рф")
 [ $? -ne 0 ] && echo "$out" | grep -q "not a domain: мой домен.рф"
 check $? "a domain in another script with a blank is refused as given"
 
-echo "== 5a. the service follows a restarted server (#130)"
+echo "== 5a. nginx follows a restarted server"
 x 'systemctl restart camex'
 for _ in $(seq 1 90); do
     page "cam1.$DOMAIN" | grep -q "I am CAM1" && break
     sleep 1
 done
-page "cam1.$DOMAIN" | grep -q "I am CAM1" && x 'systemctl is-active --quiet camex-nginx-sync.service'
-check $? "after systemctl restart camex the client is back in the map"
+page "cam1.$DOMAIN" | grep -q "I am CAM1"
+check $? "after systemctl restart camex the client is reached again, with no reload of nginx"
 
-echo "== 6. the layouts of camex-nginx-setup.sh and of camex 3.10"
+echo "== 6. an nginx of camex 5.1.0, and the layouts of camex-nginx-setup.sh and 3.10"
+# camex 5.1.0: the map, the sync script and its service, no web_listen=
+x 'sed "s/openipc\.click/'"$DOMAIN"'/g" /opt/src/examples/nginx-camex-map.conf > /etc/nginx/conf.d/camex-nginx.conf &&
+   echo "# my edit" >> /etc/nginx/conf.d/camex-nginx.conf &&
+   printf "map \$host \$camex_upstream {\n}\n" > /etc/nginx/camex-map.conf &&
+   install -m 755 /opt/src/examples/camex-nginx-sync.sh /usr/local/bin/camex-nginx-sync &&
+   install -m 644 /opt/src/examples/camex-nginx-sync.service /etc/systemd/system/camex-nginx-sync.service &&
+   mkdir -p /var/lib/camex-nginx && sed -i "/^web_listen=/d" /etc/camex/camex.conf &&
+   systemctl daemon-reload && systemctl reload camex && nginx -s reload &&
+   systemctl enable --now camex-nginx-sync.service' >/dev/null 2>&1
+for _ in $(seq 1 30); do
+    page "cam1.$DOMAIN" | grep -q "I am CAM1" && break
+    sleep 1
+done
+page "cam1.$DOMAIN" | grep -q "I am CAM1"
+check $? "a server set up as by camex 5.1.0 (map, sync script) serves the client"
 # camex 3.10: the sync once from a timer; before: other names
 x 'systemctl disable --now camex-nginx-sync.service
    printf "[Timer]\nOnUnitActiveSec=10s\n[Install]\nWantedBy=timers.target\n" > /etc/systemd/system/camex-nginx-sync.timer
@@ -302,6 +321,10 @@ echo "$out" | sed 's/^/      /'
     grep -qx "# my edit" /etc/nginx/conf.d/camex-nginx.conf &&
     test ! -e /usr/local/bin/camex-nginx-sync.sh && ls /var/backups/camex | grep -q camex-nginx-sync.sh'
 check $? "nginx's file renamed with its edits, the old sync script removed (a copy kept)"
+echo "$out" | grep -q "this nginx uses the map and camex-nginx-sync (deprecated" &&
+    ! x 'grep -q "^web_listen=" /etc/camex/camex.conf' &&
+    x 'test -x /usr/local/bin/camex-nginx-sync && grep -q camex-map.conf /etc/nginx/conf.d/camex-nginx.conf'
+check $? "the map and the sync script are kept, with a word on moving over; no web_listen= added"
 x 'grep -qx "Environment=INDEX=/var/lib/camex-nginx/start.html" /etc/systemd/system/camex-nginx-sync.service'
 check $? "the start page's path of the old service is kept"
 x 'test ! -e /etc/systemd/system/camex-nginx-sync.timer && ! systemctl is-active --quiet camex-nginx-sync.timer &&
@@ -392,18 +415,16 @@ LINK=$(echo "$out" | sed -n 's|^  \(https://openipc.github.io/camex/connect/#.*\
 check $? "the Android link: host, port, transport, key and psk of the server, %XX-encoded"
 o 'grep -qE "^[[:space:]]*listen[[:space:]]+85;" /etc/nginx/conf.d/camex-nginx.conf &&
    ! grep -qE "^[[:space:]]*listen[[:space:]]+80;" /etc/nginx/conf.d/camex-nginx.conf &&
-   grep -qx "Environment=HTTP_PORT=85" /etc/systemd/system/camex-nginx-sync.service &&
-   grep -qx "Environment=UPSTREAM_PORT=8080" /etc/systemd/system/camex-nginx-sync.service'
-check $? "nginx listens on 85; the sync service has HTTP_PORT and UPSTREAM_PORT"
+   grep -qx "web_listen=yes" /etc/camex/camex.conf && grep -qx "device_port=8080" /etc/camex/camex.conf'
+check $? "nginx listens on 85; camex.conf has web_listen=yes and device_port=8080"
 code() {    # code [<user:password>]: the start page's status on port 85
     o "curl -s -o /dev/null -w '%{http_code}' -m 10 ${1:+-u '$1'} -H 'Host: opts.test' http://127.0.0.1:85/"
 }
 [ "$(code)" = 401 ] && [ "$(code 'camex:pa:ss\c "word')" = 200 ]
 check $? "the start page on port 85 opens with the given password"
-echo "$out" | grep -q "ok    nginx sends camex-check-[0-9]*\.opts\.test to camex" &&
-    echo "$out" | grep -q "ok    nginx serves the start page on opts.test" &&
+echo "$out" | grep -q "checked: the start page answers through nginx" &&
     echo "$out" | grep -q "Start page:       http://opts.test:85/"
-check $? "--check asks nginx on port 85; the addresses printed with :85"
+check $? "the installer opens the start page on port 85; the addresses printed with :85"
 # A client over TCP: the map leads to its web port 8080, the page's link to
 # nginx's port 85
 docker run -d --name "$P-ocli" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD -e OPSK="$OPSK" \
@@ -411,13 +432,18 @@ docker run -d --name "$P-ocli" --network "$NET_NAME" --cap-add NET_ADMIN --cap-a
      exec /opt/release/camex-x86_64 --mode client --auto --name CAM2 --server-host '"$P-opt"' \
          --port 5900 --transport tcp --server-pubkey '"$OPUB"' --psk "$OPSK" \
          --keepalive 2' >/dev/null
+resolve() { # resolve <host>: where camex sends nginx for it
+    o "curl -s -D - -o /dev/null -m 5 -H 'X-Camex-Host: $1' http://127.0.0.1:5801/resolve" |
+        sed -n 's/^X-Camex-Upstream: //p' | tr -d '\r'
+}
 for _ in $(seq 1 30); do
-    o 'grep -q "\"cam2\.opts\.test\" 10\.60\.0\.[0-9]*:8080;" /etc/nginx/camex-map.conf' && break
+    resolve cam2.opts.test | grep -Eq '^10\.60\.0\.[0-9]+:8080$' && break
     sleep 1
 done
-o 'grep -q "\"cam2\.opts\.test\" 10\.60\.0\.[0-9]*:8080;" /etc/nginx/camex-map.conf &&
-   grep -q "href=\"http://cam2.opts.test:85/\"" /var/lib/camex-nginx/index.html'
-check $? "a TCP client: the map leads to its port 8080, the start page links it on :85"
+resolve cam2.opts.test | grep -Eq '^10\.60\.0\.[0-9]+:8080$' &&
+    o 'curl -s -m 10 -u "$1" -H "Host: opts.test:85" http://127.0.0.1:85/' 'camex:pa:ss\c "word' |
+        grep -q "href=\"http://cam2.opts.test:85/\""
+check $? "a TCP client: camex sends nginx to its port 8080, the start page links it on :85"
 # The short form of an older unit's arguments: still TCP (camex reads -Rtcp)
 o 'sed -i "s/--transport tcp/-Rtcp/" /etc/default/camex && grep -q -- "-Rtcp" /etc/default/camex'
 out=$(orun --domain opts.test --port 5901 --transport udp --pool 10.70.0.0/24 --psk other \
@@ -430,33 +456,29 @@ rc=$?
     echo "$out" | grep -q "kept client_timeout= of /etc/camex/camex.conf, not --client-timeout 120" &&
     echo "$out" | grep -q "kept the start page's password, not --password" &&
     echo "$out" | grep -q "kept the listen lines of /etc/nginx/conf.d/camex-nginx.conf, not --http-port 86" &&
-    echo "$out" | grep -q "kept UPSTREAM_PORT=8080 of camex-nginx-sync.service, not 9090" &&
-    o 'grep -qx "Environment=UPSTREAM_PORT=8080" /etc/systemd/system/camex-nginx-sync.service &&
-       grep -qx "Environment=HTTP_PORT=85" /etc/systemd/system/camex-nginx-sync.service' &&
+    echo "$out" | grep -q "kept device_port=8080 of /etc/camex/camex.conf, not --upstream-port 9090" &&
+    o 'grep -qx "device_port=8080" /etc/camex/camex.conf' &&
     echo "$out" | grep -qF -- "--port 5900 --transport tcp" &&
     o 'grep -qxF "psk=$1" /etc/camex/camex.conf && grep -qx "port=5900" /etc/camex/camex.conf' "$OPSK" &&
     [ "$(code 'camex:pa:ss\c "word')" = 200 ]
 check $? "a rerun with other values changes none of them and says what to edit"
-# nginx's file made again: the sync service takes its port, not the old one;
-# the service gone: made again with the port of the kept file
+# nginx's file made again on another port: the addresses follow it; a rerun
+# takes the port of the kept file
 o 'rm /etc/nginx/conf.d/camex-nginx.conf'
 out=$(orun --domain opts.test --http-port 87)
-[ $? -eq 0 ] && o 'grep -qE "^[[:space:]]*listen[[:space:]]+87;" /etc/nginx/conf.d/camex-nginx.conf &&
-    grep -qx "Environment=HTTP_PORT=87" /etc/systemd/system/camex-nginx-sync.service' &&
-    echo "$out" | grep -q "Start page:       http://opts.test:87/"
-check $? "a new nginx file on --http-port 87: the sync service and the addresses follow it"
-o 'systemctl disable --now camex-nginx-sync.service >/dev/null 2>&1;
-   rm /etc/systemd/system/camex-nginx-sync.service'
+[ $? -eq 0 ] && o 'grep -qE "^[[:space:]]*listen[[:space:]]+87;" /etc/nginx/conf.d/camex-nginx.conf' &&
+    echo "$out" | grep -q "Start page:       http://opts.test:87/" &&
+    echo "$out" | grep -q "checked: the start page answers through nginx"
+check $? "a new nginx file on --http-port 87: the addresses follow it"
 out=$(orun --domain opts.test)
-[ $? -eq 0 ] && o 'grep -qx "Environment=HTTP_PORT=87" /etc/systemd/system/camex-nginx-sync.service' &&
-    echo "$out" | grep -q "ok    nginx serves the start page on opts.test"
-check $? "the sync service made again takes port 87 of the kept nginx file"
+[ $? -eq 0 ] && echo "$out" | grep -q "Start page:       http://opts.test:87/"
+check $? "a rerun takes port 87 of the kept nginx file"
 # listen with an address; CAMEX_ARGS with more blanks before tcp
 o 'sed -i "s/^\([[:space:]]*listen[[:space:]]*\)87;/\10.0.0.0:87;/" /etc/nginx/conf.d/camex-nginx.conf &&
    grep -q "listen 0.0.0.0:87;" /etc/nginx/conf.d/camex-nginx.conf &&
    sed -i "s/-Rtcp/--transport   tcp/" /etc/default/camex'
 out=$(orun --domain opts.test --transport tcp)
-[ $? -eq 0 ] && o 'grep -qx "Environment=HTTP_PORT=87" /etc/systemd/system/camex-nginx-sync.service' &&
+[ $? -eq 0 ] && echo "$out" | grep -q "Start page:       http://opts.test:87/" &&
     ! echo "$out" | grep -q "kept the server's transport" &&
     echo "$out" | grep -qF -- "--transport tcp"
 check $? "listen 0.0.0.0:87 is port 87; --transport   tcp in CAMEX_ARGS is TCP"

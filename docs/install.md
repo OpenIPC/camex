@@ -36,11 +36,15 @@ The steps, printed before it starts and numbered as it goes:
    20 letters and digits (`--network` gives one; [networks.md](networks.md)).
 6. Write `/etc/default/camex` (the service's arguments: server mode with that
    config and key), install `camex.service`, enable and start it.
-7. With `--domain` (or when nginx was installed before): nginx's server blocks
-   `/etc/nginx/conf.d/camex-nginx.conf`, an empty map, the start page's
-   password (user `camex`, kept in `/etc/camex/nginx-password`, for nginx in
-   `/etc/nginx/camex.htpasswd`), the sync script with its service;
-   then `nginx -t`, a reload, one sync and `camex-nginx-sync --check`.
+7. With `--domain` (or when nginx was installed before): `web_listen=yes` in
+   `[server]` of `camex.conf` (camex tells nginx where each name goes and
+   serves the start page, [nginx.md](nginx.md)), nginx's server blocks
+   `/etc/nginx/conf.d/camex-nginx.conf`, the start page's password (user
+   `camex`, kept in `/etc/camex/nginx-password`, for nginx in
+   `/etc/nginx/camex.htpasswd`); then `nginx -t`, a reload, and the start page
+   opened through nginx. An nginx of camex 5.1.0 and before (the map and
+   `camex-nginx-sync`) is kept as it is, its script updated
+   ([nginx.md](nginx.md#moving-to-web_listen)).
 8. Print what the clients need: the short command line with the network's
    name (`camex --server-host <host> --network '<name>'`), and the server's
    public key, the psk, a client command line with them and a link for the
@@ -207,12 +211,14 @@ removes nothing itself.
 /etc/systemd/system/camex.service             from examples/camex.service
 
 # With --domain: nginx in front of the clients
-/usr/local/bin/camex-nginx-sync               from examples/camex-nginx-sync.sh
-/etc/systemd/system/camex-nginx-sync.service  from examples/camex-nginx-sync.service
 /etc/nginx/conf.d/camex-nginx.conf            from examples/nginx-camex.conf
-/etc/nginx/camex-map.conf                     the map, empty at first
 /etc/camex/nginx-password                     the start page's password, mode 0600
 /etc/nginx/camex.htpasswd                     the same password for nginx
+
+# Kept up to date on a server set up by camex 5.1.0 and before (deprecated)
+/usr/local/bin/camex-nginx-sync               from examples/camex-nginx-sync.sh
+/etc/systemd/system/camex-nginx-sync.service  from examples/camex-nginx-sync.service
+/etc/nginx/camex-map.conf                     the map
 ```
 
 The packages it installs with apt-get: `curl`, `ca-certificates`; with
@@ -221,7 +227,7 @@ The packages it installs with apt-get: `curl`, `ca-certificates`; with
 ### Created at run time
 
 ```
-/etc/nginx/camex-map.conf.applied             the sync script: the map nginx took
+/etc/nginx/camex-map.conf.applied             the sync script (5.1.0 and before): the map nginx took
 /etc/nginx/camex-map.conf.lock                the sync script: one run at a time
 /etc/nginx/camex-map.conf.warnings            the sync script: warnings logged last
 /etc/nginx/camex-map.conf.warnings-index

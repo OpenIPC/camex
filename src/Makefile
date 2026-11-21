@@ -51,15 +51,17 @@ SRCS += wintun.c
 
 # Build profiles (#204), docs/build.md: a set of the flags below; a flag
 # given on its own wins over its profile (PROFILE=client CAMEX_MESH=0)
-#   full    everything: CAMEX_SERVER=1 CAMEX_L2=1 CAMEX_MESH=1 (the default;
-#           "server" is the same)
-#   client  cameras, routers, Android, desktops: CAMEX_SERVER=0, with
-#           CAMEX_L2=1 CAMEX_MESH=1
+#   full    everything: CAMEX_SERVER=1 CAMEX_WEB=1 CAMEX_L2=1 CAMEX_MESH=1
+#           (the default; "server" is the same)
+#   client  cameras, routers, Android, desktops: CAMEX_SERVER=0 CAMEX_WEB=0,
+#           with CAMEX_L2=1 CAMEX_MESH=1
 PROFILE ?= full
 ifneq ($(filter full server,$(PROFILE)),)
   PROFILE_SERVER = 1
+  PROFILE_WEB = 1
 else ifeq ($(PROFILE),client)
   PROFILE_SERVER = 0
+  PROFILE_WEB = 0
 else
   $(error PROFILE must be full (or server) or client, not "$(PROFILE)")
 endif
@@ -70,16 +72,30 @@ ifneq ($(findstring mingw,$(CC))$(filter Darwin,$(shell uname -s 2>/dev/null)),)
 else
   PROFILE_L2 = 1
 endif
+# The start page needs the control sockets, which Windows has not (#203)
+ifneq ($(findstring mingw,$(CC)),)
+  PROFILE_WEB = 0
+endif
 PROFILE_MESH = 1
 
 # Optional features (#mesh, #204): CAMEX_L2=1 (TAP networks, LAN bridge),
 # CAMEX_MESH=1 (peer to peer), CAMEX_SERVER=0 (a client only: no
-# --mode server, no server code)
+# --mode server, no server code), CAMEX_WEB=0 (no start page, web_listen=;
+# #203); CAMEX_WEB=1 needs CAMEX_SERVER=1
 CAMEX_SERVER ?= $(PROFILE_SERVER)
+CAMEX_WEB ?= $(if $(filter 0,$(CAMEX_SERVER)),0,$(PROFILE_WEB))
 CAMEX_L2 ?= $(PROFILE_L2)
 CAMEX_MESH ?= $(PROFILE_MESH)
-ifneq ($(words $(filter 0 1,$(CAMEX_SERVER) $(CAMEX_L2) $(CAMEX_MESH))),3)
-  $(error CAMEX_SERVER, CAMEX_L2 and CAMEX_MESH are 0 or 1)
+ifneq ($(words $(filter 0 1,$(CAMEX_SERVER) $(CAMEX_WEB) $(CAMEX_L2) $(CAMEX_MESH))),4)
+  $(error CAMEX_SERVER, CAMEX_WEB, CAMEX_L2 and CAMEX_MESH are 0 or 1)
+endif
+ifeq ($(CAMEX_SERVER)$(CAMEX_WEB),01)
+  $(error CAMEX_WEB=1 needs CAMEX_SERVER=1: the start page is the server's)
+endif
+ifeq ($(CAMEX_WEB),1)
+  SRCS += web.c
+else
+  CPPFLAGS += -DCAMEX_NO_WEB
 endif
 ifeq ($(CAMEX_SERVER),1)
   SRCS += server.c cpaceguard.c

@@ -157,7 +157,11 @@ jobs:
         run: ./docker/test-e2e-client-profile.sh
         if: matrix.target == 'x86_64'
 
-      - name: E2E test (nginx map of the clients, issue #84)
+      - name: E2E test (camex's own start page and nginx's auth_request, issue #203)
+        run: ./docker/test-e2e-web.sh
+        if: matrix.target == 'x86_64'
+
+      - name: E2E test (nginx map of the clients, issue #84; deprecated)
         run: ./docker/test-e2e-nginx-map.sh
         if: matrix.target == 'x86_64'
 

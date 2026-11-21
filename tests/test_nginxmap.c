@@ -443,6 +443,53 @@ static void test_index(void)
           "bad domain refused");
 }
 
+/* camex's own page and nginx's lookup (#203) */
+static void test_web(void)
+{
+    const char *web = "CAM-A 10.200.0.2\nCAM-B 10.200.0.3 8080\n"
+                      "CAM-A 10.200.0.9\nbad_id 10.200.0.4\n";
+    const char *index =
+        "L:udp\tCAM-B\t10.200.0.3\t0\t5\t1\t5\t1\t10\t20\t-\t-\n";
+    char up[40];
+    size_t n = 0U;
+    char *page;
+
+    CHECK(web_resolve(web, "openipc.click", 80, "cam-a.openipc.click", up,
+                      sizeof(up)) && strcmp(up, "10.200.0.2:80") == 0,
+          "resolve: a name to its address and the default port; of two, the lower");
+    CHECK(web_resolve(web, "openipc.click", 81, "CAM-B.OpenIPC.click:8000", up,
+                      sizeof(up)) && strcmp(up, "10.200.0.3:8080") == 0,
+          "resolve: any case, nginx's port ignored, the device's own port");
+    CHECK(web_resolve(web, "openipc.click", 80, "cam-a.openipc.click", up,
+                      sizeof(up)) && strcmp(up, "10.200.0.2:80") == 0,
+          "resolve: the default port 80");
+    CHECK(!web_resolve(web, "openipc.click", 80, "cam-c.openipc.click", up,
+                       sizeof(up)) && up[0] == '\0',
+          "resolve: an unknown name: none");
+    CHECK(!web_resolve(web, "openipc.click", 80, "cam-a.other.click", up,
+                       sizeof(up)),
+          "resolve: another domain: none");
+    CHECK(!web_resolve(web, "openipc.click", 80, "openipc.click", up,
+                       sizeof(up)),
+          "resolve: the bare domain: none");
+    CHECK(!web_resolve(web, "openipc.click", 80, "", up, sizeof(up)) &&
+              !web_resolve(web, "openipc.click", 80, NULL, up, sizeof(up)),
+          "resolve: no host: none");
+    CHECK(web_resolve(web, "", 80, "cam-a", up, sizeof(up)) &&
+              strcmp(up, "10.200.0.2:80") == 0,
+          "resolve: without a domain the bare ID");
+
+    page = web_index_format(index, web, "openipc.click", 80, 80, NULL, &n);
+    CHECK(page != NULL && strstr(page, "<a class=\"peer\" "
+                                 "href=\"http://10.200.0.3:8080/\">") != NULL,
+          "page without nginx: a device links its tunnel address and web port");
+    free(page);
+    page = web_index_format(index, NULL, "openipc.click", 80, 0, NULL, &n);
+    CHECK(page != NULL && strstr(page, "href=\"//cam-b.openipc.click/\"") != NULL,
+          "page behind nginx: links by name");
+    free(page);
+}
+
 int main(void)
 {
     char warn[1024];
@@ -623,6 +670,7 @@ int main(void)
           "a default port with too many digits refused");
 
     test_index();
+    test_web();
 
     if (failures != 0) {
         printf("test_nginxmap: %d FAILED\n", failures);

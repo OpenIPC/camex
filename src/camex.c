@@ -17,6 +17,7 @@
 #endif
 #include "server.h"
 #include "control.h"
+#include "web.h"
 #include "config.h"
 #include "crypto.h"
 #include "keys.h"
@@ -1060,6 +1061,24 @@ int camex_init(camex_config_t *config)
     }
     server_networks_apply();
     camex_config_watch();
+    /* The start page and nginx's lookup (#203), web_listen= */
+#if defined(CAMEX_NO_WEB) || defined(_WIN32)
+    if (server_db.globals.web_listen[0] != '\0') {
+        log_message(LOG_WARNING, "web_listen= ignored: this camex has no "
+                    "start page (%s)",
+#ifdef _WIN32
+                    "not on Windows"
+#else
+                    "built with CAMEX_WEB=0"
+#endif
+                    );
+    }
+#endif
+    if (web_apply() != 0) {
+        packet_close();
+        net_close();
+        return -1;
+    }
 
     log_message(LOG_DEBUG, "Protocol v%u (%s)", (unsigned)CAMEX_PROTO_VER,
                 "Noise_NKpsk0_25519_ChaChaPoly_BLAKE2b");
@@ -1583,6 +1602,9 @@ void camex_run(void)
             maxfd = net_tcp_pending_fdset(&writeset, maxfd);
 #ifndef _WIN32
             maxfd = control_fdset(&readset, &writeset, maxfd);
+#ifndef CAMEX_NO_WEB
+            maxfd = web_fdset(&readset, &writeset, maxfd);
+#endif
 #endif
 
             tv.tv_sec = 1;
@@ -1621,6 +1643,9 @@ void camex_run(void)
                 }
 #ifndef _WIN32
                 control_handle(&readset, &writeset);
+#ifndef CAMEX_NO_WEB
+                web_handle(&readset, &writeset);
+#endif
 #endif
             } else if (ready < 0 && errno != EINTR) {
                 print_errno_message(LOG_ERR, "select");
@@ -1724,6 +1749,12 @@ void camex_run(void)
                                 current_config.port);
                         }
 #endif
+                        /* web_listen=, web_password=, web_scope= (#203):
+                         * a page that cannot open now stays off */
+                        if (web_apply() != 0) {
+                            log_message(LOG_ERR, "Start page off until "
+                                        "web_listen= is fixed");
+                        }
                     }
                 }
                 if (restore) {
@@ -1870,6 +1901,7 @@ void camex_stop(void)
 #ifndef _WIN32
     control_close();
 #endif
+    web_close();
 
     if (client_mode && current_config.gateway_ip[0] != '\0' &&
         packet_host_routes()) {

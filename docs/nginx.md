@@ -11,10 +11,12 @@ opens through nginx by name:
 http://<camera ID>.openipc.click/   →   http://<its tunnel address>:80/
 ```
 
-Nobody keeps a list of addresses: nginx follows the server's live state through
-`camex --status --format nginx-map` and a small sync script. The bare domain,
-`http://openipc.click/`, opens a start page with every connected camera, its
-name and a link (see [Start page](#start-page)).
+Nobody keeps a list of addresses: for every request nginx asks the camex
+server where the name goes (`auth_request`), and camex answers from its live
+state. The bare domain, `http://openipc.click/`, opens a start page with every
+connected camera, its name and a link, which camex serves itself (see
+[Start page](#start-page)). No map file, no sync script, no reloads of nginx
+(#203).
 
 ## Topology
 
@@ -24,32 +26,34 @@ name and a link (see [Start page](#start-page)).
  │ camex --auto        │ ────────────▶ │ camex --mode server                 │
  │   --name <MAC>      │               │   tunnel interface camex/tun0       │
  │ web UI on :80 of    │ ◀── tunnel ── │   pool 10.200.0.0/22                │
- │ its tunnel address  │               │                                     │
- └─────────────────────┘               │ nginx :80/:443 *.openipc.click    │
-                                       │   map from camex --status           │
- users ── http(s)://<id>.cam.… ──────▶ │   proxy_pass → <tunnel address>:80  │
+ │ its tunnel address  │               │   web_listen 127.0.0.1:5801         │
+ └─────────────────────┘               │        ▲ where does <id> go?        │
+                                       │ nginx :80/:443 *.openipc.click      │
+ users ── http(s)://<id>.openipc.… ──▶ │   proxy_pass → <tunnel address>:80  │
                                        └─────────────────────────────────────┘
 ```
 
 - **camex server**: authenticates the cameras, gives each a stable tunnel
   address (a returning camera gets its address back, #81) and carries their
-  traffic. Its control socket answers `camex --status`.
-- **nginx**: the only way users reach the cameras. It maps the host name to a
-  camera's tunnel address and proxies to it; a name with no live device, or a
-  device with no web page on its port, gets the page "Device not reachable".
-- **camex-nginx-sync** (`examples/camex-nginx-sync.sh`): rewrites nginx's map when cameras come or go and
-  reloads nginx, and keeps the start page current.
+  traffic. With `web_listen=` it also tells nginx where each name goes
+  (`/resolve`) and serves the start page, on 127.0.0.1 only.
+- **nginx**: the only way users reach the cameras. For each request it asks
+  camex for the camera's tunnel address and proxies to it straight, with no
+  traffic through camex; a name with no live device, or a device with no web
+  page on its port, gets the page "Device not reachable". It also asks for the
+  start page's password and adds TLS.
 
 Both run on the same host on purpose: nginx reaches the tunnel addresses
-through the server's own tunnel interface, and `camex --status` needs the
-server's local control socket.
+through the server's own tunnel interface, and camex answers nginx on
+127.0.0.1.
 
 ## Server
 
 On Debian or Ubuntu, `install.sh` does this section and nginx's below in one
 command (see [The quick way](#nginx) and
 [install.md](install.md)); its `camex.conf` has the
-pool, isolation, domain and a new `psk=`, and can be edited as below.
+pool, isolation, domain, `web_listen=yes` and a new `psk=`, and can be edited
+as below.
 
 By hand: install camex (see [install.md](install.md#by-hand)), create
 the key pair once and give `public_key=` to the cameras:
@@ -70,8 +74,10 @@ auto_pool=10.200.0.0/22
 allow_unknown_clients=yes
 # Cameras must not reach each other (see Firewall)
 client_isolation=yes
-# The cameras' domain, for the map and the start page (see nginx)
+# The cameras' domain, for nginx and the start page (see nginx)
 domain=openipc.click
+# The start page and nginx's lookup on 127.0.0.1:5801 (see nginx)
+web_listen=yes
 # One pre-shared key for all devices (see the next section)
 psk=hex:<64 hex digits>
 ```
@@ -88,8 +94,7 @@ sudo camex --mode server --port 5800 --config /etc/camex/camex.conf \
   minutes) before another one may get it.
 - Addresses are stable: a camera that reconnects, or comes back after a server
   restart, gets its previous address, and the server never gives one address to
-  two cameras (#81). The nginx map therefore changes only when cameras come and
-  go.
+  two cameras (#81).
 - For 60 seconds after a start the server gives cameras only the address they
   ask for (their previous one), so returning cameras come back first; a new
   camera waits and retries.
@@ -136,7 +141,7 @@ camex --mode client --auto --name 001a2b3c4d5e \
 ```
 
 - **ID**: lower-case hex without separators, so it is a valid host name label
-  (`001a2b3c4d5e.openipc.click`). IDs with `:` or `_` are left out of the map
+  (`001a2b3c4d5e.openipc.click`). IDs with `:` or `_` get no name in nginx
   with a warning.
 - **Kernel module**: on OpenIPC cameras without `tun.ko` load `camex.ko` and use
   `--tun-dev /dev/camex` (see [kernel-module.md](kernel-module.md)).
@@ -188,62 +193,40 @@ route other traffic.
 
 ## nginx
 
-The domain is given once. Put it in `[server]` of the server's file:
+The domain is given once. Put it in `[server]` of the server's file, with
+`web_listen=yes`:
 
 ```ini
 [server]
 domain=openipc.click
+web_listen=yes
 ```
 
-The map and the start page take it from the running server (`camex --status`
-asks for it), and the sync script needs no setting of its own. `--domain` (or
-`DOMAIN=` for the script) still overrides it, with a warning when the two
-differ. A reload (`kill -HUP`) applies a new domain. Only camex 3.8.0 or later
-reports `domain=`. An older server reports none, so without `--domain` its
-clients get the domain of the others, with a warning, or bare IDs when no
-server reports one. With an older server, give the domain explicitly
-(`--domain`, or `DOMAIN=` for the script): the map and the start page work as
-before. The nginx configuration
-must name the same domain; `install.sh` below writes it there for you.
+camex then listens on `127.0.0.1:5801` for nginx (see [Settings](#settings)).
+A reload (`kill -HUP`) applies a new domain or another `web_listen=`. The
+nginx configuration must name the same domain; `install.sh` below writes it
+there for you. nginx needs `ngx_http_auth_request_module`, which the nginx
+packages of Debian and Ubuntu have (`nginx -V 2>&1 | grep -o auth_request`).
 
 **The quick way** (Debian, Ubuntu): `install.sh` installs the camex server
-and, with `--domain`, does steps 3 to 5 below in one go, with the domain filled
-in everywhere, then checks the result:
+and, with `--domain`, does steps 3 and 4 below in one go, with the domain
+filled in everywhere, then opens the start page through nginx to check it:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/OpenIPC/camex/master/install.sh | sudo sh -s -- --domain openipc.click
 ```
 
-It installs the nginx server blocks as `/etc/nginx/conf.d/camex-nginx.conf`,
-the sync script as `/usr/local/bin/camex-nginx-sync` with its service, and
-the start page's password (see [Start page](#start-page),
-**Password**). It adds `domain=` to `[server]` of `/etc/camex/camex.conf` and
-reloads camex, then checks and reloads nginx and starts the sync service. Run it
-again at any time: it updates camex, the sync script and the units; nginx's
-file, `camex.conf` and the password, once made, stay as they are, edits
-included. The domain is never changed by it: another `--domain` is refused. A
-setup of `camex-nginx-setup.sh` (camex 3.9 and before) moves to the new names:
-`/etc/nginx/conf.d/camex.conf` becomes `camex-nginx.conf` with its edits, the
-old sync script goes to `/var/backups/camex/`, and camex 3.10's
-`camex-nginx-sync.timer` is stopped and removed. DNS and TLS (steps 1 and 2) stay
-yours.
-
-**The checks**: `camex-nginx-sync --check` goes through the whole setup and
-prints one line per item, `ok`, `WARN` or `FAIL`. It checks that the servers
-answer, the domain, that nginx includes the map and has `server_name` for the
-domain, and what nginx really answers on port 80 of this host: a name under
-the domain with no device must get camex's page "Device not reachable", and the bare domain
-the start page, behind its password (a `WARN` when it has none; with the
-password from `/etc/camex/nginx-password`, `PASSWORD_FILE=` for another file,
-it also opens the page). Then the start page file, the DNS records and the
-sync service. It
-exits with 1 on a `FAIL`. A DNS name that does not resolve is a `FAIL`; one
-that resolves to an address that is not this host's is a `WARN`, because
-behind NAT that is normal. `CHECK_DNS=no` skips the DNS items, e.g. in a
-container. After each new map the sync script also logs a warning when there
-is no domain, or when nginx has no `server_name` for it or does not include
-the map. camex's own warnings (no domain, a bad ID) are logged when they
-change, not at every run.
+It installs the nginx server blocks as `/etc/nginx/conf.d/camex-nginx.conf`
+and the start page's password (see [Start page](#start-page), **Password**).
+It adds `domain=` and `web_listen=yes` to `[server]` of
+`/etc/camex/camex.conf` (and `device_port=` with `--upstream-port`) and
+reloads camex, then checks and reloads nginx. Run it again at any time: it
+updates camex; nginx's file, `camex.conf` and the password, once made, stay as
+they are, edits included. The domain is never changed by it: another
+`--domain` is refused. A server set up by camex 5.1.0 or before (nginx with
+the map, `camex-nginx-sync`) is kept as it was: see
+[Moving to web_listen](#moving-to-web_listen). DNS and TLS (steps 1 and 2)
+stay yours.
 
 The steps by hand:
 
@@ -254,58 +237,47 @@ The steps by hand:
    `openipc.click` (a wildcard certificate does not cover the bare domain
    either); uncomment the `listen 443 ssl` lines in both server blocks of the
    example.
-3. **Server block**: copy `examples/nginx-camex.conf` to
-   `/etc/nginx/conf.d/camex-nginx.conf`
-   and replace `openipc.click` with your domain (the one in `domain=`). It includes the map, proxies
-   to the camera with WebSocket support and without buffering, gives up on a
-   camera after 5 s and shows the page "Device not reachable" for names with no live
-   device, and for a device online with no web page on the port (an Android app on
-   camex 4.1 or later that does not serve its `web_port` itself refuses it, #187).
-4. **The map**: create an empty one so that nginx starts, then let the sync
-   script keep it current:
-
-   ```sh
-   printf 'map $host $camex_upstream {\n}\n' | sudo tee /etc/nginx/camex-map.conf
-   sudo install -m 755 examples/camex-nginx-sync.sh /usr/local/bin/camex-nginx-sync
-   sudo cp examples/camex-nginx-sync.service /etc/systemd/system/
-   # The domain comes from domain= in [server] of camex.conf
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now camex-nginx-sync.service
-   ```
-
-   The script writes `camex --status --format nginx-map` to the map only when
-   it changed, runs `nginx -t` and reloads nginx, and puts the previous map back
-   if nginx rejects the new one; runs never overlap (it needs `flock`, from
-   util-linux or busybox). When a running server does
-   not answer it leaves the map as it is (a socket left behind by a server that
-   is gone is skipped).
-
-5. **The start page** (optional): `INDEX=` in the service (set in the
-   example) makes the script write it, and `StateDirectory=` creates its
-   directory, `/var/lib/camex-nginx`. The second server block of the example
-   serves it on the bare domain, behind a password (user `camex`):
+3. **Server blocks**: copy `examples/nginx-camex.conf` to
+   `/etc/nginx/conf.d/camex-nginx.conf` and replace `openipc.click` with your
+   domain (the one in `domain=`). For a camera's name it asks camex
+   (`auth_request /_camex_resolve` → `http://127.0.0.1:5801/resolve`), proxies
+   to the answer with WebSocket support and without buffering, gives up on a
+   camera after 5 s, and shows the page "Device not reachable" for names with
+   no live device (camex answers 403), when camex does not answer (500), and
+   for a device online with no web page on the port (an Android app on camex
+   4.1 or later that does not serve its `web_port` itself refuses it, #187).
+   The second block proxies the bare domain to camex's start page, behind a
+   password, and never passes on `/resolve`.
+4. **The password** of the start page (user `camex`):
 
    ```sh
    printf 'camex:%s\n' "$(openssl passwd -apr1)" | sudo tee /etc/nginx/camex.htpasswd
    ```
 
-   See [Start page](#start-page).
+Then `sudo nginx -t && sudo systemctl reload nginx`. Cameras that come and
+go need nothing more: nginx asks camex at each request.
 
-The map looks like this:
+What nginx asks, and what camex answers:
 
 ```
-# camex --status --format nginx-map: generated, do not edit
-# domain: openipc.click
-map $host $camex_upstream {
-    "001a2b3c4d5e.openipc.click" 10.200.0.2:80;
-    "001a2b3c4d5f.openipc.click" 10.200.0.3:80;
-}
+GET /resolve HTTP/1.0             (from 127.0.0.1 only)
+X-Camex-Host: 001a2b3c4d5e.openipc.click
+
+HTTP/1.0 204 No Content
+X-Camex-Upstream: 10.200.0.2:80
 ```
+
+The name is the client ID in lower case plus the domain; nginx's port and the
+case do not matter. An ID that is not a valid host name label (letters, digits
+and `-`, up to 63) has no name. Of one ID on two servers the lower address is
+taken. A name with no live device gets 403, which nginx turns into its page
+"Device not reachable".
 
 ## Start page
 
-`camex --status --format nginx-index --domain openipc.click` prints a static
-HTML page of the cameras in two lists, switched with the tabs at the top:
+camex serves the start page itself on `web_listen=` (`/`), from the state of
+the moment: every request gets the clients as they are now. It shows the
+cameras in two lists, switched with the tabs at the top:
 
 - **Configured**: every `[client ID]` block in the server's file, connected or
   not. A camera that is not connected has a red lamp and no link, so a missing
@@ -314,15 +286,16 @@ HTML page of the cameras in two lists, switched with the tabs at the top:
   address from the auto pool.
 
 Each row has the camera's name linked to `//<camera ID>.openipc.click/` (no
-scheme, so the link works over HTTP and HTTPS alike), its ID and tunnel
-address, its **Peer**: the external IP it connects from, as the server sees it
-(after NAT), linked to `http://<IP>:<peer_port>/` in a new tab; its
+scheme, so the link works over HTTP and HTTPS alike; with nginx on a port
+other than 80 the link has it: `http://<ID>.openipc.click:8000/`), its ID and
+tunnel address, its **Peer**: the external IP it connects from, as the server
+sees it (after NAT), linked to `http://<IP>:<peer_port>/` in a new tab; its
 **Proto**, UDP or TCP (#178; a dash from a server before 4.0.0); and as in
-`camex --status`: **Connected** (how long it has been on
-this connection), **Last packet**, **Handshake** (how long ago, and how many
-it has had) and **RX / TX** in KiB. The page opens Configured when there are
-blocks in the file, Auto otherwise, and the browser remembers the tab chosen
-(the tabs work without JavaScript too).
+`camex --status`: **Connected** (how long it has been on this connection),
+**Last packet**, **Handshake** (how long ago, and how many it has had) and
+**RX / TX** in KiB. The page opens Configured when there are blocks in the
+file, Auto otherwise, and the browser remembers the tab chosen (the tabs work
+without JavaScript too).
 
 | Desktop                                    | Phone (fewer columns)                                       |
 |--------------------------------------------|-------------------------------------------------------------|
@@ -332,20 +305,20 @@ blocks in the file, Auto otherwise, and the browser remembers the tab chosen
   address. A device that serves its page on another port (an Android app
   cannot listen below 1024 without root) says so with `--web-port <port>`, or
   the server sets it: `web_port=` in its `[client ID]` block, else the port the
-  device announced, else `web_port=` of `[defaults]`, else `--upstream-port`.
-  The map then has `<address>:<port>` for it; nginx's configuration does not
-  change. `camex --status` shows the port after the address. Announcing it
-  needs a server 3.19.0 or later: an older server refuses a client that sends it.
+  device announced, else `web_port=` of `[defaults]`, else `device_port=` of
+  `[server]` (80). `/resolve` then answers `<address>:<port>` for it; nginx's
+  configuration does not change. `camex --status` shows the port after the
+  address. Announcing it needs a server 3.19.0 or later: an older server
+  refuses a client that sends it.
 - **Peer links**: `peer_port=` in `[defaults]` or in a camera's `[client ID]`
   block sets the port of the link; the camera's own value wins, then
   `[defaults]`, then 8080. With port 80 the link has no port. `peer_port=none`
   shows the IP as plain text: in `[defaults]` for every camera (a camera with
   its own number still gets a link), in a `[client ID]` block for that one. A
   reload (`kill -HUP`) applies it. Only the page has the column: `camex
-  --status` keeps its PEER column with the port, the map does not change. A
-  camera that is not connected shows `—`, and so does every camera when the
-  server is older than 3.9.0. On a phone the column is hidden with Address.
-
+  --status` keeps its PEER column with the port. A camera that is not
+  connected shows `—`, and so does every camera when the server is older than
+  3.9.0. On a phone the column is hidden with Address.
 - **Names** come from the server's file: `name=` in the camera's `[client ID]`
   block, UTF-8 text up to 64 bytes without control characters. A camera without
   one is listed by its ID. A reload (`kill -HUP`) applies new names; the server
@@ -359,31 +332,24 @@ blocks in the file, Auto otherwise, and the browser remembers the tab chosen
   when one is not, grey while the page gets no answer (then the title starts
   with `No connection ·`). Both work without JavaScript and follow the page's
   refresh.
-- **Freshness**: the ages and the traffic are those of the last sync (at
-  least every 10 seconds with `--follow` and `INDEX`; a client that comes or
-  goes at once). An open page refreshes itself in place every 5 seconds
-  (#142): its script fetches the same file again and swaps the counts and the
+- **Freshness**: an open page refreshes itself in place every 5 seconds
+  (#142): its script fetches the page again and swaps the counts and the
   lists, keeping the chosen tab and the scroll; when the fetch fails or gets
   no answer in 4 seconds (the server down, a new password) the data stays and
-  the page says "no connection"; after an update of camex it reloads once. Without JavaScript
-  the page reloads every 30 seconds. The script replaces the page at every
-  sync and logs only when the number of cameras online changed.
-- **The same rules as the map**: IDs that are not a host name label are left
-  out with a warning, of an ID on two servers the connected one (then the
-  lower address) is kept, and when a running server does not answer nothing
-  is printed and the old page stays.
+  the page says "no connection"; after an update of camex it reloads once.
+  Without JavaScript the page reloads every 30 seconds.
+- **Every server on the host**: the page lists the clients of every camex
+  server on this host, and `/resolve` finds them too (see
+  [Several servers on one host](#several-servers-on-one-host)).
+- **`/status.json`**: the same as `camex --status --json`, `{"servers":[...]}`,
+  behind the same password; for scripts and monitoring.
 - **DNS and TLS**: the bare domain needs its own DNS record and must be in the
   certificate next to the wildcard (see [nginx](#nginx), steps 1 and 2).
-- **With the map**: the script builds the page before the map, so every device
-  on it is in the map too, and publishes it only after that map was applied.
-  While nginx rejects a new map or does not reload, the page stays as it was,
-  so its links never lead to names that nginx does not know yet.
-- **Turning it off**: empty `INDEX=` stops the updates only; the script does
-  not know which file it wrote before. Remove the start page's server block
-  from `nginx-camex.conf` (or the file, e.g. `/var/lib/camex-nginx/index.html`)
-  and reload nginx.
+- **Turning it off**: `web_listen=no` (or no `web_listen=`) and a reload; then
+  nginx cannot ask camex either. To keep the lookup but not the page, remove
+  the start page's server block from nginx's file.
 - **Password**: the page lists every camera on the server and where it
-  connects from, so it always asks for a password (`auth_basic`, user
+  connects from, so nginx always asks for a password (`auth_basic`, user
   `camex`). `install.sh` generates the password once, keeps it in
   `/etc/camex/nginx-password` (root only), writes
   `/etc/nginx/camex.htpasswd` (group `www-data`, other users added there
@@ -391,9 +357,74 @@ blocks in the file, Auto otherwise, and the browser remembers the tab chosen
   a new one remove `/etc/camex/nginx-password` and run it again (only the
   `camex` line of the htpasswd file changes). The example's block also has
   commented `allow` / `deny` lines, to let in only some networks besides.
-- The sync script needs a server of camex 3.7.0 or later for the page: an older
-  one answers the page's control command (`CLIENTS INDEX`) with an error, and
-  the page is not written (the map still is).
+
+## Without nginx
+
+A server on a LAN, with no nginx, can show the page itself: `web_listen=` on
+an address of the LAN, with a password of camex's own.
+
+```sh
+camex --hash-password      # asks for it (no echo), prints web_password=...
+```
+
+```ini
+[server]
+web_listen=0.0.0.0:5801
+web_password=argon2id$<salt>$<hash>
+```
+
+- camex does not start with a `web_listen=` beyond 127.0.0.1 and no
+  `web_password=`. `web_password=none` opens the page to anyone who reaches
+  it, on purpose, with a warning in the log.
+- The file holds only the hash (argon2id with a salt of its own), never the
+  password. The browser asks for it (any user name); a password that matched
+  is remembered for the run, so the page's refresh does not cost an argon2
+  every 5 seconds. 5 wrong passwords in a row from one address shut it out
+  for 60 seconds (429), and the log says so.
+- Plain HTTP: the password crosses the LAN in the clear. This mode is for a
+  network you trust; a page on the internet goes through nginx with TLS.
+- Without nginx, each camera's link is its tunnel address and web port
+  (`http://10.200.0.2:8080/`): it opens from the server host, and from the LAN
+  where it has a route to the pool.
+- `/resolve` answers only on 127.0.0.1: the names and addresses never leave
+  the host through it.
+
+## Several servers on one host
+
+The server with `web_listen=` asks the others on the host through their
+control sockets, every 2 seconds and in the background, and its page and
+`/resolve` have their clients too: one domain, every device, as before. A
+server that does not answer keeps its part as it last was.
+
+- `web_scope=self`: only its own clients, for a server with its own domain and
+  its own `web_listen=` (another port), and its own server blocks in nginx.
+- Only one server of a domain should have `web_listen=`.
+- One server serves several networks (`[network NAME]`) and both transports
+  (UDP and TCP on one port, `--transport both`, the default): one daemon covers
+  what used to take several.
+
+## Settings
+
+In `[server]` of the server's file; a reload (`kill -HUP`) applies them.
+
+| Key            | Value                                                                                                                                 |
+|----------------|---------------------------------------------------------------------------------------------------------------------------------------|
+| `web_listen`   | `yes` (`127.0.0.1:5801`), `no` (the default), `<port>` (on 127.0.0.1) or `<IPv4>:<port>`                                              |
+| `web_password` | `argon2id$...` from `camex --hash-password`, or `none`; needed when `web_listen` is beyond 127.0.0.1; behind nginx, nginx asks for it |
+| `web_scope`    | `all` (the default: every server on the host) or `self`                                                                               |
+| `device_port`  | a device's web port when neither it nor the server's file gives one (80)                                                              |
+| `domain`       | the domain after the client ID, in nginx's names and the page's links                                                                 |
+
+| Path           | Answer                                                                                                         |
+|----------------|----------------------------------------------------------------------------------------------------------------|
+| `/`            | the start page (HTML)                                                                                          |
+| `/status.json` | `{"servers":[...]}`, as `camex --status --json`                                                                |
+| `/resolve`     | for nginx, from 127.0.0.1 only: 204 with `X-Camex-Upstream: <address>:<port>` for `X-Camex-Host`, 403 for none |
+
+GET and HEAD only, a request head of up to 8 KB, one request per connection;
+nothing there changes the server. A camex built without the server or with
+`CAMEX_WEB=0` ([build.md](build.md#profiles-and-flags)) has none of it: it
+says so in the log and ignores `web_listen=`. Not on Windows.
 
 ## Checks
 
@@ -404,25 +435,63 @@ blocks in the file, Auto otherwise, and the browser remembers the tab chosen
 - **A camera directly**: `curl -sI http://10.200.0.2/` on the server host. No
   answer while `camex --status` lists the camera: the camera's web server, or
   the firewall's output chain.
+- **Where nginx is sent**: `curl -si -H 'X-Camex-Host: 001a2b3c4d5e.openipc.click'
+  http://127.0.0.1:5801/resolve` on the server host: 204 with
+  `X-Camex-Upstream`, or 403 when no live device has that name. No answer at
+  all: `web_listen=` is not set, or camex is not running (`journalctl -u
+  camex` has the line `Start page: http://127.0.0.1:5801/`).
 - **The start page**: `curl -s -u camex:<password> -H 'Host: openipc.click'
   http://127.0.0.1/` on the server host (the password is in
-  `/etc/camex/nginx-password`); a 401 means a wrong password, a 404 that the
-  page file is missing: compare `INDEX=` with the block's `root` and run the
-  sync script by hand.
-- **Everything at once**: `sudo camex-nginx-sync --check` (see [nginx](#nginx)).
+  `/etc/camex/nginx-password`); a 401 means a wrong password, a 502 that camex
+  does not listen on `web_listen=`.
 - **Through nginx**: `curl -sI -H 'Host: 001a2b3c4d5e.openipc.click'
   http://127.0.0.1/`. The page "Device not reachable" means no live device has
-  this name (it is not in the map: compare with `camex --status --format
-  nginx-map --domain openipc.click` and run the sync script by hand), or the
-  device is online but no web page answers on its port (an Android app that does
-  not serve its `web_port` itself, #187).
+  this name (compare with `/resolve` above), or the device is online but no
+  web page answers on its port (an Android app that does not serve its
+  `web_port` itself, #187).
 - **Logs**: the server logs `Registered auto client <ID>`, `Expired client
-  <address>`, address offers and moves, and rejected handshakes (a wrong key, a
-  reserved address); `journalctl -u camex-nginx-sync` shows when the map was
-  updated and nginx reloaded; nginx's `error.log` shows connection failures to a
-  camera.
+  <address>`, address offers and moves, rejected handshakes (a wrong key, a
+  reserved address) and, for a page without nginx, wrong passwords; nginx's
+  `error.log` shows connection failures to a camera.
 
-## Sync script
+## Moving to web_listen
+
+A server set up with the map and `camex-nginx-sync` (camex 5.1.0 and before)
+keeps working after an update: `install.sh` leaves such a setup as it is and
+says so. To move it over:
+
+1. Add `web_listen=yes` to `[server]` of `/etc/camex/camex.conf` (and
+   `device_port=<port>` if the sync service had `UPSTREAM_PORT=` other than
+   80), then `sudo systemctl reload camex`; `curl -si -H 'X-Camex-Host:
+   <a camera>.<domain>' http://127.0.0.1:5801/resolve` answers 204.
+2. Replace `/etc/nginx/conf.d/camex-nginx.conf` with
+   `examples/nginx-camex.conf` (your domain in it, your `listen` and TLS lines
+   carried over), then `sudo nginx -t && sudo systemctl reload nginx`.
+3. Stop the sync service: `sudo systemctl disable --now camex-nginx-sync`.
+4. Remove what is no longer used:
+
+   ```
+   /usr/local/bin/camex-nginx-sync
+   /etc/systemd/system/camex-nginx-sync.service    (then systemctl daemon-reload)
+   /etc/nginx/camex-map.conf
+   /etc/nginx/camex-map.conf.applied
+   /etc/nginx/camex-map.conf.lock
+   /etc/nginx/camex-map.conf.warnings
+   /etc/nginx/camex-map.conf.warnings-index
+   /var/lib/camex-nginx/
+   ```
+
+   The start page's password (`/etc/camex/nginx-password`,
+   `/etc/nginx/camex.htpasswd`) stays: the new server blocks use it.
+
+## Sync script (deprecated)
+
+Before camex 5.2.0 nginx followed the server through a map file that this
+script kept current. camex now does that itself (`web_listen=`, see
+[nginx](#nginx)); the script and `--format nginx-map` / `nginx-index` stay
+until camex 6.0.0 for the servers that still use them, and `install.sh` keeps
+such a setup as it is. To leave it: [Moving to web_listen](#moving-to-web_listen).
+
 
 `examples/camex-nginx-sync.sh`, installed as `/usr/local/bin/camex-nginx-sync`
 (POSIX sh). It writes `camex --status --format nginx-map` to the map when it
@@ -467,65 +536,28 @@ Settings (environment; `camex-nginx-sync.service` sets `MAP` and `INDEX`, and
 
 ## Reference
 
-nginx on the server's host can open the web UI of every client by name,
-`http://<client ID>.openipc.click/` → `http://<its tunnel address>:80/`, with
-no list of addresses to keep: `camex --status --format nginx-map` prints an nginx
-`map` of the live clients, and `examples/camex-nginx-sync.sh` writes it to the
-file nginx includes and reloads nginx when it changed.
-
-```sh
-sudo camex --status --format nginx-map --domain openipc.click
-```
-
-```
-# camex --status --format nginx-map: generated, do not edit
-# domain: openipc.click
-map $host $camex_upstream {
-    "cam-a.openipc.click" 10.200.0.2:80;
-    "cam-b.openipc.click" 10.200.0.3:80;
-}
-```
-
-- The host is the client ID in lower case plus the domain: `--domain`, or
-  without it `domain=` of the server (the `# domain:` line names it); an ID that is not a
-  valid host name label (letters, digits and `-`, up to 63) is left out with a
-  warning. `--upstream-port` sets the clients' web port (80); a client with
-  its own web port (`web_port=` in its `[client ID]` block or `[defaults]`,
-  or the port it announced with `--web-port`, #174) gets that one, `--default
-  <ip:port>` a target for names with no live client. The output is sorted, so
-  an unchanged state gives an identical file; when a running server does not
-  answer, nothing is printed and the exit code is 1, and the sync script keeps
-  the old map (a socket left behind by a server that is gone is skipped).
-- `examples/nginx-camex.conf` is the server block: `proxy_pass` to the map's
-  target, WebSocket, no buffering, no limit on the upload size (a firmware image
-  through a device's web UI; nginx's default is 1 MB), a short connect timeout
-  and the page "Device not reachable" for names with no live client or no web
-  page on the port. `examples/camex-nginx-sync.sh` (POSIX sh) runs
-  once, with `--loop <seconds>`, or with `--follow`, as `camex-nginx-sync.service`
-  runs it: at every change (see [Sync script](#sync-script)). Addresses are
-  stable (#81), so the map changes only when clients come and go.
+- `web_listen=yes` in `[server]` (#203): camex listens on `127.0.0.1:5801`
+  for nginx's lookup (`/resolve`) and serves the start page (`/`) and
+  `/status.json`; [Settings](#settings) has the keys, [Without nginx](#without-nginx)
+  the page on a LAN with a password of its own.
+- `examples/nginx-camex.conf`: the server blocks. `auth_request` asks camex
+  where a name goes, `proxy_pass` goes there straight, with WebSocket, no
+  buffering, no limit on the upload size (a firmware image through a device's
+  web UI; nginx's default is 1 MB), a short connect timeout and the page
+  "Device not reachable" for names with no live client or no web page on the
+  port; the bare domain proxies to camex's start page behind `auth_basic`.
 - **One domain, given once** (#106): `domain=openipc.click` in `[server]` of
-  the server's file; the map, the start page and the sync script take it from
-  the running server. `install.sh --domain openipc.click` (see
-  [install.md](install.md)) sets it there and installs the
-  nginx server blocks, the sync script and its service with the same
-  domain; `camex-nginx-sync --check` checks the whole setup (servers, domain,
-  nginx, start page, DNS).
-- Settings of the script: see [Sync script](#sync-script).
-- **Start page** (#105, #110): `camex --status --format nginx-index --domain
-  openipc.click` prints a static HTML page of the clients in two tabs:
-  **Configured**, every `[client ID]` block of the server's file with the
-  offline ones in red, and **Auto**, the connected clients from the auto pool.
-  Each row has the name linked to `//<client ID>.openipc.click/`, the ID and
-  address, the **Peer** (the external IP it connects from, linked to
-  `http://<IP>:<peer_port>/` in a new tab; `peer_port=` in `[defaults]` or its
-  `[client ID]` block, 8080 by default, `none` for plain text; #119), how long
-  it has been connected, its last packet, its last handshake
-  and their number, and RX / TX in KiB. The name is `name=` in the client's
-  `[client ID]` block on the server (UTF-8, up to 64 bytes), or the ID without
-  one; `--status` and `--json` show it too. With `INDEX=` the sync
-  script writes the page at every run, and the second server block of
-  `examples/nginx-camex.conf` serves it on the bare domain
-  (`http://openipc.click/`) behind a password (user `camex`):
-  `install.sh` generates it, keeps it in `/etc/camex/nginx-password` and
-  prints it (a new one: remove that file and run it again), and `--check` warns when the page has none (#119).
+  the server's file. `install.sh --domain openipc.click` (see
+  [install.md](install.md)) sets it there with `web_listen=yes` and installs
+  the nginx server blocks with the same domain.
+- **Start page** (#105, #110, #203): two tabs, **Configured** (every
+  `[client ID]` block of the server's file, the offline ones in red) and
+  **Auto** (the connected clients from the auto pool); each row has the name
+  linked to `//<client ID>.openipc.click/`, the ID and address, the **Peer**
+  (the external IP it connects from, linked to `http://<IP>:<peer_port>/`;
+  `peer_port=`, 8080 by default, `none` for plain text; #119), how long it has
+  been connected, its last packet, its last handshake and their number, and
+  RX / TX in KiB.
+- Until camex 6.0.0 also: `camex --status --format nginx-map` / `nginx-index`
+  and `examples/camex-nginx-sync.sh` with `examples/nginx-camex-map.conf`
+  (see [Sync script](#sync-script-deprecated)).

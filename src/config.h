@@ -40,6 +40,9 @@ typedef struct {
     uint8_t mac[6];  /* and the client's MAC there */
 } camex_profile_t;
 
+/* web_listen = yes (#203): the start page and /resolve on 127.0.0.1 */
+#define CAMEX_WEB_PORT_DEFAULT 5801
+
 /* The port of the start page's peer link without peer_port= (#119) */
 #define CAMEX_PEER_PORT_DEFAULT 8080
 
@@ -62,6 +65,11 @@ typedef struct {
     char pid_file[256];
     char control_socket[108];      /* control_socket= (#82) */
     char domain[254];              /* domain= (#106): for nginx-map/-index */
+    char web_listen[64];           /* web_listen= (#203): "" = no page */
+    char web_password[128];        /* web_password= (#203): argon2id$..., "none" */
+    uint8_t web_scope_self;        /* web_scope = self: only its own clients */
+    int device_port;               /* device_port=: a device's web port
+                                    * when it gives none, 0 = 80 */
     char psk[128];   /* hex: + 64 digits fits; passphrases too */
     int  port;
     int  mtu;

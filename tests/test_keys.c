@@ -142,6 +142,30 @@ int main(void)
         fprintf(stderr, "test_keys: %d failure(s)\n", failures);
         return 1;
     }
+    /* The start page's password (#203) */
+    {
+        char h1[128], h2[128];
+
+        check(key_password_hash("pw one", h1, sizeof(h1)) == 0 &&
+                  strncmp(h1, "argon2id$", 9) == 0,
+              "password hash: argon2id$...");
+        check(key_password_hash("pw one", h2, sizeof(h2)) == 0 &&
+                  strcmp(h1, h2) != 0,
+              "password hash: a salt of its own each time");
+        check(key_password_check("pw one", h1) && key_password_check("pw one", h2),
+              "password check: the right one");
+        check(!key_password_check("pw two", h1) && !key_password_check("", h1),
+              "password check: a wrong one, an empty one");
+        check(!key_password_check("pw one", "argon2id$x$y") &&
+                  !key_password_check("pw one", "none") &&
+                  !key_password_check("pw one", "argon2id$") &&
+                  !key_password_check(NULL, h1),
+              "password check: a broken hash matches nothing");
+        check(key_password_hash("", h1, sizeof(h1)) != 0 &&
+                  key_password_hash("x", h1, 10U) != 0,
+              "password hash: no password, no room: refused");
+    }
+
     printf("test_keys: OK\n");
     return 0;
 }

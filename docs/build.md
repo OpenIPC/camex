@@ -26,30 +26,34 @@ profile, so an integration builds exactly what it needs:
 ```sh
 make PROFILE=client CAMEX_L2=0 CAMEX_MESH=0   # the smallest client: TUN only
 make CAMEX_MESH=0                             # a server without mesh
+make CAMEX_WEB=0                              # a server without the start page
 ```
 
-| Profile              | `CAMEX_SERVER` | `CAMEX_L2` | `CAMEX_MESH` | For                                                      |
-|----------------------|----------------|------------|--------------|----------------------------------------------------------|
-| `full` (the default) | 1              | 1          | 1            | servers, and anyone who wants everything: `camex-<arch>` |
-| `client`             | 0              | 1          | 1            | cameras, routers, Android: `camex-<arch>-client`         |
+| Profile              | `CAMEX_SERVER` | `CAMEX_WEB` | `CAMEX_L2` | `CAMEX_MESH` | For                                                      |
+|----------------------|----------------|-------------|------------|--------------|----------------------------------------------------------|
+| `full` (the default) | 1              | 1           | 1          | 1            | servers, and anyone who wants everything: `camex-<arch>` |
+| `client`             | 0              | 0           | 1          | 1            | cameras, routers, Android: `camex-<arch>-client`         |
 
 `PROFILE=server` is the same as `full`. On Windows and macOS a profile leaves
-`CAMEX_L2` out: TAP networks and `--bridge` are Linux only.
+`CAMEX_L2` out: TAP networks and `--bridge` are Linux only; on Windows also
+`CAMEX_WEB`, which needs the control sockets.
 
-| Flag             | Default (`full`) | What it adds                                                                                                                  |
-|------------------|------------------|-------------------------------------------------------------------------------------------------------------------------------|
-| `CAMEX_SERVER=1` | 1                | the server (`--mode server`), its control socket answers for `--status` and `--top`, `--format nginx-map` and `nginx-index`   |
-| `CAMEX_L2=1`     | 1 (Linux)        | TAP networks (`mode = tap`) and bridging a LAN (`--bridge`), Linux ([networks.md](networks.md#tap-networks-mode--tap))        |
-| `CAMEX_MESH=1`   | 1                | mesh networks (`mesh = yes`): peers direct through NATs, relay otherwise ([networks.md](networks.md#mesh-networks-mesh--yes)) |
-| `CAMEX_NEON=0`   | 1 (32-bit ARM)   | leaves out ChaCha20 and Poly1305 with NEON (below)                                                                            |
+| Flag             | Default (`full`) | What it adds                                                                                                                     |
+|------------------|------------------|----------------------------------------------------------------------------------------------------------------------------------|
+| `CAMEX_SERVER=1` | 1                | the server (`--mode server`), its control socket answers for `--status` and `--top`, `--format nginx-map` and `nginx-index`      |
+| `CAMEX_WEB=1`    | 1                | the start page and nginx's lookup of the server (`web_listen=`, [nginx.md](nginx.md)), `--hash-password`; needs `CAMEX_SERVER=1` |
+| `CAMEX_L2=1`     | 1 (Linux)        | TAP networks (`mode = tap`) and bridging a LAN (`--bridge`), Linux ([networks.md](networks.md#tap-networks-mode--tap))           |
+| `CAMEX_MESH=1`   | 1                | mesh networks (`mesh = yes`): peers direct through NATs, relay otherwise ([networks.md](networks.md#mesh-networks-mesh--yes))    |
+| `CAMEX_NEON=0`   | 1 (32-bit ARM)   | leaves out ChaCha20 and Poly1305 with NEON (below)                                                                               |
 
 A camex built without a part refuses it and says why: without the server,
 `--mode server` and `--format nginx-map` / `nginx-index` end with an error, and
-`--help` shows no server options. `camex --version` names what the build has:
+`--help` shows no server options; without the web part, `web_listen=` is
+ignored with a warning. `camex --version` names what the build has:
 
 ```
-camex 5.1.0
-features: client, l2, mesh
+camex 5.2.0
+features: client, server, web, l2, mesh
 ```
 
 A build directory remembers the flags its objects were built with: another
@@ -116,12 +120,13 @@ make distclean      # clean everything
 
 ## Binary sizes
 
-Static ARM build (OpenIPC arm musleabi) of camex 5.1.0:
+Static ARM build (OpenIPC arm musleabi) of camex 5.2.0:
 
 | Build                               | Size    |
 |-------------------------------------|---------|
-| `full` (`camex-arm`)                | ~360 KB |
-| `full`, `CAMEX_L2=0 CAMEX_MESH=0`   | ~330 KB |
+| `full` (`camex-arm`)                | ~375 KB |
+| `full`, `CAMEX_WEB=0`               | ~360 KB |
+| `full`, `CAMEX_L2=0 CAMEX_MESH=0`   | ~345 KB |
 | `client` (`camex-arm-client`)       | ~270 KB |
 | `client`, `CAMEX_L2=0 CAMEX_MESH=0` | ~250 KB |
 
