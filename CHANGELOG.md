@@ -6,7 +6,7 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
-## 5.1.0 — unreleased
+## 5.1.0 — 2026-11-22
 
 Build profiles ([#204](https://github.com/OpenIPC/camex/issues/204),
 [docs](docs/build.md#profiles-and-flags)). Nothing changes for a camex that runs today.
