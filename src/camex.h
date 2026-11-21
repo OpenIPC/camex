@@ -32,9 +32,14 @@
 #define CAMEX_CLIENT_ID_LEN 32
 #define CAMEX_CONFIG_PATH_LEN 256
 #define CAMEX_DEFAULT_CONFIG_PATH "/etc/camex/camex.conf"
-/* 1420: a tunnel packet (MTU + 57 bytes of IPv4, UDP and camex) fits a
- * 1500-byte link and PPPoE's 1492 whole, never two IP fragments */
+/* Over UDP 1420: a tunnel packet (MTU + 57 bytes of IPv4, UDP and camex)
+ * fits a 1500-byte link and PPPoE's 1492 whole, never two IP fragments.
+ * Over TCP 1500: the outer TCP cuts the stream to the path's MSS, so a big
+ * inner packet makes no fragments there and a smaller one only costs
+ * (#198). The default when no MTU is set: --mtu, mtu= in [server], or the
+ * server's CONFIG */
 #define CAMEX_DEFAULT_MTU 1420
+#define CAMEX_TCP_MTU 1500
 /* A TAP device carries the frames of a 1500-byte LAN (camex cuts them into
  * pieces of its own, l2.h): it keeps 1500 unless an MTU is set */
 #define CAMEX_L2_MTU 1500
@@ -78,6 +83,7 @@ typedef struct {
                                 * (pake.h) */
     uint8_t pinned;            /* client: --server-pubkey: the server's key
                                 * is known, no trust on first use */
+    uint8_t mtu_given;         /* --mtu: no default by the transport (#198) */
     uint8_t pake_ok;           /* this connection's CPace succeeded */
     uint8_t send_net_name;     /* the server asked for the network's name
                                 * (PAKE_FLAG_NAME) and its key is pinned */

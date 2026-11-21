@@ -262,6 +262,7 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
                 log_message(LOG_ERR, "Invalid MTU: %s", optarg);
                 return -1;
             }
+            config->mtu_given = 1U;
             break;
         case 'k':
             if (copy_option(config->psk, sizeof(config->psk),
@@ -566,16 +567,20 @@ int validate_config(camex_config_t *config)
         return -1;
     }
 
-    if (config->mtu < 576 || config->mtu > 9000) {
-        log_message(LOG_ERR, "MTU must be in the range 576..9000");
-        return -1;
-    }
-
     /* A server listens on UDP and TCP unless told one; a client uses UDP
      * unless told TCP, and never both (#178) */
     if (config->transport == CAMEX_TRANSPORT_UNSET) {
         config->transport = config->mode == CAMEX_MODE_SERVER
                                 ? CAMEX_TRANSPORT_BOTH : CAMEX_TRANSPORT_UDP;
+    }
+    /* No MTU given: 1500 over TCP alone, 1420 when UDP carries it (#198) */
+    if (!config->mtu_given) {
+        config->mtu = config->transport == CAMEX_TRANSPORT_TCP
+                          ? CAMEX_TCP_MTU : CAMEX_DEFAULT_MTU;
+    }
+    if (config->mtu < 576 || config->mtu > 9000) {
+        log_message(LOG_ERR, "MTU must be in the range 576..9000");
+        return -1;
     }
     if (config->transport == CAMEX_TRANSPORT_BOTH &&
         config->mode != CAMEX_MODE_SERVER) {
@@ -832,7 +837,9 @@ void print_usage(const char *progname)
     printf("      --wait-timeout <s>  The longest wait (default 60)\n\n");
 
     printf("Common options:\n");
-    printf("  -t, --mtu <size>     Tunnel MTU, 576-9000 (default: 1420; TAP: 1500)\n");
+    printf("  -t, --mtu <size>     Tunnel MTU, 576-9000 (default: 1420 over UDP,"
+           " 1500 over TCP;\n"
+           "                       TAP: 1500)\n");
     printf("  -k, --psk <key>      Pre-shared key: hex:<64 hex digits>,"
            " base64:<32 bytes>,\n"
            "                       or a passphrase (stretched with Argon2id)\n");

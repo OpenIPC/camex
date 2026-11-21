@@ -8,10 +8,9 @@ release, rebuilt from every push to `master`; this file is the change history.
 
 ## 5.0.0 — 2026-11-20
 
-A major version: the default tunnel MTU is 1420 (was 1500), and a server gives its MTU to its
-clients (see the MTU item below; whether it stays the global default is
-[#198](https://github.com/OpenIPC/camex/issues/198)). Everything else is compatible: a 4.x client
-or server works with a 5.0.0 one as before.
+A major version: the default tunnel MTU over UDP is 1420 (was 1500; over TCP it stays 1500,
+[#198](https://github.com/OpenIPC/camex/issues/198)), see the MTU item below. Everything else is
+compatible: a 4.x client or server works with a 5.0.0 one as before.
 
 - `deploy/compose.yaml`: the server in Docker (Alpine, host networking) with the static binary
   of the latest release; the
@@ -71,12 +70,13 @@ or server works with a 5.0.0 one as before.
   through a direct mesh with `tun.ko`: 35/33 Mbit/s without offloads, 60/52 with them (the
   plain network: 94/90); stock firmware has no `tun.ko`, so this is for `camex.ko`.
   `tests/kmod/run-vm.sh` moves 4 MB each way through `camex.ko` and checks the bytes.
-- The default tunnel MTU is 1420 (was 1500): a tunnel packet, the MTU plus 57 bytes of IPv4, UDP
-  and camex, now fits a 1500-byte link and PPPoE's 1492 whole. With 1500 every full packet went
-  as two IP fragments: on a Cortex-A7 camera ~7 points more CPU at 25 Mbit/s and slower TCP
-  (13.7 against 17.2 Mbit/s down at MTU 1300). TAP devices keep 1500 (their frames are cut by
-  camex itself). An `mtu` set on either side (`--mtu`, `mtu=` in `[server]` or a client's section)
-  still wins.
+- The default tunnel MTU over UDP is 1420 (was 1500): a tunnel packet, the MTU plus 57 bytes of
+  IPv4, UDP and camex, now fits a 1500-byte link and PPPoE's 1492 whole. With 1500 every full
+  packet went as two IP fragments: on a Cortex-A7 camera ~7 points more CPU at 25 Mbit/s and
+  slower TCP (13.7 against 17.2 Mbit/s down at MTU 1300). Over TCP alone (`--transport tcp`) it
+  stays 1500: the outer TCP cuts the stream to the path's MSS, no fragments there (#198). A server
+  on both transports takes 1420. TAP devices keep 1500 (their frames are cut by camex itself). An
+  `mtu` set on either side (`--mtu`, `mtu=` in `[server]` or a client's section) still wins.
 - TUN offloads on Linux (`offload.c`): a TUN device camex makes through `/dev/net/tun` takes
   `IFF_VNET_HDR` with TSO and checksum offload; camex cuts the kernel's TCP of up to 64 KB into
   packets of the MTU, completes checksums left to it, and writes the TCP packets of one connection

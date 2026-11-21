@@ -745,7 +745,7 @@ int camex_init(camex_config_t *config)
                 snprintf(current_config.psk, sizeof(current_config.psk),
                          "%s", g->psk);
             }
-            if (current_config.mtu == CAMEX_DEFAULT_MTU && g->mtu > 0) {
+            if (!current_config.mtu_given && g->mtu > 0) {
                 current_config.mtu = g->mtu;
             }
         }
