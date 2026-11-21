@@ -666,6 +666,13 @@ static ssize_t camex_chr_read(struct file *filp, char __user *buf,
         dev_kfree_skb(skb);
         return -EMSGSIZE;
     }
+    /* A packet queued while the offloads were on (CAMEX_IOC_VNET turned
+     * off since) may be in pages: copy_to_user() of skb->data would read
+     * past its linear part */
+    if (skb_linearize(skb)) {
+        dev_kfree_skb(skb);
+        return -ENOMEM;
+    }
 
     ret = skb->len;
     if (copy_to_user(buf, skb->data, skb->len))

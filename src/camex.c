@@ -747,6 +747,7 @@ int camex_init(camex_config_t *config)
             }
             if (!current_config.mtu_given && g->mtu > 0) {
                 current_config.mtu = g->mtu;
+                current_config.mtu_given = 1U;
             }
         }
 
@@ -971,6 +972,7 @@ int camex_init(camex_config_t *config)
             open_params.local_ip = local_ip;
             open_params.netmask = local_netmask;
             open_params.mtu = current_config.mtu;
+            open_params.mtu_given = current_config.mtu_given;
             open_params.routes =
                 (const char (*)[32])current_config.route_cidrs;
             open_params.route_count = current_config.route_count;
@@ -1034,6 +1036,7 @@ int camex_init(camex_config_t *config)
             open_params.local_ip = local_ip;
             open_params.netmask = local_netmask;
             open_params.mtu = current_config.mtu;
+            open_params.mtu_given = current_config.mtu_given;
             open_params.device = current_config.tun_dev;
             if (packet_open(&open_params) != 0) {
                 net_close();
@@ -2071,6 +2074,7 @@ static int client_open_tunnel(const camex_config_t *cfg)
     open_params.local_ip = local_ip;
     open_params.netmask = local_netmask;
     open_params.mtu = cfg->mtu;
+    open_params.mtu_given = cfg->mtu_given;
     open_params.routes = (const char (*)[32])cfg->route_cidrs;
     open_params.route_count = cfg->route_count;
     open_params.device = cfg->tun_dev;
@@ -2190,6 +2194,7 @@ int camex_client_reconfigure(const camex_config_t *next)
     snprintf(current_config.gateway_ip, sizeof(current_config.gateway_ip),
              "%s", next->gateway_ip);
     current_config.mtu = next->mtu;
+    current_config.mtu_given = next->mtu_given;
     current_config.route_count = next->route_count;
     memcpy(current_config.route_cidrs, next->route_cidrs,
            sizeof(current_config.route_cidrs));

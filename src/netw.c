@@ -384,6 +384,17 @@ static int derive_pool(camex_network_t *t, size_t s, uint32_t supernet,
     return -1;
 }
 
+/* The slots' generations (camex_network_t.gen): never 0, never reused */
+static uint32_t netw_gen_last = 0U;
+
+static uint32_t netw_gen_next(void)
+{
+    if (++netw_gen_last == 0U) {
+        netw_gen_last = 1U;
+    }
+    return netw_gen_last;
+}
+
 int netw_sync(const camex_net_conf_t *conf, size_t count, int allow_new,
               uint32_t supernet, uint8_t super_prefix, uint8_t pool_prefix,
               const uint32_t *reserved, size_t reserved_count)
@@ -415,6 +426,7 @@ int netw_sync(const camex_net_conf_t *conf, size_t count, int allow_new,
         int s = -1;
         uint8_t alias_up;
         uint32_t alias_ip;
+        uint8_t alias_prefix;
 
         /* Its slot: one this sync gave it already (listed twice), a kept
          * network with its ID, its old slot, else a free one (never used
@@ -457,10 +469,20 @@ int netw_sync(const camex_net_conf_t *conf, size_t count, int allow_new,
              * old gateway address off the tunnel */
             alias_up = next[s].alias_up;
             alias_ip = next[s].alias_ip;
+            alias_prefix = next[s].alias_prefix;
             memset(&next[s], 0, sizeof(next[s]));
             next[s].alias_up = alias_up;
             next[s].alias_ip = alias_ip;
+            next[s].alias_prefix = alias_prefix;
             memcpy(next[s].id, conf[j].id, CAMEX_NET_ID_LEN);
+        }
+        /* Another network in the slot, or one that was not active, or its
+         * mode changed: its old sessions do not carry over (server.c) */
+        if (next[s].gen == 0U || !netw_table[s].active ||
+            memcmp(netw_table[s].id, conf[j].id, CAMEX_NET_ID_LEN) != 0 ||
+            netw_table[s].tap != conf[j].tap ||
+            netw_table[s].noaddr != conf[j].noaddr) {
+            next[s].gen = netw_gen_next();
         }
         next[s].active = 1U;
         next[s].listed = 1U;
@@ -574,6 +596,7 @@ int netw_create(const uint8_t id[CAMEX_NET_ID_LEN])
     netw_default_label(id, netw_table[s].label, sizeof(netw_table[s].label));
     netw_table[s].isolation = -1;
     netw_table[s].created = time(NULL);
+    netw_table[s].gen = netw_gen_next();
     netw_table[s].active = 1U;
     if (derive_pool(netw_table, (size_t)s, sync_supernet, sync_super_prefix,
                     sync_pool_prefix, sync_reserved,

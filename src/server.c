@@ -1519,6 +1519,7 @@ void server_revalidate_keys(void)
          * be there, and its ID must not have a key of its own now */
         if (server_is_net_key(c->psk_key) || c->pake) {
             if (c->net1 != 0U && netw_table[c->net1 - 1U].active &&
+                c->net_gen == netw_table[c->net1 - 1U].gen &&
                 c->client_id[0] != '\0' &&
                 !keystore_has_owner(c->client_id)) {
                 continue;
@@ -2387,6 +2388,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     uint8_t has_net = 0U;
     int net = -1;
     uint16_t net1_before = 0U;
+    uint32_t net_gen_before = 0U;
     uint8_t mesh_req = 0U;
     int via_pake = 0;
     uint8_t pake_before = 0U;
@@ -2696,8 +2698,10 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     first = !entry->registered;   /* also restored by a failure */
     memcpy(psk_before, entry->psk_key, sizeof(psk_before));
     net1_before = entry->net1;
+    net_gen_before = entry->net_gen;
     pake_before = entry->pake;
     entry->net1 = has_net ? (uint16_t)(net + 1) : 0U;
+    entry->net_gen = has_net ? netw_table[net].gen : 0U;
     entry->mesh = mesh_req;
     entry->pake = via_pake ? 1U : 0U;
     pending_before = entry->pending_ip_be;
@@ -2908,6 +2912,7 @@ fail:
          * the session it set up: the entry keeps what it had (#77) */
         server_restore_ip(entry, ip_before, pending_before);
         entry->net1 = net1_before;
+        entry->net_gen = net_gen_before;
         entry->pake = pake_before;
         if (next_saved) {
             session_wipe(&entry->next);
@@ -5137,7 +5142,10 @@ void server_networks_apply(void)
         camex_network_t *t = &netw_table[i];
         uint32_t gw = t->active ? t->pool_net + 1U : 0U;
 
-        if (t->alias_up && (!t->active || t->alias_ip != gw)) {
+        /* Gone, another gateway, another pool size, or no addresses any
+         * more: the old alias comes off the tunnel */
+        if (t->alias_up && (!t->active || t->noaddr || t->alias_ip != gw ||
+                            t->alias_prefix != t->pool_prefix)) {
             tun_alias_clear((unsigned int)i);
             t->alias_up = 0U;
             t->alias_ip = 0U;
@@ -5148,6 +5156,7 @@ void server_networks_apply(void)
 
                 t->alias_up = 1U;
                 t->alias_ip = gw;
+                t->alias_prefix = t->pool_prefix;
                 netw_pool_text((int)i, pool, sizeof(pool));
                 log_message(LOG_INFO, "Network %s: pool %s", t->label, pool);
             }
@@ -5162,7 +5171,20 @@ void server_networks_apply(void)
             continue;
         }
         n = (int)c->net1 - 1;
-        if (netw_table[n].active &&
+        /* Client isolation turned on: a direct mesh path set up before it
+         * would go on carrying their packets past the server; the client
+         * comes back and gets no peer keys any more */
+        if (netw_table[n].active && c->mesh && net_isolation(n) &&
+            !netw_table[n].iso_applied) {
+            log_message(LOG_NOTICE, "Ended session of client %s: client "
+                        "isolation is on in its network now", c->client_id);
+            /* The same network: it keeps its address when it comes back */
+            server_end_client(c);
+            continue;
+        }
+        /* The same network, in the same mode: not one that took its slot
+         * on this reload (netw.c, gen) */
+        if (netw_table[n].active && c->net_gen == netw_table[n].gen &&
             (c->ip_be == 0U || netw_has(n, c->ip_be)) &&
             (c->pending_ip_be == 0U || netw_has(n, c->pending_ip_be))) {
             continue;
@@ -5170,6 +5192,10 @@ void server_networks_apply(void)
         log_message(LOG_NOTICE, "Ended session of client %s: its network "
                     "changed", c->client_id);
         server_drop_entry(c);
+    }
+    for (i = 0U; i < CAMEX_NET_MAX; ++i) {
+        netw_table[i].iso_applied = netw_table[i].active &&
+                                    net_isolation((int)i) ? 1U : 0U;
     }
 }
 

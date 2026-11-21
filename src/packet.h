@@ -23,6 +23,8 @@ typedef struct {
     const char *device;       /* device path override, or "" */
     uint8_t use_provider;     /* try the host application's TUN provider */
     uint8_t l2;               /* a TAP device (Ethernet frames) */
+    uint8_t mtu_given;        /* mtu was set (--mtu, mtu=, the server's
+                               * CONFIG): a TAP device keeps it */
     const uint8_t *mac;       /* its MAC, with l2 */
 } camex_packet_open_t;
 
