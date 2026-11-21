@@ -998,6 +998,7 @@ int control_top(const char *path, int interval)
     return rc;
 }
 
+#ifndef CAMEX_NO_SERVER   /* the map and the page only (#204) */
 /* text to stdout, whole: 0, or 1 with a message (a full disk, say), so a
  * script never takes a cut-off map or page for a good one */
 static int control_put(const char *text, const char *what)
@@ -1197,9 +1198,29 @@ static int control_domain(const char *path, const char *given, char *out,
     return 0;
 }
 
+#endif /* !CAMEX_NO_SERVER */
+
+#ifdef CAMEX_NO_SERVER
+/* A client-only camex (#204): the map and the page are a server's host's */
+static int control_no_server(const char *what)
+{
+    fprintf(stderr, "camex: --format %s is for a server's host; this camex "
+            "is built without the server (CAMEX_SERVER=0, docs/build.md)\n",
+            what);
+    return 1;
+}
+#endif
+
 int control_nginx_map(const char *path, const char *domain, int port,
                       const char *dflt)
 {
+#ifdef CAMEX_NO_SERVER
+    (void)path;
+    (void)domain;
+    (void)port;
+    (void)dflt;
+    return control_no_server("nginx-map");
+#else
     char *all = NULL, *map;
     size_t count = 0U;
     int rc;
@@ -1220,10 +1241,17 @@ int control_nginx_map(const char *path, const char *domain, int port,
     rc = control_put(map, "map");
     free(map);
     return rc;
+#endif
 }
 
 int control_nginx_index(const char *path, const char *domain, int http_port)
 {
+#ifdef CAMEX_NO_SERVER
+    (void)path;
+    (void)domain;
+    (void)http_port;
+    return control_no_server("nginx-index");
+#else
     char *all = NULL, *page;
     size_t count = 0U;
     int rc;
@@ -1247,6 +1275,7 @@ int control_nginx_index(const char *path, const char *domain, int http_port)
     rc = control_put(page, "start page");
     free(page);
     return rc;
+#endif
 }
 
 /* One server of camex --status --wait */

@@ -20,7 +20,8 @@
 #
 # Usage: ./test-e2e-bridge.sh
 #   CAMEX_BINARY=path/to/camex           any camex for the keys (default ../camex)
-#   CAMEX_FULL_BINARY=path/to/camex-full the full one (default: built here)
+#   CAMEX_FULL_BINARY=path/to/camex-full the full one (default: CAMEX_BINARY
+#                                        when it has l2 and mesh, else built here)
 #   KEEP=1                               keep containers for debugging
 #
 
@@ -51,6 +52,11 @@ check() {   # check <condition-exit-code> <message>
 }
 
 [ -x "$CAMEX_BINARY" ] || { echo "camex binary not found: $CAMEX_BINARY"; exit 1; }
+# Since #204 the default build is the full one: --version says what it has
+if [ -z "$CAMEX_FULL_BINARY" ] &&
+   "$CAMEX_BINARY" --version 2>/dev/null | grep -q '^features:.* l2.* mesh'; then
+    CAMEX_FULL_BINARY=$CAMEX_BINARY
+fi
 if [ -z "$CAMEX_FULL_BINARY" ]; then
     make -s -C "$REPO_DIR/src" CAMEX_L2=1 CAMEX_MESH=1 \
         BUILD_DIR="$BUILD_CTX/full" >/dev/null || { echo "cannot build the full camex"; exit 1; }

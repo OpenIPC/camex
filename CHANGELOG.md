@@ -6,6 +6,27 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 5.1.0 — unreleased
+
+Build profiles ([#204](https://github.com/OpenIPC/camex/issues/204),
+[docs](docs/build.md#profiles-and-flags)). Nothing changes for a camex that runs today.
+
+- `make PROFILE=client` builds a client without the server (`CAMEX_SERVER=0`): `--mode server`
+  and `--format nginx-map` / `nginx-index` end with an error that says why, `--help` shows no
+  server options. TAP networks and mesh stay in. `make` alone is `PROFILE=full` (`server` is the
+  same): everything, now with TAP networks, `--bridge` and mesh; on Windows and macOS without TAP.
+  A flag given on its own wins over its profile (`PROFILE=client CAMEX_L2=0 CAMEX_MESH=0`).
+- `camex --version` has a second line, `features: client, server, l2, mesh`: what the build has.
+- The release: `camex-<arch>` is the full camex; `camex-<arch>-full` stays as the same file until
+  6.0.0; new `camex-arm-client` and `camex-mipsel-client` for cameras and routers.
+- The Android library is the client profile (no server, no TAP, no mesh yet): a smaller
+  `libcamex.so` for the apps.
+- Smaller binaries: the state of mesh and of the LAN bridge no longer sits in the file as
+  initialised data (37 KB and 8 KB on x86_64). On ARM the full camex is ~360 KB, the client ~270 KB.
+- A build directory remembers its flags: another profile or flag in the same `BUILD_DIR` rebuilds
+  every object instead of mixing the two.
+- Tests: `docker/test-e2e-client-profile.sh` (the client profile against a full server, UDP and TCP);
+  `test-e2e-tap.sh` builds its camex without L2 itself.
 ## 5.0.1 — 2026-11-22
 
 Fixes from the review of 5.0.0 ([#202](https://github.com/OpenIPC/camex/pull/202)).

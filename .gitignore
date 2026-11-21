@@ -9,6 +9,8 @@ build/
 src/camex
 *.o
 *.d
+# The flags a build directory was built with (src/Makefile, #204)
+.flags
 tests/test_net_tcp
 tests/test_proto
 tests/test_packet

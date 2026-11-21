@@ -68,6 +68,7 @@ typedef struct {
 } bridge_remote_t;
 
 static struct {
+    int ready;               /* the fields below set up (bridge_open) */
     int open;
     int pkt;                 /* AF_PACKET socket */
     int raw;                 /* AF_INET raw socket: packets to the host */
@@ -92,7 +93,7 @@ static struct {
     uint8_t warned_big;
     uint8_t warned_forward;
     bridge_remote_t remotes[BRIDGE_REMOTES];
-} br = { .pkt = -1, .raw = -1, .nl = -1 };
+} br;   /* all zero (bss, #204): its sockets mean something once ready */
 
 static const uint8_t mac_bcast[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
@@ -790,6 +791,7 @@ int bridge_open(const char *ifname, bridge_mode_t mode,
     bridge_close();
     memset(&br, 0, sizeof(br));
     br.pkt = br.raw = br.nl = -1;
+    br.ready = 1;
     snprintf(br.ifname, sizeof(br.ifname), "%s", ifname);
     snprintf(br.client_id, sizeof(br.client_id), "%s", client_id);
     memcpy(br.probe_tag, net_id, 8);
@@ -1024,6 +1026,9 @@ void bridge_close(void)
 {
     size_t i;
 
+    if (!br.ready) {
+        return;   /* never opened: its zeros are no sockets */
+    }
     for (i = 0U; i < BRIDGE_REMOTES; ++i) {
         if (br.remotes[i].used && br.remotes[i].neigh_ip_be != 0U &&
             br.ifindex != 0) {

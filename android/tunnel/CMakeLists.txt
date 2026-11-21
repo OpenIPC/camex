@@ -10,7 +10,8 @@ project(camex C)
 include(${CMAKE_CURRENT_SOURCE_DIR}/../camex-sources.cmake)
 
 add_library(camex SHARED src/main/cpp/camex-jni.c ${CAMEX_SRCS})
-target_compile_definitions(camex PRIVATE _GNU_SOURCE _POSIX_C_SOURCE=200809L)
+target_compile_definitions(camex PRIVATE _GNU_SOURCE _POSIX_C_SOURCE=200809L
+                           ${CAMEX_DEFINITIONS})
 target_include_directories(camex PRIVATE ${CAMEX_SRC_DIR})
 target_link_libraries(camex log)
 # 16 KB pages (Android 15 devices)

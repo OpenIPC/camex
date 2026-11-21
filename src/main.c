@@ -63,6 +63,18 @@ void sighup_handler(int sig)
 void print_version(void)
 {
     printf("camex %s\n", CAMEX_VERSION);
+    /* What this build has (#204, docs/build.md): its profile's flags */
+    printf("features: client"
+#ifndef CAMEX_NO_SERVER
+           ", server"
+#endif
+#ifdef CAMEX_L2
+           ", l2"
+#endif
+#ifdef CAMEX_MESH
+           ", mesh"
+#endif
+           "\n");
 }
 
 static int parse_mode(const char *value, camex_mode_t *mode)
@@ -567,6 +579,15 @@ int validate_config(camex_config_t *config)
         return -1;
     }
 
+#ifdef CAMEX_NO_SERVER
+    if (config->mode == CAMEX_MODE_SERVER) {
+        log_message(LOG_ERR, "This camex is built without the server "
+                    "(CAMEX_SERVER=0, PROFILE=client): it runs as a client "
+                    "only (docs/build.md)");
+        return -1;
+    }
+#endif
+
     /* A server listens on UDP and TCP unless told one; a client uses UDP
      * unless told TCP, and never both (#178) */
     if (config->transport == CAMEX_TRANSPORT_UNSET) {
@@ -789,6 +810,7 @@ void print_usage(const char *progname)
     printf("  -T, --tun-dev <path>   TUN device path"
            " (default: auto-detect)\n\n");
 
+#ifndef CAMEX_NO_SERVER
     printf("Server options:\n");
     printf("  -f, --config <path>  Server config file path"
            " (default: %s)\n", CAMEX_DEFAULT_CONFIG_PATH);
@@ -805,6 +827,8 @@ void print_usage(const char *progname)
            " (default: %s/camex-<udp|tcp>-<port>.sock;"
            " none = off)\n\n", CAMEX_CONTROL_DIR);
 
+#endif
+
     printf("Status of a running server (on its host):\n");
     printf("      --status         List the connected clients of every"
            " server on this host\n");
@@ -814,6 +838,7 @@ void print_usage(const char *progname)
     printf("      --interval <s>   With --top: seconds between updates"
            " (default 1)\n");
     printf("      --control <path> Ask only the server at this socket\n");
+#ifndef CAMEX_NO_SERVER
     printf("      --format nginx-map  An nginx map of the clients"
            " (<id>[.<domain>] -> <address>:<port>)\n");
     printf("      --format nginx-index  A start page of the clients (HTML:"
@@ -830,6 +855,7 @@ void print_usage(const char *progname)
            " links (default: 80)\n");
     printf("      --default <ip:port>  With nginx-map: where unknown"
            " names go\n");
+#endif
     printf("      --wait <token>   Wait until the clients change"
            " (\"-\": print the state now), then\n"
            "                       print the token of the new state"
