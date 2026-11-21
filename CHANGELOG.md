@@ -153,6 +153,14 @@ or server works with a 5.0.0 one as before.
 - `camex --top`: a live view of the clients, busiest first, with RX/s and TX/s (`--interval`);
   `camex --status` lists the networks, `--json` adds `networks`, and per client `network`,
   `rx_rate` and `tx_rate`.
+## 4.4.1 — 2026-11-20
+
+- Android library: the owner of a VPN is read with `NetworkCapabilities.getOwnerUid()` only from
+  Android 11 (API 30), where it became public; on Android 10 it is hidden and may throw, and lint
+  failed the apps that build the library in (`NewApi`, reported by decoder). Android 10 tells the
+  tunnel's own VPN from another app's as Android 9 and older do: by the TUN the library holds.
+- CI: lint of the library and the app (`lintDebug`).
+
 ## 4.4.0 — 2026-11-20
 
 - Android library: one VPN at a time without apps taking it from each other. Android holds one

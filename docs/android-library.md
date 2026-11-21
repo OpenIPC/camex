@@ -225,8 +225,8 @@ Since 4.4.0 the library takes the VPN only when the user asks:
 
 The wait lives in the app's process: an app whose process the system may end
 (no foreground service of its own) starts the tunnel again when it runs next,
-with `startWhenFree()`. Up to Android 9 the owner of a VPN is not known to
-other apps: the library tells its own VPN from another app's by whether it
+with `startWhenFree()`. Up to Android 10 the owner of a VPN is not known to
+other apps (`NetworkCapabilities.getOwnerUid()` is public from Android 11): the library tells its own VPN from another app's by whether it
 holds its own; after a revoke it starts watching 3.5 s later, when its own VPN
 is off the list. A list of networks that cannot be read counts as another
 app's VPN: the tunnel waits rather than take one it cannot see.
