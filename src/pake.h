@@ -30,6 +30,8 @@
 #define PAKE_ENTRY_LEN (32U + PAKE_TAG_LEN)
 #define PAKE_MAX_NETS 24U          /* entries in PAKE2: it stays < PAKE1 */
 #define PAKE_FLAG_OPEN 0x01U       /* the server takes new networks */
+#define PAKE_FLAG_NAME 0x02U       /* and shows them by the name REGISTER's
+                                    * NAME gives */
 
 /* The generator of network id for session sid */
 void pake_generator(const uint8_t id[32], const uint8_t sid[PAKE_SID_LEN],

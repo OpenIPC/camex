@@ -76,6 +76,8 @@ typedef struct {
     uint8_t top;               /* --top: a live view of the server(s) */
     uint8_t pake;              /* client: --network alone: CPace (pake.h) */
     uint8_t pake_ok;           /* this connection's CPace succeeded */
+    uint8_t send_net_name;     /* the server asked for the network's name
+                                * (it takes new networks, PAKE_FLAG_NAME) */
     char bridge_if[IFNAMSIZ];  /* client: --bridge, the LAN interface */
     uint8_t bridge_mode;       /* --bridge-mode: bridge_mode_t */
     uint8_t mesh;              /* client: the server's CONFIG said MESH=1 */

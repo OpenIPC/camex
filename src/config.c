@@ -483,6 +483,8 @@ static camex_net_conf_t *config_db_add_network(const char *name)
     n = &server_db.nets[server_db.net_count++];
     memset(n, 0, sizeof(*n));
     memcpy(n->id, id, sizeof(id));
+    /* Shown by its name unless label= says otherwise */
+    netw_label_from_name(name, n->label, sizeof(n->label));
     n->isolation = -1;
     n->name_len = (uint8_t)(strlen(name) > 255U ? 255U : strlen(name));
     crypto_wipe(id, sizeof(id));

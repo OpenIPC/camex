@@ -296,6 +296,7 @@ void client_pake_reset(void)
     cpace.unanswered = 0U;
     cpace.fallback = 0U;
     current_config.pake_ok = 0U;
+    current_config.send_net_name = 0U;
     if (current_config.pake) {
         uint8_t k[32];
 
@@ -422,6 +423,8 @@ static int client_handle_pake2(const uint8_t *buf, size_t len)
     if ((flags & PAKE_FLAG_OPEN) != 0U) {
         if (client_pake_fall_back("does not know the network but takes new "
                                   "ones") == 0) {
+            current_config.send_net_name =
+                (flags & PAKE_FLAG_NAME) != 0U ? 1U : 0U;
             return client_send_init();
         }
         return -1;

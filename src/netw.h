@@ -95,10 +95,19 @@ int netw_name_valid(const char *name);
  * message, the server's static key keeps it secret) */
 void netw_handshake_key(uint8_t key[32]);
 
-/* "net-" and the first 4 bytes of the ID in hex: names are secrets, logs
- * and status show this (or label=) instead */
+/* "net-" and the first 4 bytes of the ID in hex: what logs and status
+ * show for a network whose name the server does not know */
 void netw_default_label(const uint8_t id[CAMEX_NET_ID_LEN], char *out,
                         size_t size);
+
+/* A network's name as its label: cut to fit, never inside a UTF-8
+ * character */
+void netw_label_from_name(const char *name, char *out, size_t size);
+
+/* A new network (not a [network] block) shown by its name, when the
+ * client sent one (REGISTER's NAME) and it is the name of that ID */
+void netw_name_label(int n, const uint8_t id[CAMEX_NET_ID_LEN],
+                     const char *name);
 
 /* The network of an ID, or -1 */
 int netw_find(const uint8_t id[CAMEX_NET_ID_LEN]);

@@ -367,6 +367,42 @@ static void test_register(void)
                                &autoreq, &wp, net, &has_net) != 0,
           "a short NET accepted");
 
+    /* NAME only to a server that asked for it */
+    {
+        char name[CAMEX_NET_NAME_MAX + 1U];
+        uint8_t mesh = 0U;
+
+        CHECK(proto_build_register(&c, buf, sizeof(buf)) == 0 &&
+                  strstr(buf, "NAME=") == NULL,
+              "NAME sent unasked");
+        c.send_net_name = 1U;
+        CHECK(proto_build_register(&c, buf, sizeof(buf)) == 0 &&
+                  strstr(buf, " NAME=6d792063616d73") != NULL,
+              "REGISTER with NAME: %s", buf);
+        CHECK(proto_parse_register_ex(buf, id, sizeof(id), ip, sizeof(ip),
+                                      &autoreq, &wp, net, &has_net, &mesh,
+                                      name) == 0 &&
+                  strcmp(name, "my cams") == 0,
+              "NAME does not parse back");
+        snprintf(buf, sizeof(buf), "CAMEX REGISTER VER=2 MODE=AUTO "
+                 "CLIENT_ID=cam1 NAME=0a41\n");
+        CHECK(proto_parse_register_ex(buf, id, sizeof(id), ip, sizeof(ip),
+                                      &autoreq, &wp, net, &has_net, &mesh,
+                                      name) != 0,
+              "a NAME with a control character accepted");
+        c.send_net_name = 0U;
+    }
+
+    /* Labels: cut on a character, never inside one */
+    {
+        char l[8];
+
+        netw_label_from_name("abc", l, sizeof(l));
+        CHECK(strcmp(l, "abc") == 0, "short label: %s", l);
+        netw_label_from_name("abcdef\xd0\xb6", l, sizeof(l));
+        CHECK(strcmp(l, "abcdef") == 0, "label cut inside UTF-8: %s", l);
+    }
+
     c.network[0] = '\0';
     CHECK(proto_build_register(&c, buf, sizeof(buf)) == 0 &&
               strstr(buf, "NET=") == NULL,

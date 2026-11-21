@@ -221,7 +221,7 @@ X=$(addr_of "$P-x")
 client y srv lab --name "$COLL"
 Y=$(addr_of "$P-y")
 [ "$Y" = "$NEXT_IP/24" ]; check $? "$COLL (same first choice) gets +1 ($Y, expected $NEXT_IP)"
-wait_log "$P-srv" "Network net-[0-9a-f]{8}: $BASE_IP of client $COLL is taken by client COLL-A, it gets $NEXT_IP" 2
+wait_log "$P-srv" "Network lab: $BASE_IP of client $COLL is taken by client COLL-A, it gets $NEXT_IP" 2
 check $? "the server says why"
 # Killed: its session stays live on the server; it comes back at once
 docker kill -s KILL "$P-x" >/dev/null
@@ -279,7 +279,7 @@ sleep 1
 client f open "anything-$$" --name ANY-F
 F=$(addr_of "$P-f")
 check $? "a client of a name the server never heard of gets an address ($F)"
-wait_log "$P-open" "New network net-[0-9a-f]{8} \\(pool 10\\.[0-9]+\\.0\\.0/16\\), created by client ANY-F" 2
+wait_log "$P-open" "New network anything-$$ \\(pool 10\\.[0-9]+\\.0\\.0/16\\), created by client ANY-F" 2
 check $? "the server makes the new network"
 docker logs "$P-f" 2>&1 | grep -q "does not know the network but takes new ones: joining by the network's ID"
 check $? "the client joins a new network the old way, and says so"

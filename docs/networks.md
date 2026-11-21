@@ -26,8 +26,10 @@ that is hard to guess, like a password.
   password-authenticated key exchange on the name (see [The server's
   key](#the-servers-key)). The key CPace gives is the pre-shared key of the
   Noise handshake that follows.
-- The server never logs the name. Logs and `camex --status` show `label=`
-  or `net-` plus the first 4 bytes of the ID in hex.
+- Logs, `camex --status` and `--top` on the server show the network by its
+  name (cut to 31 bytes), or by `label=` when the block has one. They are
+  root's, who can read the server's file anyway. A network the server only
+  knows by its ID shows as `net-` plus the first 4 bytes of the ID in hex.
 - The client hides `--network` from `ps` by overwriting it in its argument
   list.
 
@@ -50,7 +52,7 @@ local_cidr = 10.200.0.1/24       # needed: the networks' gateways go on this tun
 # network_prefix = 16            # their size (the default)
 
 [network field cameras of the north site]
-label = cams                     # shown instead of the name in logs and status
+label = cams                     # shown instead of the name in logs and status (optional)
 
 [network 7kq2m9x4p1lab8vz3t0c]
 pool = 10.77.0.0/24              # this pool instead of a derived one
@@ -67,7 +69,7 @@ a name could be guessed one CPace attempt at a time (see
 |--------------------|----------------------------------------------------------------------------------------------|
 | `pool`             | the network's IPv4 pool; without it a `/16` of `network_supernet` picked by the network's ID |
 | `client_isolation` | `yes` or `no`: drop packets between clients of this network; without it the server's setting |
-| `label`            | the name shown in logs and in `camex --status`, up to 31 bytes without spaces                |
+| `label`            | shown instead of the network's name in logs, `--status` and `--top`; up to 31 bytes without spaces |
 | `weak_name`        | `yes`: take a name shorter than 16 characters (a lab, a test); it could be guessed           |
 
 `[server]`:
@@ -134,8 +136,11 @@ either. `isolation_drops` in `camex --status --json` counts the drops.
 ## `allow_new_networks`
 
 With `allow_new_networks = yes`, the server takes a network ID it does not
-know as a new network. It gets a derived pool, a `net-` label and its gateway
-on the tunnel, and it is listed with `(new)` in `camex --status`. Such
+know as a new network. It gets a derived pool, its gateway on the tunnel, and
+the name its first client sends (inside the encrypted handshake, only after
+the server says over CPace that it takes new networks; a client with
+`--server-pubkey` skips CPace and sends no name, so its network shows as
+`net-`), and it is listed with `(new)` in `camex --status`. Such
 networks live until the server stops, or until a reload turns
 `allow_new_networks` off. At most 256 networks exist at once, listed ones
 included.

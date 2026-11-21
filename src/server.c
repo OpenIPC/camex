@@ -2249,7 +2249,8 @@ static int server_handle_pake1(const uint8_t *buf, size_t len,
     out[4] = V2_TYPE_PAKE2;
     memcpy(out + 5, ps->sid, PAKE_SID_LEN);
     out[5 + PAKE_SID_LEN] = server_db.globals.allow_new_networks
-                                ? PAKE_FLAG_OPEN : 0U;
+                                ? (uint8_t)(PAKE_FLAG_OPEN | PAKE_FLAG_NAME)
+                                : 0U;
     o = 5U + PAKE_SID_LEN + 2U;
     for (i = 0U; netw_table != NULL && i < CAMEX_NET_MAX &&
                  ps->count < PAKE_MAX_NETS; ++i) {
@@ -2381,6 +2382,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     int first;
     int via_net = 0;
     uint8_t net_id[CAMEX_NET_ID_LEN];
+    char net_name[CAMEX_NET_NAME_MAX + 1U] = "";
     uint8_t has_net = 0U;
     int net = -1;
     uint16_t net1_before = 0U;
@@ -2557,7 +2559,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     if (proto_parse_register_ex(message, client_id, sizeof(client_id),
                                 local_ip, sizeof(local_ip),
                                 &auto_request, &web_port, net_id,
-                                &has_net, &mesh_req) != 0 ||
+                                &has_net, &mesh_req, net_name) != 0 ||
         server_register_allowed(used_key, client_id, sizeof(client_id),
                                 local_ip, auto_request, from) != 0) {
         noise_wipe(&hs);
@@ -2594,6 +2596,7 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
             if (net >= 0) {
                 char pool[24];
 
+                netw_name_label(net, net_id, net_name);
                 netw_pool_text(net, pool, sizeof(pool));
                 log_message(LOG_NOTICE, "New network %s (pool %s), created "
                             "by client %s", netw_label(net), pool,
@@ -2607,9 +2610,13 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
                 return -1;
             }
         }
+        /* A network made before by a client that sent no name */
+        if (net >= 0) {
+            netw_name_label(net, net_id, net_name);
+        }
         crypto_wipe(net_id, sizeof(net_id));
+        crypto_wipe(net_name, sizeof(net_name));
         if (net < 0) {
-            /* The name is the network's key: never logged */
             log_peer(LOG_WARNING, "Rejected handshake from %s (client %s): "
                      "unknown network", peer, client_id);
             noise_wipe(&hs);

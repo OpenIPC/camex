@@ -93,6 +93,42 @@ void netw_default_label(const uint8_t id[CAMEX_NET_ID_LEN], char *out,
     snprintf(out, size, "net-%02x%02x%02x%02x", id[0], id[1], id[2], id[3]);
 }
 
+void netw_label_from_name(const char *name, char *out, size_t size)
+{
+    size_t n;
+
+    if (size == 0U) {
+        return;
+    }
+    n = strlen(name);
+    if (n >= size) {
+        n = size - 1U;
+        /* Back to the start of a character */
+        while (n > 0U && ((unsigned char)name[n] & 0xC0U) == 0x80U) {
+            --n;
+        }
+    }
+    memcpy(out, name, n);
+    out[n] = '\0';
+}
+
+void netw_name_label(int n, const uint8_t id[CAMEX_NET_ID_LEN],
+                     const char *name)
+{
+    uint8_t check[CAMEX_NET_ID_LEN];
+
+    if (netw_table == NULL || n < 0 || n >= (int)CAMEX_NET_MAX ||
+        name == NULL || name[0] == '\0' || netw_table[n].listed) {
+        return;
+    }
+    netw_id_from_name(name, check);
+    if (memcmp(check, id, sizeof(check)) == 0) {
+        netw_label_from_name(name, netw_table[n].label,
+                             sizeof(netw_table[n].label));
+    }
+    crypto_wipe(check, sizeof(check));
+}
+
 int netw_find(const uint8_t id[CAMEX_NET_ID_LEN])
 {
     size_t i;

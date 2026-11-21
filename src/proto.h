@@ -49,14 +49,16 @@ int proto_parse_register(char *message,
                          uint8_t *auto_request, int *web_port,
                          uint8_t *net_id, uint8_t *has_net);
 
-/* The same, and MESH (the client can go peer to peer) in *mesh (NULL:
- * not wanted) */
+/* The same, and MESH (the client can go peer to peer) in *mesh, and
+ * NAME (the network's name, sent only to a server that asked for it in
+ * PAKE2) in net_name (CAMEX_NET_NAME_MAX + 1 bytes, "" when not sent);
+ * either may be NULL */
 int proto_parse_register_ex(char *message,
                             char *client_id, size_t client_id_size,
                             char *local_ip, size_t local_ip_size,
                             uint8_t *auto_request, int *web_port,
                             uint8_t *net_id, uint8_t *has_net,
-                            uint8_t *mesh);
+                            uint8_t *mesh, char *net_name);
 
 /* Build CONFIG text message */
 int proto_build_config(const char *client_id,

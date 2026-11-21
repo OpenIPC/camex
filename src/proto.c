@@ -73,6 +73,22 @@ int proto_build_register(const camex_config_t *config,
                                      b64) != 0) {
                 return -1;
             }
+            /* And the name itself, to a server that asked for it (PAKE2):
+             * it shows the network by its name */
+            if (config->send_net_name) {
+                size_t i;
+
+                if (append_control_field(buffer, size, &offset,
+                                         " NAME=") != 0) {
+                    return -1;
+                }
+                for (i = 0U; config->network[i] != '\0'; ++i) {
+                    if (append_control_field(buffer, size, &offset, "%02x",
+                            (unsigned)(unsigned char)config->network[i]) != 0) {
+                        return -1;
+                    }
+                }
+            }
         }
 #ifdef CAMEX_MESH
         /* With a network only: a server that knows NET knows MESH */
@@ -118,7 +134,7 @@ int proto_parse_register(char *message,
 {
     return proto_parse_register_ex(message, client_id, client_id_size,
                                    local_ip, local_ip_size, auto_request,
-                                   web_port, net_id, has_net, NULL);
+                                   web_port, net_id, has_net, NULL, NULL);
 }
 
 int proto_parse_register_ex(char *message,
@@ -126,7 +142,7 @@ int proto_parse_register_ex(char *message,
                             char *local_ip, size_t local_ip_size,
                             uint8_t *auto_request, int *web_port,
                             uint8_t *net_id, uint8_t *has_net,
-                            uint8_t *mesh)
+                            uint8_t *mesh, char *net_name)
 {
     char *saveptr = NULL;
     char *token;
@@ -135,6 +151,9 @@ int proto_parse_register_ex(char *message,
 
     if (message == NULL || auto_request == NULL) {
         return -1;
+    }
+    if (net_name != NULL) {
+        net_name[0] = '\0';
     }
 
     token = strtok_r(message, " \t\r\n", &saveptr);
@@ -208,6 +227,37 @@ int proto_parse_register_ex(char *message,
             if (has_net != NULL) {
                 *has_net = 1U;
             }
+            continue;
+        }
+
+        /* NAME: the network's name in hex (longer than a token value) */
+        if (strncmp(token, "NAME=", 5U) == 0) {
+            const char *hex = token + 5;
+            size_t n = strlen(hex);
+            char name[CAMEX_NET_NAME_MAX + 1U];
+            size_t i;
+
+            if (n == 0U || n % 2U != 0U || n / 2U > CAMEX_NET_NAME_MAX ||
+                strspn(hex, "0123456789abcdef") != n) {
+                log_peer(LOG_ERR, "Invalid NAME in register request");
+                return -1;
+            }
+            for (i = 0U; i < n / 2U; ++i) {
+                unsigned int b = 0U;
+
+                (void)sscanf(hex + 2U * i, "%2x", &b);
+                name[i] = (char)b;
+            }
+            name[n / 2U] = '\0';
+            if (!netw_name_valid(name)) {
+                log_peer(LOG_ERR, "Invalid NAME in register request");
+                crypto_wipe(name, sizeof(name));
+                return -1;
+            }
+            if (net_name != NULL) {
+                memcpy(net_name, name, n / 2U + 1U);
+            }
+            crypto_wipe(name, sizeof(name));
             continue;
         }
 
