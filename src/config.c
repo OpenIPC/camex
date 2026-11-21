@@ -505,11 +505,8 @@ static int config_db_check_names(void)
         if (n->name_len >= CAMEX_NET_NAME_MIN) {
             continue;
         }
-        if (n->label[0] != '\0') {
-            snprintf(label, sizeof(label), "%s", n->label);
-        } else {
-            netw_default_label(n->id, label, sizeof(label));
-        }
+        /* By its ID: without label= the label is the name itself */
+        netw_default_label(n->id, label, sizeof(label));
         if (!n->weak_name) {
             log_message(LOG_ERR, "Network %s: its name has %u characters, "
                         "fewer than %u, and could be guessed; choose a "

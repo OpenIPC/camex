@@ -24,6 +24,7 @@ or server works with a 5.0.0 one as before.
 - A `[network NAME]` block refuses a name shorter than 16 characters unless it has
   `weak_name = yes`; a client with a shorter `--network` warns, and `install.sh --network`
   takes 16 characters or more.
+  The error and the warning show the network by its ID (`net-...`), never by its name.
 
 
 - Networks are shown by their names on the server (logs, `--status`, `--top`) instead of
