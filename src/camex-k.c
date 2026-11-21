@@ -13,6 +13,10 @@
  *   fd = open("/dev/camex", O_RDWR);
  *   // read() → raw IPv4 packets from kernel to userspace
  *   // write() → inject raw IPv4 packets into kernel stack
+ *
+ * With mode=tap (insmod camex.ko mode=tap) the interface is an Ethernet
+ * one instead, like tun's IFF_TAP: read() and write() carry whole frames
+ * (a TAP network of the full camex, CAMEX_L2).
  */
 
 #include <linux/module.h>
@@ -32,6 +36,9 @@
 #include <linux/list.h>
 #include <linux/ip.h>
 #include <linux/version.h>
+#include <linux/vmalloc.h>
+#include <linux/mutex.h>
+#include <linux/rtnetlink.h>
 #include "version.h"
 
 /* ================================================================
@@ -106,14 +113,70 @@
 # define NET_IP_ALIGN 2
 #endif
 
+/*
+ * Offloads (CAMEX_IOC_VNET): as tun's IFF_VNET_HDR, a 10-byte
+ * struct virtio_net_hdr before each packet both ways, TSO and checksum
+ * offload towards userspace, GSO packets from it. Built on kernels with
+ * alloc_skb_with_frags() and skb_store_bits() of pages (4.1 on); older
+ * kernels answer the ioctl with ENOTTY and stay as they were.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)
+# define CAMEX_VNET 1
+#endif
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 2, 0)
+# define CAMEX_PROBE_TRANSPORT(skb) skb_probe_transport_header(skb)
+#else
+# define CAMEX_PROBE_TRANSPORT(skb) skb_probe_transport_header((skb), 0)
+#endif
+
 /* ================================================================
  * Driver constants
  * ================================================================ */
 
 #define DRV_NAME     "camex"
 #define DEV_NAME     "camex"
-#define QUEUE_LIMIT   64    /* max packets queued for userspace read() */
+#define QUEUE_LIMIT   64    /* packets queued for userspace read(): beyond
+                               it the interface's queue stops (no drops) */
 #define CAMEX_MTU    1500
+
+/* ioctl(fd, CAMEX_IOC_VNET, &on): the vnet header and offloads (camex's
+ * tun.c asks for them; the same number there) */
+#define CAMEX_IOC_VNET _IOW(0xCA, 1, int)
+#define CAMEX_VNET_LEN 10
+#define CAMEX_VNET_MAX (CAMEX_VNET_LEN + 65535)
+#define CAMEX_OFFLOADS (NETIF_F_SG | NETIF_F_HW_CSUM | NETIF_F_TSO | \
+                        NETIF_F_TSO_ECN)
+
+/* struct virtio_net_hdr, host byte order (tun's legacy header) */
+struct camex_vnet {
+    __u8  flags;
+    __u8  gso_type;
+    __u16 hdr_len;
+    __u16 gso_size;
+    __u16 csum_start;
+    __u16 csum_offset;
+} __attribute__((packed));
+#define CAMEX_VNET_F_NEEDS_CSUM 1
+#define CAMEX_VNET_GSO_NONE     0
+#define CAMEX_VNET_GSO_TCPV4    1
+#define CAMEX_VNET_GSO_ECN      0x80
+
+/* mode=tun (the default) or mode=tap */
+static char *mode = "tun";
+module_param(mode, charp, 0444);
+MODULE_PARM_DESC(mode, "tun: IPv4 packets (default); tap: Ethernet frames");
+
+static int camex_tap(void)
+{
+    return mode != NULL && strcmp(mode, "tap") == 0;
+}
+
+/* A random MAC: eth_hw_addr_random() came in 3.4 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 4, 0)
+# define CAMEX_RANDOM_MAC(dev) eth_hw_addr_random(dev)
+#else
+# define CAMEX_RANDOM_MAC(dev) random_ether_addr((dev)->dev_addr)
+#endif
 
 /* ================================================================
  * Data structures
@@ -149,6 +212,11 @@ struct camex_priv {
     wait_queue_head_t  rx_wait;
 
     atomic_t           attached;
+
+    int                vnet;      /* CAMEX_IOC_VNET is on */
+    struct mutex       buf_lock;  /* the bounce buffers */
+    u8                *rbuf;      /* vmalloc: no high-order pages */
+    u8                *wbuf;
 };
 
 /* Single global instance — one device, one user at a time. */
@@ -208,6 +276,10 @@ static netdev_tx_t camex_net_xmit(struct sk_buff *skb,
     priv->rx_count++;
     dev->stats.tx_packets++;
     dev->stats.tx_bytes += skb->len;
+    /* Full: the stack holds the next packets in the interface's queue
+     * until read() makes room, instead of their being dropped here */
+    if (priv->rx_count >= QUEUE_LIMIT)
+        netif_stop_queue(dev);
 
     spin_unlock_irqrestore(&priv->rx_lock, flags);
 
@@ -221,6 +293,15 @@ static const struct net_device_ops camex_netdev_ops = {
     .ndo_start_xmit = camex_net_xmit,
 };
 
+/* mode=tap: the MAC can be set (camex gives the one of its network) */
+static const struct net_device_ops camex_tap_netdev_ops = {
+    .ndo_open            = camex_net_open,
+    .ndo_stop            = camex_net_stop,
+    .ndo_start_xmit      = camex_net_xmit,
+    .ndo_set_mac_address = eth_mac_addr,
+    .ndo_validate_addr   = eth_validate_addr,
+};
+
 /**
  * camex_net_setup - called by alloc_netdev to initialise net_device fields.
  *
@@ -229,6 +310,14 @@ static const struct net_device_ops camex_netdev_ops = {
  */
 static void camex_net_setup(struct net_device *dev)
 {
+    if (camex_tap()) {
+        /* An Ethernet interface, as tun's IFF_TAP */
+        ether_setup(dev);
+        dev->netdev_ops   = &camex_tap_netdev_ops;
+        dev->tx_queue_len = 500;
+        CAMEX_RANDOM_MAC(dev);
+        return;
+    }
     dev->netdev_ops      = &camex_netdev_ops;
     dev->flags           = IFF_POINTOPOINT | IFF_NOARP | IFF_MULTICAST;
     dev->type            = ARPHRD_NONE;
@@ -236,6 +325,10 @@ static void camex_net_setup(struct net_device *dev)
     dev->hard_header_len = 0;
     dev->addr_len        = 0;
     dev->tx_queue_len    = 500;
+#ifdef CAMEX_VNET
+    /* Taken only while userspace asks for them (CAMEX_IOC_VNET) */
+    dev->hw_features     = CAMEX_OFFLOADS;
+#endif
 
 #ifndef CAMEX_NO_MTU_FIELDS
     dev->min_mtu = 68;
@@ -297,6 +390,15 @@ static int camex_chr_release(struct inode *inode, struct file *filp)
     unsigned long      flags;
 
     netif_carrier_off(priv->dev);
+#ifdef CAMEX_VNET
+    if (priv->vnet) {
+        priv->vnet = 0;
+        rtnl_lock();
+        priv->dev->wanted_features &= ~(netdev_features_t)CAMEX_OFFLOADS;
+        netdev_update_features(priv->dev);
+        rtnl_unlock();
+    }
+#endif
 
     /* Discard any packets that were never read. */
     spin_lock_irqsave(&priv->rx_lock, flags);
@@ -311,10 +413,203 @@ static int camex_chr_release(struct inode *inode, struct file *filp)
      * take the slot only now, after the old queue is gone. */
     atomic_set(&priv->attached, 0);
     spin_unlock_irqrestore(&priv->rx_lock, flags);
+    netif_wake_queue(priv->dev);
+#ifdef CAMEX_VNET
+    /* The offload buffers go with the fd (camex_vnet_free()) */
+    mutex_lock(&priv->buf_lock);
+    vfree(priv->rbuf);
+    vfree(priv->wbuf);
+    priv->rbuf = NULL;
+    priv->wbuf = NULL;
+    mutex_unlock(&priv->buf_lock);
+#endif
 
     pr_info("camex: userspace detached\n");
     return 0;
 }
+
+#ifdef CAMEX_VNET
+/* One packet with its vnet header; a TSO packet whole (up to 64 KB), for
+ * userspace to cut. Consumes skb. */
+static ssize_t camex_read_vnet(struct camex_priv *priv, struct sk_buff *skb,
+                               char __user *buf, size_t count)
+{
+    struct camex_vnet h;
+    size_t total = CAMEX_VNET_LEN + skb->len;
+    ssize_t ret;
+
+    memset(&h, 0, sizeof(h));
+    if (skb_is_gso(skb)) {
+        struct skb_shared_info *si = skb_shinfo(skb);
+
+        if (!(si->gso_type & SKB_GSO_TCPV4)) {
+            priv->dev->stats.tx_dropped++;
+            dev_kfree_skb(skb);
+            return -EAGAIN;   /* never offered: only TSO for IPv4 */
+        }
+        h.gso_type = CAMEX_VNET_GSO_TCPV4;
+        if (si->gso_type & SKB_GSO_TCP_ECN)
+            h.gso_type |= CAMEX_VNET_GSO_ECN;
+        h.gso_size = si->gso_size;
+        h.hdr_len = skb_headlen(skb);
+    }
+    if (skb->ip_summed == CHECKSUM_PARTIAL) {
+        h.flags = CAMEX_VNET_F_NEEDS_CSUM;
+        h.csum_start = skb_checksum_start_offset(skb);
+        h.csum_offset = skb->csum_offset;
+    }
+    if (count < total || total > CAMEX_VNET_MAX) {
+        dev_kfree_skb(skb);
+        return -EMSGSIZE;
+    }
+    mutex_lock(&priv->buf_lock);
+    if (!priv->rbuf) {
+        mutex_unlock(&priv->buf_lock);
+        dev_kfree_skb(skb);
+        return -EAGAIN;   /* offloads turned off meanwhile */
+    }
+    memcpy(priv->rbuf, &h, CAMEX_VNET_LEN);
+    if (skb_copy_bits(skb, 0, priv->rbuf + CAMEX_VNET_LEN, skb->len) != 0)
+        ret = -EFAULT;
+    else if (copy_to_user(buf, priv->rbuf, total))
+        ret = -EFAULT;
+    else
+        ret = total;
+    mutex_unlock(&priv->buf_lock);
+    dev_kfree_skb(skb);
+    return ret;
+}
+
+/* A packet after its vnet header: a GSO one becomes one skb of pages (no
+ * high-order allocation), for the stack to take as GRO would give it */
+static ssize_t camex_write_vnet(struct camex_priv *priv,
+                                const char __user *buf, size_t count)
+{
+    struct camex_vnet h;
+    struct sk_buff *skb;
+    size_t len;
+    size_t linear;
+    int err = 0;
+
+    if (count < CAMEX_VNET_LEN + 20 || count > CAMEX_VNET_MAX)
+        return -EINVAL;
+    len = count - CAMEX_VNET_LEN;
+    mutex_lock(&priv->buf_lock);
+    if (!priv->wbuf) {
+        mutex_unlock(&priv->buf_lock);
+        return -EAGAIN;
+    }
+    if (copy_from_user(priv->wbuf, buf, count)) {
+        mutex_unlock(&priv->buf_lock);
+        return -EFAULT;
+    }
+    memcpy(&h, priv->wbuf, CAMEX_VNET_LEN);
+    if ((priv->wbuf[CAMEX_VNET_LEN] >> 4) != 4) {
+        mutex_unlock(&priv->buf_lock);
+        return -EINVAL;   /* IPv4 only */
+    }
+    linear = len < 256 ? len : 256;
+    skb = alloc_skb_with_frags(NET_IP_ALIGN + linear, len - linear, 0, &err,
+                               GFP_KERNEL);
+    if (!skb) {
+        mutex_unlock(&priv->buf_lock);
+        return err ? err : -ENOMEM;
+    }
+    skb_reserve(skb, NET_IP_ALIGN);
+    skb_put(skb, linear);
+    skb->data_len = len - linear;
+    skb->len = len;
+    if (skb_store_bits(skb, 0, priv->wbuf + CAMEX_VNET_LEN, len) != 0) {
+        mutex_unlock(&priv->buf_lock);
+        kfree_skb(skb);
+        return -EFAULT;
+    }
+    mutex_unlock(&priv->buf_lock);
+
+    skb->protocol = htons(ETH_P_IP);
+    skb->dev = priv->dev;
+    skb_reset_network_header(skb);
+    if (h.flags & CAMEX_VNET_F_NEEDS_CSUM) {
+        if (!skb_partial_csum_set(skb, h.csum_start, h.csum_offset)) {
+            kfree_skb(skb);
+            return -EINVAL;
+        }
+    }
+    if ((h.gso_type & ~CAMEX_VNET_GSO_ECN) == CAMEX_VNET_GSO_TCPV4) {
+        struct skb_shared_info *si = skb_shinfo(skb);
+
+        if (h.gso_size == 0 || !(h.flags & CAMEX_VNET_F_NEEDS_CSUM)) {
+            kfree_skb(skb);
+            return -EINVAL;
+        }
+        si->gso_size = h.gso_size;
+        si->gso_type = SKB_GSO_TCPV4 | SKB_GSO_DODGY;
+        if (h.gso_type & CAMEX_VNET_GSO_ECN)
+            si->gso_type |= SKB_GSO_TCP_ECN;
+        si->gso_segs = 0;   /* the stack counts them (DODGY) */
+    } else if (h.gso_type != CAMEX_VNET_GSO_NONE) {
+        kfree_skb(skb);
+        return -EINVAL;
+    }
+    CAMEX_PROBE_TRANSPORT(skb);
+
+    priv->dev->stats.rx_packets++;
+    priv->dev->stats.rx_bytes += len;
+    CAMEX_NETIF_RX(skb);
+    return count;
+}
+
+/* The bounce buffers exist only while offloads are on: 2 x 64 KB of
+ * vmalloc memory, given back when they are turned off or the fd closed */
+static void camex_vnet_free(struct camex_priv *priv)
+{
+    mutex_lock(&priv->buf_lock);
+    vfree(priv->rbuf);
+    vfree(priv->wbuf);
+    priv->rbuf = NULL;
+    priv->wbuf = NULL;
+    mutex_unlock(&priv->buf_lock);
+}
+
+/* CAMEX_IOC_VNET: the vnet header on (1) or off (0); the interface takes
+ * the offloads only while it is on */
+static long camex_chr_ioctl(struct file *filp, unsigned int cmd,
+                            unsigned long arg)
+{
+    struct camex_priv *priv = filp->private_data;
+    int on;
+
+    if (cmd != CAMEX_IOC_VNET || camex_tap())
+        return -ENOTTY;
+    if (get_user(on, (int __user *)arg))
+        return -EFAULT;
+    if (on && !priv->rbuf) {
+        u8 *r = vmalloc(CAMEX_VNET_MAX);
+        u8 *w = vmalloc(CAMEX_VNET_MAX);
+
+        if (!r || !w) {
+            vfree(r);
+            vfree(w);
+            return -ENOMEM;
+        }
+        mutex_lock(&priv->buf_lock);
+        priv->rbuf = r;
+        priv->wbuf = w;
+        mutex_unlock(&priv->buf_lock);
+    }
+    rtnl_lock();
+    if (on)
+        priv->dev->wanted_features |= CAMEX_OFFLOADS;
+    else
+        priv->dev->wanted_features &= ~(netdev_features_t)CAMEX_OFFLOADS;
+    netdev_update_features(priv->dev);
+    priv->vnet = on ? 1 : 0;
+    rtnl_unlock();
+    if (!on)
+        camex_vnet_free(priv);
+    return 0;
+}
+#endif
 
 /**
  * camex_chr_read - deliver the next queued IPv4 packet to userspace.
@@ -356,10 +651,16 @@ static ssize_t camex_chr_read(struct file *filp, char __user *buf,
     node = list_first_entry(&priv->rx_queue, struct pkt_node, list);
     list_del(&node->list);
     priv->rx_count--;
+    if (priv->rx_count <= QUEUE_LIMIT / 2 && netif_queue_stopped(priv->dev))
+        netif_wake_queue(priv->dev);
     spin_unlock_irqrestore(&priv->rx_lock, flags);
 
     skb = node->skb;
     kfree(node);
+#ifdef CAMEX_VNET
+    if (priv->vnet)
+        return camex_read_vnet(priv, skb, buf, count);
+#endif
 
     if (count < (size_t)skb->len) {
         dev_kfree_skb(skb);
@@ -388,6 +689,30 @@ static ssize_t camex_chr_write(struct file *filp, const char __user *buf,
     unsigned char     *data;
     unsigned char      first_byte;
 
+    if (camex_tap()) {
+        /* A whole Ethernet frame */
+        if (count < ETH_HLEN || count > 65535)
+            return -EINVAL;
+        skb = netdev_alloc_skb(priv->dev, count + NET_IP_ALIGN);
+        if (!skb)
+            return -ENOMEM;
+        skb_reserve(skb, NET_IP_ALIGN);
+        data = CAMEX_SKB_PUT(skb, count);
+        if (copy_from_user(data, buf, count)) {
+            kfree_skb(skb);
+            return -EFAULT;
+        }
+        skb->protocol = eth_type_trans(skb, priv->dev);
+        priv->dev->stats.rx_packets++;
+        priv->dev->stats.rx_bytes += count;
+        CAMEX_NETIF_RX(skb);
+        return count;
+    }
+
+#ifdef CAMEX_VNET
+    if (priv->vnet)
+        return camex_write_vnet(priv, buf, count);
+#endif
     if (count < 20 || count > 65535)
         return -EINVAL;
 
@@ -447,6 +772,9 @@ static const struct file_operations camex_fops = {
     .read    = camex_chr_read,
     .write   = camex_chr_write,
     .poll    = camex_chr_poll,
+#ifdef CAMEX_VNET
+    .unlocked_ioctl = camex_chr_ioctl,
+#endif
     .llseek  = no_llseek,
 };
 
@@ -491,11 +819,17 @@ static int __init camex_init(void)
     spin_lock_init(&priv->rx_lock);
     init_waitqueue_head(&priv->rx_wait);
     atomic_set(&priv->attached, 0);
+    priv->vnet = 0;
+    mutex_init(&priv->buf_lock);
+    priv->rbuf = NULL;
+    priv->wbuf = NULL;
     g_priv = priv;
 
     ret = register_netdev(dev);
     if (ret) {
         pr_err("camex: register_netdev failed: %d\n", ret);
+        vfree(priv->rbuf);
+        vfree(priv->wbuf);
         free_netdev(dev);
         g_priv = NULL;
         return ret;
@@ -505,13 +839,15 @@ static int __init camex_init(void)
     if (ret) {
         pr_err("camex: misc_register failed: %d\n", ret);
         unregister_netdev(dev);
+        vfree(priv->rbuf);
+        vfree(priv->wbuf);
         free_netdev(dev);
         g_priv = NULL;
         return ret;
     }
 
-    pr_info("camex: loaded — /dev/%s <-> net:%s  (kernel %d.%d)\n",
-            camex_miscdev.name, DEV_NAME,
+    pr_info("camex: loaded — /dev/%s <-> net:%s, %s  (kernel %d.%d)\n",
+            camex_miscdev.name, DEV_NAME, camex_tap() ? "tap" : "tun",
             (LINUX_VERSION_CODE >> 16) & 0xff,
             (LINUX_VERSION_CODE >>  8) & 0xff);
     return 0;
@@ -525,6 +861,8 @@ static void __exit camex_exit(void)
 
     if (g_priv) {
         dev    = g_priv->dev;
+        vfree(g_priv->rbuf);
+        vfree(g_priv->wbuf);
         g_priv = NULL;
         unregister_netdev(dev);
         free_netdev(dev);

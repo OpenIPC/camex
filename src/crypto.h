@@ -46,6 +46,12 @@ int crypto_set_server_pub(const char *pub_b64);
  * derive_psk_key()). */
 int crypto_init(const char *psk);
 
+/* Client: forget the server's public key (asked for again) */
+void crypto_clear_server_pub(void);
+
+/* The pre-shared key itself (a client's, from CPace) */
+void crypto_set_psk(const uint8_t key[32]);
+
 /* Log the fingerprint */
 void crypto_log_fingerprint(void);
 

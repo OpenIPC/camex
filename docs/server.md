@@ -38,7 +38,8 @@ the client's own block wins, then the port the client announced itself
 (`--web-port`, for example an Android app that serves its page on 8080), then
 `[defaults]`, then `--upstream-port` of the map (80).
 
-After a change to the file, `kill -HUP` the server. A running auto-mode client
+The server reads the file again when it changes (it checks every 2 seconds);
+`kill -HUP` does the same at once. A running auto-mode client
 picks up a changed address, gateway, MTU or routes with its next handshake (a
 key renewal, at most 10 minutes later, or a reconnect): it reopens its tunnel
 with the new settings and replaces its routes, without a restart. Its old
@@ -54,6 +55,8 @@ Three kinds of blocks; lines starting with `#` are comments:
 - `[defaults]` — the profile of every auto-mode client without its own block.
 - `[client ID]` — one client's profile; the ID is its MAC address or any unique
   string. Its keys override `[defaults]`.
+- `[network NAME]` — a named network clients join by its name, with addresses
+  derived from their IDs; see [networks.md](networks.md).
 
 `[server]`:
 
@@ -63,7 +66,7 @@ Three kinds of blocks; lines starting with `#` are comments:
 | `bind_ip`               | the address to listen on, `0.0.0.0` by default (`--bind-ip`)                                                                                                            |
 | `bind_dev`              | the interface to listen on (`--bind-dev`)                                                                                                                               |
 | `local_cidr`            | the server's tunnel address; with the auto pool its first address, e.g. `10.200.0.1/24`                                                                                 |
-| `mtu`                   | the tunnel MTU, 1500 by default                                                                                                                                         |
+| `mtu`                   | the tunnel MTU, 1420 by default                                                                                                                                         |
 | `server_key`            | the private key from `camex --genkey` (or `--server-key-file`)                                                                                                          |
 | `psk`                   | the global pre-shared key: `hex:<64 hex digits>`, `base64:<44 characters>` or a passphrase                                                                              |
 | `tun_dev`               | the TUN device or interface name                                                                                                                                        |

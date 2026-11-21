@@ -40,22 +40,28 @@ public class ValuesTest {
 
     @Test
     public void fields() {
-        assertEquals(Arrays.asList("server", "name", "transport", "pubkey", "psk", "mtu", "keepalive",
+        assertEquals(Arrays.asList("server", "name", "transport", "network", "pubkey", "psk", "mtu", "keepalive",
                         "server_timeout", "web_port"),
                 Arrays.asList(Values.FIELDS.stream().map(f -> f.key).toArray()));
         Field t = Values.FIELDS.get(2);
         assertEquals(Field.Kind.CHOICE, t.kind);
         assertEquals(Arrays.asList("UDP", "TCP"), t.choices);
         assertEquals("UDP", t.initial);
-        assertEquals(Field.Kind.SECRET, Values.FIELDS.get(4).kind);
+        // the network's name and the psk: secrets, both may stay empty (check() says when)
+        assertEquals(Field.Kind.SECRET, Values.FIELDS.get(3).kind);
+        assertFalse(Values.FIELDS.get(3).required);
+        assertEquals(Field.Kind.SECRET, Values.FIELDS.get(5).kind);
         assertFalse(Values.FIELDS.get(5).required);
+        assertFalse(Values.FIELDS.get(4).required);
+        assertFalse(Values.FIELDS.get(6).required);
         assertTrue(Values.FIELDS.get(0).required);
         // short labels, defaults as hints (2026-11-18)
         assertEquals("Client name", Values.FIELDS.get(1).label);
         assertEquals("Proto", t.label);
-        assertEquals("empty: the server's", Values.FIELDS.get(5).hint);
-        assertEquals("empty: 10", Values.FIELDS.get(6).hint);
-        assertEquals("empty: 20", Values.FIELDS.get(7).hint);
+        assertEquals("Network name", Values.FIELDS.get(3).label);
+        assertEquals("empty: the server's", Values.FIELDS.get(6).hint);
+        assertEquals("empty: 10", Values.FIELDS.get(7).hint);
+        assertEquals("empty: 20", Values.FIELDS.get(8).hint);
         assertEquals("", Values.FIELDS.get(1).hint);
         assertEquals("Show the key", Field.SHOW_SECRET);
     }
@@ -180,5 +186,48 @@ public class ValuesTest {
         assertEquals("10.200.0.0", Values.networkOf("10.200.0.5", 24));
         assertEquals("192.168.1.128", Values.networkOf("192.168.1.200", 25));
         assertEquals("0.0.0.0", Values.networkOf("10.200.0.5", 0));
+    }
+
+    @Test
+    public void network() {
+        // camex 4.6: the server and the network's name are enough
+        Map<String, String> v = good();
+        v.remove(Values.PUBKEY);
+        v.remove(Values.PSK);
+        assertEquals("pubkey", Values.check(v)[0]);
+        v.put(Values.NETWORK, "field cameras");
+        assertNull(Values.check(v));
+        String[] a = Values.argv(v);
+        assertEquals("field cameras", a[Arrays.asList(a).indexOf("--network") + 1]);
+        assertEquals("none", a[Arrays.asList(a).indexOf("--known-servers") + 1]);
+        assertFalse(Arrays.asList(a).contains("--server-pubkey"));
+        assertFalse(Arrays.asList(a).contains("--psk"));
+        // Given too, the key and psk go along, and must be right
+        v.put(Values.PUBKEY, KEY);
+        assertEquals(KEY, Values.argv(v)[Arrays.asList(Values.argv(v)).indexOf("--server-pubkey") + 1]);
+        v.put(Values.PUBKEY, "short");
+        assertEquals("pubkey", Values.check(v)[0]);
+        v.put(Values.PUBKEY, "");
+        v.put(Values.NETWORK, " padded");
+        assertEquals("network", Values.check(v)[0]);
+        v.put(Values.NETWORK, "line\nbreak");
+        assertEquals("network", Values.check(v)[0]);
+        StringBuilder longName = new StringBuilder();
+        for (int i = 0; i < 64; i++) longName.append('x');
+        v.put(Values.NETWORK, longName.toString());
+        assertEquals("network", Values.check(v)[0]);
+    }
+
+    @Test
+    public void networkLink() {
+        ConnectLink l = ConnectLink.parse(
+                "https://openipc.github.io/camex/connect/#h=vpn.example.org&p=5800&t=udp&w=field%20cameras");
+        assertEquals("field cameras", l.values.get(Values.NETWORK));
+        assertTrue(l.errors.isEmpty());
+        Map<String, String> v = new HashMap<>(l.values);
+        v.put(Values.NAME, "decoder-1");
+        assertNull(Values.check(v));
+        l = ConnectLink.parse("camex://connect?h=vpn.example.org&w=");
+        assertTrue(l.errors.containsKey("w"));
     }
 }

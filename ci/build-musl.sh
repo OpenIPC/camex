@@ -12,7 +12,8 @@
 #                  kernels often lack FPU emulation, so hard-float code dies with SIGILL
 #         aarch64 | x86_64   Bootlin musl toolchains
 #
-# Produces <outdir>/camex-<target>: static, stripped, not packed. musl is used because
+# Produces <outdir>/camex-<target> and <outdir>/camex-<target>-full (CAMEX_L2=1
+# CAMEX_MESH=1: TAP networks, --bridge, mesh): static, stripped, not packed. musl is used because
 # a static glibc binary cannot resolve host names (getaddrinfo) without the NSS libraries
 # of the same glibc on the device, and OpenIPC firmware has no glibc at all. With QEMU=1
 # the unit tests and `camex --version` are run under qemu-user as well.
@@ -99,6 +100,18 @@ if "${CROSS}readelf" -l "$BIN" | grep -q 'Requesting program interpreter'; then
     echo "$BIN is dynamically linked" >&2; exit 1
 fi
 echo "camex-$ARCH: $(wc -c < "$BIN") bytes, static"
+
+# The full camex: the optional features (src/Makefile)
+FULL_BUILD=$ROOT/build/musl-$ARCH-full
+rm -rf "$FULL_BUILD"
+mkdir -p "$FULL_BUILD"
+make -s -C "$ROOT/src" TARGET=camex BUILD_DIR="$FULL_BUILD" CROSS_COMPILE="$CROSS" \
+    LDLIBS=-static CAMEX_L2=1 CAMEX_MESH=1 all
+cp "$FULL_BUILD/camex" "$OUT/camex-$ARCH-full"
+if "${CROSS}readelf" -l "$OUT/camex-$ARCH-full" | grep -q 'Requesting program interpreter'; then
+    echo "$OUT/camex-$ARCH-full is dynamically linked" >&2; exit 1
+fi
+echo "camex-$ARCH-full: $(wc -c < "$OUT/camex-$ARCH-full") bytes, static"
 
 if [ "${QEMU:-0}" = 1 ]; then
     # tests/Makefile builds in tests/: build there, then move the binaries away

@@ -10,6 +10,8 @@
  *   INIT  client -> server  | sender_index 4 | Noise message 1 | mac1 16
  *   RESP  server -> client  | sender_index 4 | receiver_index 4 | message 2
  *   DATA  both ways         | receiver_index 4 | counter 8 LE | AEAD
+ *   KEYREQ client -> server | zero padding to 64 bytes
+ *   KEY   server -> client  | the server's public key 32
  *
  * Indexes are big-endian random numbers chosen by each side for its own
  * end of a session; a DATA packet carries the index of the receiver's
@@ -36,6 +38,23 @@
 #define V2_TYPE_INIT 1U
 #define V2_TYPE_RESP 2U
 #define V2_TYPE_DATA 3U
+/* A client without the server's public key asks for it (first contact);
+ * the request is padded to V2_KEYREQ_LEN, longer than the answer, so the
+ * server never sends more than it gets */
+#define V2_TYPE_KEYREQ 4U
+#define V2_TYPE_KEY    5U
+/* Mesh (mesh.h): a client's peer socket to the server, and peer to peer */
+#define V2_TYPE_ENDPOINT 6U
+#define V2_TYPE_P2P      7U
+#define V2_P2P_HDR 18U    /* magic, type, pair 4, dir 1, counter 8 */
+/* CPace (pake.h) */
+#define V2_TYPE_PAKE1 8U
+#define V2_TYPE_PAKE2 9U
+#define V2_TYPE_PAKE3 10U
+#define V2_PAKE1_LEN 1200U
+#define V2_PAKE3_LEN (5U + 16U + 1U + 16U)
+#define V2_KEYREQ_LEN 64U
+#define V2_KEY_LEN    37U   /* magic, type, public key */
 
 #define V2_INIT_HDR 9U    /* magic, type, sender */
 #define V2_MAC_LEN 16U    /* mac1 at the end of INIT */
@@ -72,6 +91,8 @@ typedef struct {
 /* Packet header helpers; return the type, or 0 if not a v2 packet */
 uint8_t v2_packet_type(const uint8_t *pkt, size_t len);
 uint32_t v2_read_u32(const uint8_t *p);
+uint64_t read_le64(const uint8_t *p);
+void write_le64(uint8_t *p, uint64_t v);
 void v2_write_u32(uint8_t *p, uint32_t v);
 
 /* Replay window (RFC 6479 style): 0 if n is new and inside the window.
@@ -89,6 +110,13 @@ void session_wipe(session_t *s);
  * length, or 0 (session invalid, counter exhausted, buffer too small). */
 size_t session_seal(session_t *s, const uint8_t *plain, size_t len,
                     uint8_t *out, size_t out_size);
+
+/* The same with another type of the DATA layout (ENDPOINT) */
+size_t session_seal_as(session_t *s, uint8_t type, const uint8_t *plain,
+                       size_t len, uint8_t *out, size_t out_size);
+int session_open_as(session_t *s, uint8_t type, const uint8_t *pkt,
+                    size_t len, uint8_t *plain, size_t plain_size,
+                    size_t *plain_len);
 
 /* Opens a DATA packet for this session: header, replay window, AEAD.
  * Returns 0 and the payload, or -1. */

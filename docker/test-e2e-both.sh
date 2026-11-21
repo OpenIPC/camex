@@ -132,7 +132,7 @@ check $? "the status header says udp+tcp"
 check $? "the JSON says both"
 docker exec "$P-srv" test -S /run/camex/camex-both-5800.sock
 check $? "the socket is camex-both-5800.sock"
-docker logs "$P-srv" 2>&1 | grep -q "Transport: UDP and TCP"
+docker logs "$P-srv" 2>&1 | grep -q "(UDP and TCP)"
 check $? "the log names both transports"
 
 echo "== 2. a UDP and a TCP client at once"

@@ -68,7 +68,7 @@ static void mem_close(void)
 }
 
 static const camex_packet_backend_t mem_backend = {
-    "memory", mem_open, mem_read, mem_write, mem_fd, mem_close, NULL
+    "memory", mem_open, mem_read, mem_write, mem_fd, mem_close, NULL, NULL, NULL
 };
 
 int main(void)

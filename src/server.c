@@ -8,6 +8,28 @@
  */
 
 #include "server.h"
+#include "netw.h"
+#include "cpaceguard.h"
+#include "pake.h"
+#ifdef CAMEX_MESH
+#include "mesh.h"
+
+static void server_relay_count(const server_client_t *from,
+                               const server_client_t *to, size_t len);
+#endif
+#ifdef CAMEX_L2
+#include "l2.h"
+
+/* The frame in assembly of each slot, allocated when a client of a TAP
+ * network sends its first piece; owner tells a new client in the slot */
+typedef struct {
+    time_t owner;
+    l2_reasm_t r;
+} server_reasm_t;
+
+static server_reasm_t **server_reasm = NULL;
+#endif
+#include "tun.h"
 #include "client.h"
 #include "crypto.h"
 #include "keys.h"
@@ -156,6 +178,20 @@ static size_t server_lease_used = 0U;   /* leases in the table */
 static size_t server_lease_next = 0U;   /* where a free one is looked for */
 static time_t server_started = 0;   /* for the pool's start hold (#81) */
 
+/* The CPace limits of [server] (cpaceguard.h): at startup and reload */
+static void server_apply_cpace_limits(void)
+{
+    const camex_server_globals_t *g = &server_db.globals;
+
+    cpace_guard_config(
+        g->cpace_per_ip_set ? g->cpace_per_ip : CPACE_GUARD_PER_IP_DEFAULT,
+        g->cpace_total_set ? g->cpace_total : CPACE_GUARD_TOTAL_DEFAULT,
+        g->cpace_ban_after_set ? g->cpace_ban_after
+                               : CPACE_GUARD_BAN_AFTER_DEFAULT,
+        g->cpace_ban_time_set ? g->cpace_ban_time
+                              : CPACE_GUARD_BAN_SECS_DEFAULT);
+}
+
 void server_check_pool(const char *server_cidr)
 {
     char ip[16];
@@ -167,6 +203,7 @@ void server_check_pool(const char *server_cidr)
     uint32_t smask;
     uint32_t pmask = 0xFFFFFFFFU << (32U - server_db.globals.pool_prefix);
 
+    server_apply_cpace_limits();
     server_tunnel_ip = 0U;
     if (server_cidr == NULL || server_cidr[0] == '\0' ||
         parse_local_cidr(server_cidr, ip, sizeof(ip), mask,
@@ -177,6 +214,12 @@ void server_check_pool(const char *server_cidr)
     server_tunnel_ip = a.s_addr;
     sip = ntohl(a.s_addr);
     smask = ntohl(m.s_addr);
+    /* Networks only (no psk, no [client] sections): no client can get an
+     * address of the auto pool, so nothing to warn about */
+    if (config_networks_enabled() && current_config.psk[0] == '\0' &&
+        server_db.globals.psk[0] == '\0' && server_db.client_count == 0U) {
+        return;
+    }
     ip_text(pool_gateway(), gw, sizeof(gw));
     if ((sip & smask) != (server_db.globals.pool_net & smask) ||
         smask > pmask) {
@@ -392,8 +435,9 @@ static void server_lease_add(const char *client_id, uint32_t ip_be,
      * pool's size, rather than give a young lease up (#81) */
     if (l->ip_be != 0U &&
         difftime(g_now, l->since) < (double)SERVER_LEASE_MIN) {
-        size_t limit = pool_size() > SERVER_LEASE_MAX ? SERVER_LEASE_MAX
-                                                      : pool_size();
+        size_t limit = config_networks_enabled() ||
+                       pool_size() > SERVER_LEASE_MAX
+                           ? SERVER_LEASE_MAX : pool_size();
         size_t cap = server_lease_cap * 2U > limit ? limit
                                                    : server_lease_cap * 2U;
         server_lease_t *grown = cap > server_lease_cap
@@ -624,6 +668,18 @@ int server_clients_init(size_t count)
 
 void server_clients_free(void)
 {
+#ifdef CAMEX_L2
+    if (server_reasm != NULL) {
+        size_t k;
+
+        for (k = 0U; k < server_max_clients; ++k) {
+            free(server_reasm[k]);
+        }
+        free(server_reasm);
+        server_reasm = NULL;
+    }
+    l2_mac_clear();
+#endif
     if (server_clients != NULL) {
         crypto_wipe(server_clients,
                     server_max_clients * sizeof(*server_clients));
@@ -771,13 +827,16 @@ void server_end_client(server_client_t *entry)
     }
     if (entry->active && entry->registered && entry->auto_client &&
         entry->client_id[0] != '\0') {
-        if (pool_has(entry->ip_be) &&
+        /* The auto pool's addresses, and a network's: both are kept */
+        int n = entry->net1 != 0U ? (int)entry->net1 - 1 : -1;
+
+        if ((pool_has(entry->ip_be) || netw_has(n, entry->ip_be)) &&
             profile_owner_of_ip(entry->ip_be) == NULL) {
             server_lease_add(entry->client_id, entry->ip_be, 0);
         }
         /* Its previous session may still send from the old address */
         if (entry->prev.valid && entry->prev_ip_be != entry->ip_be &&
-            pool_has(entry->prev_ip_be) &&
+            (pool_has(entry->prev_ip_be) || netw_has(n, entry->prev_ip_be)) &&
             profile_owner_of_ip(entry->prev_ip_be) == NULL) {
             server_lease_add(entry->client_id, entry->prev_ip_be, 1);
         }
@@ -793,6 +852,9 @@ void server_drop_entry(server_client_t *entry)
     if (entry->tcp_fd >= 0) {
         net_tcp_close(entry->tcp_fd);
     }
+#ifdef CAMEX_L2
+    l2_mac_forget_slot((uint32_t)(entry - server_clients) + 1U);
+#endif
     crypto_wipe(entry, sizeof(*entry));
     entry->tcp_fd = -1;
 }
@@ -1069,6 +1131,205 @@ void server_revalidate_profile_addresses(void)
     }
 }
 
+
+/* The fixed key of network handshakes (netw_handshake_key()) */
+static uint8_t server_net_key[32];
+static uint8_t server_net_key_ready = 0U;
+
+static const uint8_t *server_network_key(void)
+{
+    if (!server_net_key_ready) {
+        netw_handshake_key(server_net_key);
+        server_net_key_ready = 1U;
+    }
+    return server_net_key;
+}
+
+static int server_is_net_key(const uint8_t *key)
+{
+    return crypto_verify32(key, server_network_key()) == 0;
+}
+
+/* The network of an entry, or -1 */
+static int entry_net(const server_client_t *e)
+{
+    return e->net1 != 0U ? (int)e->net1 - 1 : -1;
+}
+
+/* Which network an address belongs to: a named network's slot, -1 for
+ * the auto pool, -2 for anything else (the server's own world) */
+static int addr_class(uint32_t ip_be)
+{
+    int n = netw_of_ip(ip_be);
+
+    if (n >= 0) {
+        return n;
+    }
+    return pool_has(ip_be) ? -1 : -2;
+}
+
+/* client_isolation of network n: its own, else the server's */
+static int net_isolation(int n)
+{
+    if (n >= 0 && netw_table[n].isolation >= 0) {
+        return netw_table[n].isolation;
+    }
+    return server_client_isolation();
+}
+
+/* Is ip_be free for entry (client_id) in network n? Not the gateway, not
+ * another client's [client ID] address, not another live client's (a
+ * pending one included), not kept for another client ID that is gone */
+static int server_net_ip_usable(const server_client_t *entry, int n,
+                                uint32_t ip_be, const char *client_id)
+{
+    const server_client_t *user;
+    const char *owner;
+
+    if (!netw_has(n, ip_be) || ip_be == server_tunnel_ip) {
+        return 0;
+    }
+    owner = profile_owner_of_ip(ip_be);
+    if (owner != NULL && strcasecmp(owner, client_id) != 0) {
+        return 0;
+    }
+    user = server_find_by_ip(ip_be);
+    return (user == NULL || user == entry) &&
+           server_lease_allows(ip_be, client_id);
+}
+
+/* The address of client_id in network n: its [client ID] local_cidr= when
+ * that is in the network's pool, else the hash's choice. An address the
+ * same client ID holds (a live entry, its lease, the address it asks
+ * for) is its own: a returning client always gets it back, only another
+ * client ID on it moves a client to the next one (+1, -1, +2, ...).
+ * 0 when there is none. */
+static uint32_t server_net_pick(const server_client_t *entry, int n,
+                                const char *client_id, const char *hint_ip)
+{
+    const camex_server_profile_t *own = config_db_find_client(client_id);
+    uint32_t given = entry->pending_ip_be != 0U ? entry->pending_ip_be
+                                                : entry->ip_be;
+    const server_lease_t *l;
+    struct in_addr h;
+    unsigned int k;
+
+    if (own != NULL && own->has_ip) {
+        if (netw_has(n, own->ip_be)) {
+            const server_client_t *user = server_find_by_ip(own->ip_be);
+
+            return user == NULL || user == entry ? own->ip_be : 0U;
+        }
+    }
+    /* Its own address still, when the hash's sequence has it */
+    if (given != 0U && netw_candidate_rank(n, client_id, given) >= 0 &&
+        server_net_ip_usable(entry, n, given, client_id)) {
+        return given;
+    }
+    l = server_lease_by_id(client_id);
+    if (l != NULL && netw_candidate_rank(n, client_id, l->ip_be) >= 0 &&
+        server_net_ip_usable(entry, n, l->ip_be, client_id)) {
+        return l->ip_be;
+    }
+    /* The address it had before a server restart: two client IDs whose
+     * hashes meet keep their places */
+    if (hint_ip != NULL && hint_ip[0] != '\0' &&
+        inet_pton(AF_INET, hint_ip, &h) == 1 &&
+        netw_candidate_rank(n, client_id, h.s_addr) >= 0 &&
+        server_net_ip_usable(entry, n, h.s_addr, client_id)) {
+        return h.s_addr;
+    }
+    for (k = 0U; k < CAMEX_NET_PROBES; ++k) {
+        uint32_t c = netw_candidate(n, client_id, k);
+
+        if (c == 0U) {
+            break;
+        }
+        if (server_net_ip_usable(entry, n, c, client_id)) {
+            if (k > 0U) {
+                char ip[16];
+                char want[16];
+                const server_client_t *user;
+                const server_lease_t *held;
+                uint32_t base = netw_candidate(n, client_id, 0U);
+
+                ip_text(ntohl(c), ip, sizeof(ip));
+                ip_text(ntohl(base), want, sizeof(want));
+                user = server_find_by_ip(base);
+                held = server_lease_by_ip(base);
+                log_message(LOG_NOTICE, "Network %s: %s of client %s is "
+                            "taken by client %s, it gets %s",
+                            netw_label(n), want, client_id,
+                            user != NULL && user->client_id[0] != '\0'
+                                ? user->client_id
+                                : held != NULL ? held->id
+                                : profile_owner_of_ip(base) != NULL
+                                    ? profile_owner_of_ip(base)
+                                    : "(manual)", ip);
+            }
+            return c;
+        }
+    }
+    return 0U;
+}
+
+/* CONFIG for a client of network n */
+static int server_build_net_config(server_client_t *entry, int n,
+                                   const char *client_id, const char *hint_ip,
+                                   camex_profile_t *profile,
+                                   char *message, size_t message_size)
+{
+    uint32_t old_ip_be = entry->pending_ip_be != 0U ? entry->pending_ip_be
+                                                    : entry->ip_be;
+    uint32_t ip_be;
+    char ip[16];
+
+#ifdef CAMEX_L2
+    if (netw_table[n].noaddr) {
+        /* addresses = none: the devices take theirs on the bridged LAN */
+        profile->local_cidr[0] = '\0';
+        profile->gateway_ip[0] = '\0';
+        profile->l2 = 1U;
+        l2_client_mac(netw_table[n].id, client_id, profile->mac);
+        profile->mesh = netw_table[n].mesh && entry->mesh ? 1U : 0U;
+        (void)old_ip_be;
+        (void)hint_ip;
+        return proto_build_config(client_id, profile, message,
+                                  message_size);
+    }
+#endif
+    ip_be = server_net_pick(entry, n, client_id, hint_ip);
+    if (ip_be == 0U) {
+        char pool[24];
+
+        netw_pool_text(n, pool, sizeof(pool));
+        log_peer(LOG_WARNING, "Network %s (%s): no address for client %s",
+                 netw_label(n), pool, client_id);
+        return -1;
+    }
+    ip_text(ntohl(ip_be), ip, sizeof(ip));
+    snprintf(profile->local_cidr, sizeof(profile->local_cidr), "%s/%u", ip,
+             (unsigned)netw_table[n].pool_prefix);
+    ip_text(netw_gateway(n), profile->gateway_ip,
+            sizeof(profile->gateway_ip));
+#ifdef CAMEX_L2
+    if (netw_table[n].tap) {
+        profile->l2 = 1U;
+        l2_client_mac(netw_table[n].id, client_id, profile->mac);
+    }
+#endif
+    profile->mesh = netw_table[n].mesh && entry->mesh ? 1U : 0U;
+    server_assign_ip(entry, ip_be);
+    if (ip_be != old_ip_be) {
+        log_message(LOG_DEBUG, "Network %s: %s for client %s%s",
+                    netw_label(n), profile->local_cidr, client_id,
+                    entry->pending_ip_be == ip_be
+                        ? " (it moves there when it confirms the new "
+                          "session)" : "");
+    }
+    return proto_build_config(client_id, profile, message, message_size);
+}
+
 /* CONFIG for an auto client (the handshake response payload); takes an
  * auto-pool address when the profile has none (#15), preferring hint_ip
  * (the client's previous address) when it is free. */
@@ -1087,6 +1348,14 @@ static int server_build_config(server_client_t *entry, const char *client_id,
         log_message(LOG_ERR, "Missing config for client %s",
                     client_id != NULL ? client_id : "(null)");
         return -1;
+    }
+    /* A client of a named network: its address from the network */
+    if (entry != NULL && entry->net1 != 0U && client_id != NULL &&
+        client_id[0] != '\0') {
+        (void)offered_ip_be;
+        return server_build_net_config(entry, entry_net(entry), client_id,
+                                       hint_ip, &profile, message,
+                                       message_size);
     }
 
     if (profile.local_cidr[0] == '\0' || profile.gateway_ip[0] == '\0') {
@@ -1244,6 +1513,21 @@ void server_revalidate_keys(void)
         int allowed;
 
         if (!c->active || !c->registered) {
+            continue;
+        }
+        /* A network client with the network key: its network must still
+         * be there, and its ID must not have a key of its own now */
+        if (server_is_net_key(c->psk_key) || c->pake) {
+            if (c->net1 != 0U && netw_table[c->net1 - 1U].active &&
+                c->client_id[0] != '\0' &&
+                !keystore_has_owner(c->client_id)) {
+                continue;
+            }
+            log_message(LOG_NOTICE, "Ended session of client %s: its "
+                        "network or key changed with the config reload",
+                        c->client_id[0] != '\0' ? c->client_id
+                                                 : "(manual)");
+            server_end_client(c);
             continue;
         }
         owner = keystore_owner(c->psk_key);
@@ -1817,6 +2101,244 @@ static server_client_t *server_entry_for(const uint8_t *key,
     }
 }
 
+
+/*
+ * CPace (pake.h): PAKE1 gets one answer per network; PAKE3 confirms one,
+ * and the INIT from the same address that follows is tried with the
+ * session's key. Sessions live SERVER_PAKE_LIFE seconds.
+ */
+#define SERVER_PAKES 128U
+#define SERVER_PAKE_LIFE 60
+
+typedef struct {
+    uint8_t used;
+    uint8_t confirmed;
+    uint8_t tcp;
+    uint8_t sid[PAKE_SID_LEN];
+    uint8_t ya[32];
+    struct sockaddr_in from;
+    time_t at;
+    uint16_t slots[PAKE_MAX_NETS];
+    uint8_t count;
+    int net;
+    uint8_t psk[32];
+} server_pake_t;
+
+/* Allocated with the first PAKE1: a client never carries it (camex locks
+ * all its memory, mlockall) */
+static server_pake_t *server_pakes = NULL;
+static size_t server_pake_next = 0U;
+static uint8_t server_pake_secret[32];
+static int server_pake_secret_ok = 0;
+
+/* The server's scalar for a network in a session: derived, not stored */
+static void server_pake_scalar(int slot, const uint8_t sid[PAKE_SID_LEN],
+                               const uint8_t ya[32], uint8_t yb[32])
+{
+    crypto_blake2b_ctx c;
+    uint8_t s16[2];
+
+    if (!server_pake_secret_ok) {
+        if (get_random_bytes(server_pake_secret,
+                             sizeof(server_pake_secret)) != 0) {
+            memset(server_pake_secret, 0x5A, sizeof(server_pake_secret));
+        }
+        server_pake_secret_ok = 1;
+    }
+    s16[0] = (uint8_t)(slot >> 8);
+    s16[1] = (uint8_t)slot;
+    crypto_blake2b_keyed_init(&c, 32U, server_pake_secret, 32U);
+    crypto_blake2b_update(&c, sid, PAKE_SID_LEN);
+    crypto_blake2b_update(&c, ya, 32U);
+    crypto_blake2b_update(&c, s16, 2U);
+    crypto_blake2b_final(&c, yb);
+}
+
+/* K of network slot in a session; -1 for a bad point */
+static int server_pake_k(int slot, const uint8_t sid[PAKE_SID_LEN],
+                         const uint8_t ya[32], uint8_t yb_pub[32],
+                         uint8_t k[32])
+{
+    uint8_t yb[32];
+    uint8_t g[32];
+    int rc;
+
+    server_pake_scalar(slot, sid, ya, yb);
+    pake_generator(netw_table[slot].id, sid, g);
+    rc = pake_mult(yb_pub, yb, g) == 0 && pake_mult(k, yb, ya) == 0 ? 0 : -1;
+    crypto_wipe(yb, sizeof(yb));
+    return rc;
+}
+
+static int server_pake_send(int fd, const struct sockaddr_in *to,
+                            const uint8_t *p, size_t len)
+{
+    if (fd >= 0) {
+        return net_tcp_send_frame(fd, p, len) < 0 ? -1 : 0;
+    }
+    return net_send_payload(net_fd, to, p, len) < 0 ? -1 : 0;
+}
+
+static int server_handle_pake1(const uint8_t *buf, size_t len,
+                               const struct sockaddr_in *from, int fd)
+{
+    const camex_crypto_t *ctx = crypto_get_ctx();
+    uint8_t out[5U + PAKE_SID_LEN + 2U + PAKE_MAX_NETS * PAKE_ENTRY_LEN];
+    server_pake_t *ps;
+    server_source_t src;
+    size_t i;
+    size_t o;
+
+    (void)len;
+    if (!ctx->has_server_key) {
+        return -1;
+    }
+    server_source_for(from, fd >= 0, &src);
+    if (server_handshake_budget(&src) < 0) {
+        return -1;
+    }
+    /* A guess of the network's name costs one attempt; a confirmed PAKE3
+     * gives it back (cpaceguard.h) */
+    {
+        int banned_now = 0;
+        int why = cpace_guard_attempt(src.a, g_now, &banned_now);
+        char peer[64];
+
+        if (why != CPACE_GUARD_OK) {
+            net_sockaddr_to_string(from, peer, sizeof(peer));
+            if (banned_now) {
+                log_message(LOG_WARNING, "CPace: %u attempts in a row from %s "
+                            "with none confirmed (guessing a network's "
+                            "name?): its CPace refused for %u s",
+                            server_db.globals.cpace_ban_after_set
+                                ? server_db.globals.cpace_ban_after
+                                : CPACE_GUARD_BAN_AFTER_DEFAULT,
+                            peer,
+                            server_db.globals.cpace_ban_time_set
+                                ? server_db.globals.cpace_ban_time
+                                : CPACE_GUARD_BAN_SECS_DEFAULT);
+            } else {
+                log_peer(LOG_NOTICE, "CPace from %s refused: %s", peer,
+                         why == CPACE_GUARD_BANNED
+                             ? "banned for guessing"
+                             : why == CPACE_GUARD_IP_LIMIT
+                                   ? "too many unconfirmed attempts from it "
+                                     "(cpace_per_ip)"
+                                   : "too many unconfirmed attempts in all "
+                                     "(cpace_total)");
+            }
+            return -1;
+        }
+    }
+    if (server_pakes == NULL) {
+        server_pakes = calloc(SERVER_PAKES, sizeof(*server_pakes));
+        if (server_pakes == NULL) {
+            return -1;
+        }
+    }
+    ps = &server_pakes[server_pake_next];
+    server_pake_next = (server_pake_next + 1U) % SERVER_PAKES;
+    crypto_wipe(ps, sizeof(*ps));
+    memcpy(ps->sid, buf + 5, PAKE_SID_LEN);
+    memcpy(ps->ya, buf + 5 + PAKE_SID_LEN, 32U);
+    ps->from = *from;
+    ps->tcp = fd >= 0 ? 1U : 0U;
+    ps->at = g_now;
+    ps->used = 1U;
+    memcpy(out, CAMEX_MAGIC, 4);
+    out[4] = V2_TYPE_PAKE2;
+    memcpy(out + 5, ps->sid, PAKE_SID_LEN);
+    out[5 + PAKE_SID_LEN] = server_db.globals.allow_new_networks
+                                ? (uint8_t)(PAKE_FLAG_OPEN | PAKE_FLAG_NAME)
+                                : 0U;
+    o = 5U + PAKE_SID_LEN + 2U;
+    for (i = 0U; netw_table != NULL && i < CAMEX_NET_MAX &&
+                 ps->count < PAKE_MAX_NETS; ++i) {
+        uint8_t k[32];
+
+        if (!netw_table[i].active) {
+            continue;
+        }
+        if (server_pake_k((int)i, ps->sid, ps->ya, out + o, k) != 0) {
+            crypto_wipe(k, sizeof(k));
+            return -1;   /* a low-order Ya: nobody's */
+        }
+        pake_tag(out + o + 32U, 's', k, ps->sid, ps->ya, out + o,
+                 ctx->server_pub);
+        crypto_wipe(k, sizeof(k));
+        ps->slots[ps->count++] = (uint16_t)i;
+        o += PAKE_ENTRY_LEN;
+    }
+    out[5 + PAKE_SID_LEN + 1U] = ps->count;
+    return server_pake_send(fd, from, out, o);
+}
+
+static int server_handle_pake3(const uint8_t *buf,
+                               const struct sockaddr_in *from, int fd)
+{
+    const camex_crypto_t *ctx = crypto_get_ctx();
+    size_t i;
+
+    if (server_pakes == NULL) {
+        return -1;
+    }
+    for (i = 0U; i < SERVER_PAKES; ++i) {
+        server_pake_t *ps = &server_pakes[i];
+        uint8_t yb[32], k[32], tag[PAKE_TAG_LEN];
+        unsigned int idx = buf[5 + PAKE_SID_LEN];
+        int slot;
+
+        if (!ps->used || ps->confirmed ||
+            memcmp(ps->sid, buf + 5, PAKE_SID_LEN) != 0 ||
+            !net_sockaddr_equal(&ps->from, from) ||
+            ps->tcp != (fd >= 0 ? 1U : 0U) ||
+            difftime(g_now, ps->at) > (double)SERVER_PAKE_LIFE ||
+            idx >= ps->count) {
+            continue;
+        }
+        slot = ps->slots[idx];
+        if (!netw_table[slot].active ||
+            server_pake_k(slot, ps->sid, ps->ya, yb, k) != 0) {
+            return -1;
+        }
+        pake_tag(tag, 'c', k, ps->sid, ps->ya, yb, ctx->server_pub);
+        if (crypto_verify16(tag, buf + 5 + PAKE_SID_LEN + 1U) != 0) {
+            crypto_wipe(k, sizeof(k));
+            return -1;
+        }
+        pake_psk(ps->psk, k);
+        crypto_wipe(k, sizeof(k));
+        ps->confirmed = 1U;
+        cpace_guard_confirm(ntohl(from->sin_addr.s_addr), g_now);
+        ps->net = slot;
+        ps->at = g_now;
+        return 0;
+    }
+    return -1;
+}
+
+/* The confirmed session of this source, if any */
+static server_pake_t *server_pake_for(const struct sockaddr_in *from, int fd)
+{
+    size_t i;
+
+    if (server_pakes == NULL) {
+        return NULL;
+    }
+    for (i = 0U; i < SERVER_PAKES; ++i) {
+        server_pake_t *ps = &server_pakes[i];
+
+        if (ps->used && ps->confirmed &&
+            net_sockaddr_equal(&ps->from, from) &&
+            ps->tcp == (fd >= 0 ? 1U : 0U) &&
+            difftime(g_now, ps->at) <= (double)SERVER_PAKE_LIFE &&
+            netw_table[ps->net].active) {
+            return ps;
+        }
+    }
+    return NULL;
+}
+
 /* INIT: Noise message 1 with the client's REGISTER as payload */
 static int server_handle_init(const uint8_t *buffer, size_t len,
                               const struct sockaddr_in *from, int fd)
@@ -1858,6 +2380,17 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     int cur_set = 0;
     uint8_t psk_before[32];
     int first;
+    int via_net = 0;
+    uint8_t net_id[CAMEX_NET_ID_LEN];
+    char net_name[CAMEX_NET_NAME_MAX + 1U] = "";
+    uint8_t has_net = 0U;
+    int net = -1;
+    uint16_t net1_before = 0U;
+    uint8_t mesh_req = 0U;
+    int via_pake = 0;
+    uint8_t pake_before = 0U;
+    int pake_net = -1;
+    static uint8_t pake_key[32];   /* the key the INIT used (copied later) */
 
     net_sockaddr_to_string(from, peer, sizeof(peer));
     if (!ctx->has_server_key) {
@@ -1910,10 +2443,55 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     /* The global key first (entry 0 when there is one, tried free), then
      * a live client's own key (#78): its rekeys cost one trial however
      * large the keystore is; then the rest in turn */
+    /* CPace: the key of the confirmed session of this source, or of the
+     * live client there (its rekeys) */
+    {
+        server_pake_t *ps = server_pake_for(from, fd);
+        const uint8_t *cand = NULL;
+
+        if (ps != NULL) {
+            cand = ps->psk;
+            pake_net = ps->net;
+        } else if (src.known != NULL && src.known->pake &&
+                   src.known->net1 != 0U) {
+            cand = src.known->psk_key;
+            pake_net = (int)src.known->net1 - 1;
+        }
+        if (cand != NULL) {
+            hs = base;
+            if (noise_read_msg1(&hs, cand, es, buffer + V2_INIT_HDR,
+                                len - V2_INIT_HDR, payload,
+                                sizeof(payload) - 1U, &payload_len) == 0) {
+                memcpy(pake_key, cand, sizeof(pake_key));
+                used_key = pake_key;
+                via_pake = 1;
+                if (ps != NULL) {
+                    ps->used = 0U;   /* one handshake a session */
+                }
+            } else {
+                noise_wipe(&hs);
+                pake_net = -1;
+            }
+        }
+    }
+    /* A client that joins a network by name: the fixed network key first,
+     * tried free like the global key */
+    if (used_key == NULL && config_networks_enabled()) {
+        hs = base;
+        if (noise_read_msg1(&hs, server_network_key(), es,
+                            buffer + V2_INIT_HDR, len - V2_INIT_HDR,
+                            payload, sizeof(payload) - 1U,
+                            &payload_len) == 0) {
+            used_key = server_network_key();
+            via_net = 1;
+        } else {
+            noise_wipe(&hs);
+        }
+    }
     own = src.known != NULL ? config_ks_find(src.known->psk_key) : -1L;
     ahead = server_keystore_count > 0U &&
             server_keystore[0].owner[0] == '\0' ? 1U : 0U;
-    for (n = 0U; n < server_keystore_count; ++n) {
+    for (n = 0U; used_key == NULL && n < server_keystore_count; ++n) {
         if (own > 0L && n == ahead) {
             i = (size_t)own;
         } else if (own > 0L && n > ahead && n <= (size_t)own) {
@@ -1978,13 +2556,72 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     message[payload_len - V2_TIMESTAMP_LEN] = '\0';
     client_id[0] = '\0';
     local_ip[0] = '\0';
-    if (proto_parse_register(message, client_id, sizeof(client_id),
-                             local_ip, sizeof(local_ip),
-                             &auto_request, &web_port) != 0 ||
+    if (proto_parse_register_ex(message, client_id, sizeof(client_id),
+                                local_ip, sizeof(local_ip),
+                                &auto_request, &web_port, net_id,
+                                &has_net, &mesh_req, net_name) != 0 ||
         server_register_allowed(used_key, client_id, sizeof(client_id),
                                 local_ip, auto_request, from) != 0) {
         noise_wipe(&hs);
         return -1;
+    }
+    /* Networks: a handshake with the network key must name its network;
+     * NET with another key only with the client's own psk= (the global
+     * key is not a network's) */
+    if ((via_net && (!has_net || !auto_request)) ||
+        (has_net && !auto_request) ||
+        (has_net && !via_net &&
+         !keystore_key_owned_by(used_key, client_id))) {
+        log_peer(LOG_WARNING, "Rejected handshake from %s: a network "
+                 "client joins in auto mode, by its network's name or with "
+                 "its own key", peer);
+        noise_wipe(&hs);
+        crypto_wipe(net_id, sizeof(net_id));
+        return -1;
+    }
+    /* CPace: the network is the session's, NET is not sent */
+    if (via_pake) {
+        if (!auto_request || has_net || !netw_table[pake_net].active) {
+            log_peer(LOG_WARNING, "Rejected handshake from %s: a CPace "
+                     "client joins in auto mode", peer);
+            noise_wipe(&hs);
+            return -1;
+        }
+        has_net = 1U;
+        net = pake_net;
+    } else if (has_net) {
+        net = netw_find(net_id);
+        if (net < 0 && server_db.globals.allow_new_networks) {
+            net = netw_create(net_id);
+            if (net >= 0) {
+                char pool[24];
+
+                netw_name_label(net, net_id, net_name);
+                netw_pool_text(net, pool, sizeof(pool));
+                log_message(LOG_NOTICE, "New network %s (pool %s), created "
+                            "by client %s", netw_label(net), pool,
+                            client_id);
+                server_networks_apply();
+            } else {
+                log_peer(LOG_WARNING, "Rejected handshake from %s: no room "
+                         "for another network", peer);
+                noise_wipe(&hs);
+                crypto_wipe(net_id, sizeof(net_id));
+                return -1;
+            }
+        }
+        /* A network made before by a client that sent no name */
+        if (net >= 0) {
+            netw_name_label(net, net_id, net_name);
+        }
+        crypto_wipe(net_id, sizeof(net_id));
+        crypto_wipe(net_name, sizeof(net_name));
+        if (net < 0) {
+            log_peer(LOG_WARNING, "Rejected handshake from %s (client %s): "
+                     "unknown network", peer, client_id);
+            noise_wipe(&hs);
+            return -1;
+        }
     }
 
     /* A captured message 1 replayed later carries an old timestamp. While
@@ -2054,6 +2691,11 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     }
     first = !entry->registered;   /* also restored by a failure */
     memcpy(psk_before, entry->psk_key, sizeof(psk_before));
+    net1_before = entry->net1;
+    pake_before = entry->pake;
+    entry->net1 = has_net ? (uint16_t)(net + 1) : 0U;
+    entry->mesh = mesh_req;
+    entry->pake = via_pake ? 1U : 0U;
     pending_before = entry->pending_ip_be;
     ip_before = entry->ip_be;
     /* --transport both (#178): a client new on TCP (not one that replaces
@@ -2224,7 +2866,23 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
     entry->handshakes++;
     if (first) {
         if (auto_request) {
-            log_message(LOG_INFO, "Registered auto client %s", client_id);
+            char from_text[64];
+            char ipt[16];
+            uint32_t ip = entry->ip_be != 0U ? entry->ip_be
+                                             : entry->pending_ip_be;
+
+            net_sockaddr_to_string(from, from_text, sizeof(from_text));
+            ip_text(ntohl(ip), ipt, sizeof(ipt));
+            if (entry->net1 != 0U) {
+                log_message(LOG_INFO, "Registered auto client %s: %s in "
+                            "network %s, from %s (%s)", client_id, ipt,
+                            netw_label((int)entry->net1 - 1), from_text,
+                            fd >= 0 ? "TCP" : "UDP");
+            } else {
+                log_message(LOG_INFO, "Registered auto client %s: %s, from %s "
+                            "(%s)", client_id, ipt, from_text,
+                            fd >= 0 ? "TCP" : "UDP");
+            }
         } else {
             log_message(LOG_INFO, "Registered client %s", local_ip);
         }
@@ -2245,6 +2903,8 @@ fail:
         /* Addresses this handshake gave or made pending are not kept, nor
          * the session it set up: the entry keeps what it had (#77) */
         server_restore_ip(entry, ip_before, pending_before);
+        entry->net1 = net1_before;
+        entry->pake = pake_before;
         if (next_saved) {
             session_wipe(&entry->next);
             entry->next = next_before;
@@ -2276,6 +2936,534 @@ fail:
     }
     return -1;
 }
+
+
+#ifdef CAMEX_L2
+/*
+ * TAP networks (l2.h): the server is their switch and their gateway.
+ */
+
+
+static int server_l2_net(const server_client_t *e)
+{
+    return e->net1 != 0U && netw_table[e->net1 - 1U].tap;
+}
+
+typedef struct {
+    server_client_t *to;
+    size_t sent;
+} server_l2_ctx_t;
+
+static int server_l2_piece(void *ctx, const uint8_t *payload, size_t len)
+{
+    server_l2_ctx_t *c = ctx;
+    server_client_t *dst = c->to;
+    uint8_t out[1U + L2_FRAG_HDR + L2_PIECE + V2_OVERHEAD];
+    size_t out_len = session_seal(&dst->cur, payload, len, out, sizeof(out));
+    int rc;
+
+    if (out_len == 0U) {
+        return -1;
+    }
+    if (dst->tcp_fd >= 0) {
+        int accepted = 0;
+
+        rc = net_tcp_send_frame_ex(dst->tcp_fd, out, out_len, &accepted);
+        if (!accepted) {
+            return -1;   /* a frame cut short: the rest is not sent */
+        }
+        rc = 0;
+    } else {
+        rc = server_send(dst, out, out_len);
+    }
+    if (rc == 0) {
+        dst->tx_packets++;
+        c->sent += len;
+    }
+    return rc == 0 ? 0 : -1;
+}
+
+/* A frame to one client of a TAP network */
+static int server_l2_send(server_client_t *dst, const uint8_t *frame,
+                          size_t len)
+{
+    server_l2_ctx_t c;
+
+    if (!dst->cur.valid) {
+        return -1;
+    }
+    c.to = dst;
+    c.sent = 0U;
+    if (l2_send_frame(frame, len, server_l2_piece, &c) != 0) {
+        return -1;
+    }
+    dst->tx_bytes += len;
+    return 0;
+}
+
+/* To every other client of network n */
+static void server_l2_flood(int n, const server_client_t *from,
+                            const uint8_t *frame, size_t len)
+{
+    size_t i;
+
+    for (i = 0U; i < server_max_clients; ++i) {
+        server_client_t *c = &server_clients[i];
+
+        if (c != from && c->active && c->registered &&
+            c->net1 == (uint16_t)(n + 1) && c->cur.valid) {
+            (void)server_l2_send(c, frame, len);
+        }
+    }
+}
+
+/* A payload from a client of a TAP network */
+static int server_l2_input(server_client_t *entry, const uint8_t *plain,
+                           size_t plain_len)
+{
+    int n = (int)entry->net1 - 1;
+    size_t slot = (size_t)(entry - server_clients);
+    server_reasm_t *ra;
+    const uint8_t *frame = NULL;
+    long flen;
+    uint8_t gw_mac[6];
+    uint32_t gw_ip = htonl(netw_gateway(n));
+    uint32_t to;
+    int isolated = net_isolation(n);
+
+    if (server_reasm == NULL) {
+        server_reasm = calloc(server_max_clients, sizeof(*server_reasm));
+        if (server_reasm == NULL) {
+            return -1;
+        }
+    }
+    ra = server_reasm[slot];
+    if (ra == NULL && plain_len > 0U && plain[0] == L2_FRAG) {
+        ra = server_reasm[slot] = calloc(1U, sizeof(*ra));
+    }
+    if (ra != NULL && ra->owner != entry->registered_at) {
+        memset(&ra->r, 0, sizeof(ra->r));
+        ra->owner = entry->registered_at;
+    }
+    flen = l2_receive(ra != NULL ? &ra->r : NULL, plain, plain_len, &frame,
+                      g_now);
+    if (flen < 0) {
+        log_peer(LOG_WARNING, "Dropped a malformed frame from client %s",
+                 entry->client_id);
+        return -1;
+    }
+    if (flen == 0) {
+        return 0;
+    }
+    l2_mac_learn(entry->net1, frame + 6, (uint32_t)slot + 1U, g_now);
+    l2_gateway_mac(netw_table[n].id, gw_mac);
+
+    /* ARP for the gateway: the server answers (a network with addresses;
+     * one without has no gateway) */
+    if (!netw_table[n].noaddr) {
+        uint8_t reply[L2_ETH_HDR + 28U];
+        size_t rl = l2_arp_reply(frame, (size_t)flen, gw_ip, gw_mac, reply,
+                                 sizeof(reply));
+
+        if (rl > 0U) {
+            return server_l2_send(entry, reply, rl);
+        }
+    }
+    /* IPv4 to the gateway: into the server's tunnel interface */
+    if (!netw_table[n].noaddr && memcmp(frame, gw_mac, 6) == 0) {
+        if (flen > (long)L2_ETH_HDR && frame[12] == 0x08U &&
+            frame[13] == 0x00U) {
+            return packet_write(frame + L2_ETH_HDR,
+                                (size_t)flen - L2_ETH_HDR);
+        }
+        return 0;
+    }
+    if ((frame[0] & 1U) != 0U) {
+        /* Broadcast, multicast: to everyone else (not with isolation) */
+        if (!isolated) {
+            server_l2_flood(n, entry, frame, (size_t)flen);
+        }
+        return 0;
+    }
+    if (isolated) {
+        entry->isolation_drops++;
+        server_isolation_drops++;
+        return 0;
+    }
+    to = l2_mac_lookup(entry->net1, frame, g_now);
+    if (to != 0U && to - 1U < server_max_clients) {
+        server_client_t *dst = &server_clients[to - 1U];
+
+        if (dst != entry && dst->active && dst->net1 == entry->net1) {
+#ifdef CAMEX_MESH
+            server_relay_count(entry, dst, (size_t)flen);
+#endif
+            return server_l2_send(dst, frame, (size_t)flen);
+        }
+        return 0;
+    }
+    server_l2_flood(n, entry, frame, (size_t)flen);   /* unknown yet */
+    return 0;
+}
+
+/* An IPv4 packet from the tunnel interface to a client of a TAP network:
+ * a frame from the gateway to the client's own MAC */
+static int server_l2_from_tun(server_client_t *dst, const uint8_t *packet,
+                              size_t len)
+{
+    uint8_t frame[L2_ETH_HDR + TUN_PACKET_MAX];
+    int n = (int)dst->net1 - 1;
+
+    if (len > TUN_PACKET_MAX) {
+        return -1;
+    }
+    l2_client_mac(netw_table[n].id, dst->client_id, frame);
+    l2_gateway_mac(netw_table[n].id, frame + 6);
+    frame[12] = 0x08U;
+    frame[13] = 0x00U;
+    memcpy(frame + L2_ETH_HDR, packet, len);
+    return server_l2_send(dst, frame, L2_ETH_HDR + len);
+}
+#endif
+
+
+#ifdef CAMEX_MESH
+/*
+ * Mesh networks (mesh.h): the server learns each mesh client's peer
+ * socket (ENDPOINT), hands pairs their keys and endpoints (PEER?), and
+ * keeps what clients report about their peers (STATS) and how much it
+ * relays between pairs.
+ */
+typedef struct {
+    time_t owner;                 /* the entry's registered_at */
+    struct sockaddr_in p2p;       /* its peer socket after its NAT */
+    time_t p2p_seen;
+    struct sockaddr_in lan;       /* that socket on its own LAN */
+    uint8_t has_lan;
+    char stats[CAMEX_CONTROL_MAX];   /* its last STATS */
+    time_t stats_at;
+} server_mesh_t;
+
+static server_mesh_t **server_meshes = NULL;
+
+static server_mesh_t *mesh_of(const server_client_t *e, int create)
+{
+    size_t slot = (size_t)(e - server_clients);
+    server_mesh_t *m;
+
+    if (server_meshes == NULL) {
+        if (!create) {
+            return NULL;
+        }
+        server_meshes = calloc(server_max_clients, sizeof(*server_meshes));
+        if (server_meshes == NULL) {
+            return NULL;
+        }
+    }
+    m = server_meshes[slot];
+    if (m == NULL && create) {
+        m = server_meshes[slot] = calloc(1U, sizeof(*m));
+    }
+    if (m != NULL && m->owner != e->registered_at) {
+        memset(m, 0, sizeof(*m));   /* another client in the slot */
+        m->owner = e->registered_at;
+    }
+    return m;
+}
+
+/* Pairs the server relays: their traffic for --top */
+#define SERVER_RELAY_PAIRS 256U
+typedef struct {
+    uint32_t a1, b1;              /* slots + 1, from a to b */
+    time_t a_since, b_since;      /* their registered_at: a reused slot */
+    uint64_t bytes;
+    uint64_t mark;
+    uint32_t rate;
+    time_t last;
+} server_relay_t;
+
+static server_relay_t server_relays[SERVER_RELAY_PAIRS];
+
+static void server_relay_count(const server_client_t *from,
+                               const server_client_t *to, size_t len)
+{
+    uint32_t a1 = (uint32_t)(from - server_clients) + 1U;
+    uint32_t b1 = (uint32_t)(to - server_clients) + 1U;
+    uint32_t h = (a1 * 2654435761U) ^ (b1 * 40503U);
+    server_relay_t *victim = NULL;
+    size_t i;
+
+    if (from->net1 == 0U || !netw_table[from->net1 - 1U].mesh) {
+        return;
+    }
+    for (i = 0U; i < 8U; ++i) {
+        server_relay_t *r = &server_relays[(h + i) % SERVER_RELAY_PAIRS];
+
+        if (r->a1 == a1 && r->b1 == b1 && r->a_since == from->registered_at &&
+            r->b_since == to->registered_at) {
+            r->bytes += len;
+            r->last = g_now;
+            return;
+        }
+        if (victim == NULL || r->last < victim->last) {
+            victim = r;
+        }
+    }
+    memset(victim, 0, sizeof(*victim));
+    victim->a1 = a1;
+    victim->b1 = b1;
+    victim->a_since = from->registered_at;
+    victim->b_since = to->registered_at;
+    victim->bytes = len;
+    victim->last = g_now;
+}
+
+static void server_relay_rates(double dt)
+{
+    size_t i;
+
+    for (i = 0U; i < SERVER_RELAY_PAIRS; ++i) {
+        server_relay_t *r = &server_relays[i];
+
+        if (r->a1 == 0U) {
+            continue;
+        }
+        r->rate = (uint32_t)((double)(r->bytes - r->mark) / dt);
+        r->mark = r->bytes;
+    }
+}
+
+/* A control message to a client inside its session */
+static int server_send_control(server_client_t *e, const char *text)
+{
+    uint8_t plain[CAMEX_CONTROL_MAX];
+    uint8_t out[CAMEX_CONTROL_MAX + V2_OVERHEAD];
+    size_t n = strlen(text);
+    size_t len;
+
+    if (!e->cur.valid || n + 1U > sizeof(plain)) {
+        return -1;
+    }
+    plain[0] = MESH_CTRL;
+    memcpy(plain + 1, text, n);
+    len = session_seal(&e->cur, plain, n + 1U, out, sizeof(out));
+    if (len == 0U) {
+        return -1;
+    }
+    if (e->tcp_fd >= 0) {
+        int accepted = 0;
+
+        (void)net_tcp_send_frame_ex(e->tcp_fd, out, len, &accepted);
+        return accepted ? 0 : -1;
+    }
+    return server_send(e, out, len);
+}
+
+static void sock_text(const struct sockaddr_in *a, char *buf, size_t size)
+{
+    char ip[INET_ADDRSTRLEN];
+
+    inet_ntop(AF_INET, &a->sin_addr, ip, sizeof(ip));
+    snprintf(buf, size, "%s:%u", ip, (unsigned)ntohs(a->sin_port));
+}
+
+/* "PEER ..." to `to` about `about` */
+static void server_peer_msg(server_client_t *to, server_client_t *about,
+                            const char *key64, uint32_t pair)
+{
+    server_mesh_t *m = mesh_of(about, 0);
+    char msg[512], ip[16] = "-", mac[18] = "-", pub[32] = "-", lan[32] = "-";
+
+    if (about->ip_be != 0U) {
+        ip_text(ntohl(about->ip_be), ip, sizeof(ip));
+    }
+#ifdef CAMEX_L2
+    if (netw_table[about->net1 - 1U].tap) {
+        uint8_t mm[6];
+
+        l2_client_mac(netw_table[about->net1 - 1U].id, about->client_id, mm);
+        l2_mac_text(mm, mac, sizeof(mac));
+    }
+#endif
+    if (m != NULL && m->p2p_seen != 0) {
+        sock_text(&m->p2p, pub, sizeof(pub));
+    }
+    if (m != NULL && m->has_lan) {
+        sock_text(&m->lan, lan, sizeof(lan));
+    }
+    snprintf(msg, sizeof(msg), "PEER id=%s ip=%s mac=%s pub=%s lan=%s key=%s "
+             "pair=%08x", about->client_id, ip, mac, pub, lan, key64,
+             (unsigned)pair);
+    (void)server_send_control(to, msg);
+}
+
+/* PEER? from a client: the other end of a pair */
+static void server_mesh_ask(server_client_t *e, const char *msg)
+{
+    const char *ip = strstr(msg, "ip=");
+#ifdef CAMEX_L2
+    const char *mac = strstr(msg, "mac=");
+#endif
+    server_client_t *peer = NULL;
+    const char *why = NULL;
+    char what[40];
+    server_mesh_t *me = mesh_of(e, 0);
+    server_mesh_t *pm;
+    int n = (int)e->net1 - 1;
+
+    if (ip != NULL) {
+        struct in_addr a;
+        char t[16];
+        size_t l = strcspn(ip + 3, " ");
+
+        snprintf(t, sizeof(t), "%.*s", (int)(l < 15U ? l : 15U), ip + 3);
+        snprintf(what, sizeof(what), "ip=%s", t);
+        if (inet_pton(AF_INET, t, &a) == 1) {
+            peer = server_find_by_ip(a.s_addr);
+        }
+    }
+#ifdef CAMEX_L2
+    else if (mac != NULL) {
+        uint8_t m[6];
+        char t[18];
+
+        snprintf(t, sizeof(t), "%.17s", mac + 4);
+        snprintf(what, sizeof(what), "mac=%s", t);
+        if (l2_mac_parse(t, m) == 0) {
+            uint32_t s1 = l2_mac_lookup(e->net1, m, g_now);
+
+            if (s1 != 0U && s1 - 1U < server_max_clients) {
+                uint8_t own[6];
+
+                peer = &server_clients[s1 - 1U];
+                /* Only the peer's own MAC: a bridge's LAN goes on
+                 * through the server */
+                l2_client_mac(netw_table[n].id, peer->client_id, own);
+                if (memcmp(own, m, 6) != 0) {
+                    peer = NULL;
+                    why = "a device behind a bridge";
+                }
+            }
+        }
+    }
+#endif
+    else {
+        return;
+    }
+    if (peer == NULL || peer == e || !peer->active || !peer->registered ||
+        peer->net1 != e->net1) {
+        why = why != NULL ? why : "no such client";
+    } else if (!peer->mesh) {
+        why = "the peer cannot go peer to peer";
+    } else if (net_isolation(n)) {
+        why = "client_isolation";
+    } else if (me == NULL || me->p2p_seen == 0 ||
+               (pm = mesh_of(peer, 0)) == NULL || pm->p2p_seen == 0) {
+        why = "no peer socket yet";
+    }
+    if (why != NULL) {
+        char out[128];
+
+        snprintf(out, sizeof(out), "NOPEER %s why=%s", what, why);
+        for (size_t k = 0U; out[k] != '\0'; ++k) {
+            if (k > 7U && out[k] == ' ' && strncmp(out + k + 1, "why=", 4) != 0
+                && k > strlen("NOPEER ") + strlen(what) + 4U) {
+                out[k] = '_';   /* one token for the reason */
+            }
+        }
+        (void)server_send_control(e, out);
+        return;
+    }
+    {
+        uint8_t key[32];
+        char key64[KEY_B64_LEN + 1U];
+        uint32_t pair = 0U;
+
+        if (get_random_bytes(key, sizeof(key)) != 0 ||
+            get_random_bytes(&pair, sizeof(pair)) != 0 || pair == 0U) {
+            return;
+        }
+        key_base64_encode(key, sizeof(key), key64, sizeof(key64));
+        crypto_wipe(key, sizeof(key));
+        server_peer_msg(e, peer, key64, pair);
+        server_peer_msg(peer, e, key64, pair);
+        crypto_wipe(key64, sizeof(key64));
+        log_message(LOG_INFO, "Network %s: peers %s and %s try a direct "
+                    "path", netw_label(n), e->client_id, peer->client_id);
+    }
+}
+
+static void server_mesh_control(server_client_t *e, const uint8_t *data,
+                                size_t len)
+{
+    char msg[CAMEX_CONTROL_MAX];
+    server_mesh_t *m;
+
+    if (!e->mesh || e->net1 == 0U || !netw_table[e->net1 - 1U].mesh ||
+        len >= sizeof(msg)) {
+        return;
+    }
+    memcpy(msg, data, len);
+    msg[len] = '\0';
+    if (strncmp(msg, "PEER? ", 6) == 0) {
+        server_mesh_ask(e, msg + 6);
+    } else if (strncmp(msg, "LAN ", 4) == 0) {
+        char ip[16];
+        unsigned int port;
+
+        m = mesh_of(e, 1);
+        if (m != NULL && sscanf(msg + 4, "%15[0-9.]:%u", ip, &port) == 2 &&
+            port > 0U && port < 65536U &&
+            inet_pton(AF_INET, ip, &m->lan.sin_addr) == 1) {
+            m->lan.sin_family = AF_INET;
+            m->lan.sin_port = htons((uint16_t)port);
+            m->has_lan = 1U;
+        }
+    } else if (strncmp(msg, "STATS", 5) == 0) {
+        m = mesh_of(e, 1);
+        if (m != NULL) {
+            snprintf(m->stats, sizeof(m->stats), "%s", msg + 5);
+            m->stats_at = g_now;
+        }
+    }
+}
+
+/* ENDPOINT: a mesh client's peer socket, sealed with its session */
+static int server_handle_endpoint(const uint8_t *buffer, size_t len,
+                                  const struct sockaddr_in *from, int fd)
+{
+    uint32_t idx = v2_data_receiver(buffer);
+    uint32_t slot1 = idx & 0xFFFFU;
+    server_client_t *c;
+    session_t *s = NULL;
+    uint8_t plain[16];
+    size_t plain_len = 0U;
+    server_mesh_t *m;
+
+    if (fd >= 0 || slot1 == 0U || slot1 > server_max_clients) {
+        return -1;
+    }
+    c = &server_clients[slot1 - 1U];
+    if (!c->active || !c->mesh) {
+        return -1;
+    }
+    if (c->cur.valid && c->cur.local_index == idx) {
+        s = &c->cur;
+    } else if (c->next.valid && c->next.local_index == idx) {
+        s = &c->next;
+    }
+    if (s == NULL || session_open_as(s, V2_TYPE_ENDPOINT, buffer, len, plain,
+                                     sizeof(plain), &plain_len) != 0) {
+        return -1;
+    }
+    m = mesh_of(c, 1);
+    if (m != NULL) {
+        m->p2p = *from;
+        m->p2p_seen = g_now;
+    }
+    return 0;
+}
+#endif
 
 /* DATA: find the session by the receiver index, open it, forward */
 static int server_handle_data(const uint8_t *buffer, size_t len,
@@ -2382,6 +3570,18 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
         return 0;
     }
 
+    /* A control message (mesh.h) */
+    if (plain[0] == 0xC0U) {
+#ifdef CAMEX_MESH
+        server_mesh_control(entry, plain + 1, plain_len - 1U);
+#endif
+        return 0;
+    }
+#ifdef CAMEX_L2
+    if (server_l2_net(entry)) {
+        return server_l2_input(entry, plain, plain_len);
+    }
+#endif
     if (ipv4_parse_endpoints(plain, plain_len, &src_ip_be, &dst_ip_be) != 0) {
         return 0;
     }
@@ -2401,13 +3601,27 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
                  peer, entry->client_id, claimed);
         return -1;
     }
-    /* client_isolation (#83): a packet for another client never reaches
-     * the tunnel interface, so its firewall cannot stop it; drop it here.
-     * Traffic to and from the server is not touched. */
-    if (server_client_isolation()) {
+    /* Networks never meet: a packet for another network's client or
+     * address (the auto pool counts as one) is dropped here, it must not
+     * reach the tunnel interface either */
+    {
         const server_client_t *to = server_find_by_ip(dst_ip_be);
+        int my = entry_net(entry);
+        int other = to != NULL ? entry_net(to) : addr_class(dst_ip_be);
 
-        if (to != NULL && to != entry) {
+        if (other != -2 && other != my) {
+            entry->isolation_drops++;
+            server_isolation_drops++;
+            log_peer(LOG_INFO, "Dropped packet from client %s to another "
+                     "network", entry->client_id[0] != '\0'
+                                    ? entry->client_id : "(manual)");
+            return 0;
+        }
+        /* client_isolation (#83), per network: a packet for another
+         * client never reaches the tunnel interface, so its firewall
+         * cannot stop it; drop it here. Traffic to and from the server is
+         * not touched. */
+        if (to != NULL && to != entry && net_isolation(my)) {
             entry->isolation_drops++;
             server_isolation_drops++;
             log_peer(LOG_INFO, "Dropped packet from client %s to client %s "
@@ -2418,6 +3632,11 @@ static int server_handle_data(const uint8_t *buffer, size_t len,
                                                : "(manual)");
             return 0;
         }
+#ifdef CAMEX_MESH
+        if (to != NULL && to != entry) {
+            server_relay_count(entry, to, plain_len);
+        }
+#endif
     }
     return server_forward_packet(plain, plain_len, src_ip_be, dst_ip_be);
 }
@@ -2430,16 +3649,28 @@ int server_forward_packet(const uint8_t *packet, size_t len,
     uint8_t out[TUN_PACKET_MAX + V2_OVERHEAD];
     size_t out_len;
 
-    (void)src_ip_be;
-
     dst = server_find_by_ip(dst_ip_be);
     if (dst == NULL) {
         /* Not a client: the packet is for the server's own network */
         return packet_write(packet, len);
     }
+    /* From the tunnel interface: the host may route between networks,
+     * camex does not deliver it (the server's own addresses may) */
+    {
+        int from_class = addr_class(src_ip_be);
+
+        if (from_class != -2 && from_class != entry_net(dst)) {
+            return 0;
+        }
+    }
     if (!dst->cur.valid) {
         return -1;
     }
+#ifdef CAMEX_L2
+    if (server_l2_net(dst)) {
+        return server_l2_from_tun(dst, packet, len);
+    }
+#endif
     out_len = session_seal(&dst->cur, packet, len, out, sizeof(out));
     if (out_len == 0U) {
         return -1;
@@ -2465,6 +3696,30 @@ int server_forward_packet(const uint8_t *packet, size_t len,
     return rc;
 }
 
+/* KEYREQ: a client's first contact without the server's public key. The
+ * answer is shorter than the request; the handshake budget limits them */
+static int server_handle_keyreq(const struct sockaddr_in *from, int fd)
+{
+    const camex_crypto_t *ctx = crypto_get_ctx();
+    uint8_t reply[V2_KEY_LEN];
+    server_source_t src;
+
+    if (!ctx->has_server_key) {
+        return -1;
+    }
+    server_source_for(from, fd >= 0, &src);
+    if (server_handshake_budget(&src) < 0) {
+        return -1;
+    }
+    memcpy(reply, CAMEX_MAGIC, 4);
+    reply[4] = V2_TYPE_KEY;
+    memcpy(reply + 5, ctx->server_pub, 32);
+    if (fd >= 0) {
+        return net_tcp_send_frame(fd, reply, sizeof(reply)) < 0 ? -1 : 0;
+    }
+    return net_send_payload(net_fd, from, reply, sizeof(reply)) < 0 ? -1 : 0;
+}
+
 int server_handle_packet(const uint8_t *buffer, size_t len,
                          const struct sockaddr_in *from, int fd)
 {
@@ -2476,6 +3731,16 @@ int server_handle_packet(const uint8_t *buffer, size_t len,
     switch (v2_packet_type(buffer, len)) {
     case V2_TYPE_INIT:
         return server_handle_init(buffer, len, from, fd);
+    case V2_TYPE_KEYREQ:
+        return server_handle_keyreq(from, fd);
+    case V2_TYPE_PAKE1:
+        return server_handle_pake1(buffer, len, from, fd);
+    case V2_TYPE_PAKE3:
+        return server_handle_pake3(buffer, from, fd);
+#ifdef CAMEX_MESH
+    case V2_TYPE_ENDPOINT:
+        return server_handle_endpoint(buffer, len, from, fd);
+#endif
     case V2_TYPE_DATA:
         return server_handle_data(buffer, len, from, fd);
     default:
@@ -2728,9 +3993,541 @@ static const char *status_key(const server_client_t *c)
                ? "own" : "global";
 }
 
+
+#ifdef CAMEX_MESH
+/* Mesh networks in the status: the pairs the server relays (traffic it
+ * sees), and the peers the clients report (STATS; direct paths the server
+ * does not see). JSON: after the clients array, "relayed" and "peers". */
+static void status_mesh(status_buf_t *b, int json)
+{
+    size_t i;
+    unsigned int shown = 0U;
+
+    if (json) {
+        sb_printf(b, "],\"relayed\":[");
+    }
+    for (i = 0U; i < SERVER_RELAY_PAIRS; ++i) {
+        const server_relay_t *r = &server_relays[i];
+        const server_client_t *a;
+        const server_client_t *c;
+        char tot[24], rate[24];
+
+        if (r->a1 == 0U || r->a1 > server_max_clients ||
+            r->b1 > server_max_clients ||
+            difftime(g_now, r->last) > 600.0) {
+            continue;
+        }
+        a = &server_clients[r->a1 - 1U];
+        c = &server_clients[r->b1 - 1U];
+        if (!a->active || !c->active) {
+            continue;
+        }
+        if (json) {
+            sb_printf(b, "%s{\"from\":", shown > 0U ? "," : "");
+            sb_json_str(b, a->client_id);
+            sb_printf(b, ",\"to\":");
+            sb_json_str(b, c->client_id);
+            sb_printf(b, ",\"bytes\":%llu,\"rate\":%u}",
+                      (unsigned long long)r->bytes, (unsigned)r->rate);
+        } else {
+            if (shown == 0U) {
+                sb_printf(b, "\nRELAYED BY THE SERVER\n%-32s  %10s  %10s\n",
+                          "FROM -> TO", "RATE", "TOTAL");
+            }
+            status_bytes(tot, sizeof(tot), r->bytes);
+            status_bytes(rate, sizeof(rate), r->rate);
+            {
+                char pair[80];
+
+                snprintf(pair, sizeof(pair), "%s -> %s", a->client_id,
+                         c->client_id);
+                sb_printf(b, "%-32s  %8s/s  %10s\n", pair, rate, tot);
+            }
+        }
+        ++shown;
+    }
+    if (json) {
+        sb_printf(b, "],\"peers\":[");
+    }
+    shown = 0U;
+    for (i = 0U; server_meshes != NULL && i < server_max_clients; ++i) {
+        const server_client_t *c = &server_clients[i];
+        const server_mesh_t *m = server_meshes[i];
+        const char *p;
+
+        if (m == NULL || !c->active || m->owner != c->registered_at ||
+            m->stats_at == 0) {
+            continue;
+        }
+        /* "|<peer> <state> <rx> <tx> <rx/s> <tx/s> <since>" each */
+        for (p = strchr(m->stats, '|'); p != NULL; p = strchr(p + 1, '|')) {
+            char peer[CAMEX_CLIENT_ID_LEN], state[16];
+            unsigned long long rx, tx;
+            unsigned int rr, tr;
+            long since;
+
+            if (sscanf(p + 1, "%31s %15s %llu %llu %u %u %ld", peer, state,
+                       &rx, &tx, &rr, &tr, &since) != 7) {
+                continue;
+            }
+            if (json) {
+                sb_printf(b, "%s{\"client\":", shown > 0U ? "," : "");
+                sb_json_str(b, c->client_id);
+                sb_printf(b, ",\"peer\":");
+                sb_json_str(b, peer);
+                sb_printf(b, ",\"state\":\"%s\",\"rx_bytes\":%llu,"
+                          "\"tx_bytes\":%llu,\"rx_rate\":%u,\"tx_rate\":%u,"
+                          "\"reported_s\":%.0f}", state, rx, tx, rr, tr,
+                          difftime(g_now, m->stats_at));
+            } else {
+                char a[24], t[24], pair[80];
+
+                if (shown == 0U) {
+                    sb_printf(b, "\nPEERS (as the clients report them)\n"
+                              "%-32s  %-8s  %10s  %10s\n", "CLIENT -> PEER",
+                              "PATH", "RX/s", "TX/s");
+                }
+                status_bytes(a, sizeof(a), rr);
+                status_bytes(t, sizeof(t), tr);
+                snprintf(pair, sizeof(pair), "%s -> %s", c->client_id, peer);
+                sb_printf(b, "%-32s  %-8s  %8s/s  %8s/s\n", pair, state, a, t);
+            }
+            ++shown;
+        }
+    }
+    /* JSON: the caller's "]," closes "peers" */
+}
+#endif
+
+/* The networks: header lines of the table, or "networks":[...], in b */
+static void status_networks(status_buf_t *b, int json)
+{
+    size_t i;
+    size_t k;
+    unsigned int shown = 0U;
+
+    if (json) {
+        sb_printf(b, "\"allow_new_networks\":%s,\"networks\":[",
+                  server_db.globals.allow_new_networks ? "true" : "false");
+    }
+    for (i = 0U; netw_table != NULL && i < CAMEX_NET_MAX; ++i) {
+        const camex_network_t *t = &netw_table[i];
+        char pool[24];
+        unsigned int clients = 0U;
+
+        if (!t->active) {
+            continue;
+        }
+        for (k = 0U; k < server_max_clients; ++k) {
+            if (server_clients[k].active && server_clients[k].registered &&
+                server_clients[k].net1 == i + 1U) {
+                ++clients;
+            }
+        }
+        netw_pool_text((int)i, pool, sizeof(pool));
+        if (json) {
+            sb_printf(b, "%s{\"label\":", shown > 0U ? "," : "");
+            sb_json_str(b, t->label);
+            sb_printf(b, ",\"pool\":\"%s\",\"listed\":%s,\"clients\":%u,"
+                      "\"client_isolation\":%s}", pool,
+                      t->listed ? "true" : "false", clients,
+                      net_isolation((int)i) ? "true" : "false");
+        } else {
+            sb_printf(b, "%s%s %s, %u client%s%s%s", shown == 0U
+                                                         ? "networks: "
+                                                         : "; ",
+                      t->label, pool, clients, clients == 1U ? "" : "s",
+                      t->listed ? "" : " (new)",
+                      net_isolation((int)i) ? ", isolated" : "");
+        }
+        ++shown;
+    }
+    if (json) {
+        sb_printf(b, "],");
+    } else if (shown > 0U) {
+        sb_printf(b, "\n");
+    }
+    /* CPace attempts (cpaceguard.h): only where there is CPace */
+    if (shown > 0U || server_db.globals.allow_new_networks) {
+        cpace_guard_stats_t cs;
+
+        cpace_guard_stats(&cs, g_now);
+        if (json) {
+            sb_printf(b, "\"cpace\":{\"attempts\":%lu,\"confirmed\":%lu,"
+                      "\"refused\":%lu,\"bans\":%lu,\"banned_now\":%u},",
+                      cs.attempts, cs.confirmed, cs.refused, cs.bans,
+                      cs.banned_now);
+        } else if (cs.attempts > 0UL || cs.refused > 0UL) {
+            sb_printf(b, "cpace: %lu attempts, %lu confirmed, %lu refused, "
+                      "%lu bans (%u banned now)\n", cs.attempts, cs.confirmed,
+                      cs.refused, cs.bans, cs.banned_now);
+        }
+    }
+}
+
+/* --top: the clients by traffic, busiest first */
+static int status_rate_cmp(const void *a, const void *b)
+{
+    const server_client_t *x = &server_clients[*(const size_t *)a];
+    const server_client_t *y = &server_clients[*(const size_t *)b];
+    uint64_t rx = (uint64_t)x->rx_rate + x->tx_rate;
+    uint64_t ry = (uint64_t)y->rx_rate + y->tx_rate;
+
+    if (rx != ry) {
+        return rx > ry ? -1 : 1;
+    }
+    return *(const size_t *)a < *(const size_t *)b ? -1 : 1;
+}
+
+/* --top: a rate in Mbit/s, "-" when idle */
+static void top_mbit(char *buf, size_t size, uint64_t bytes_per_s)
+{
+    double m = (double)bytes_per_s * 8.0 / 1e6;
+
+    if (bytes_per_s == 0U) {
+        snprintf(buf, size, "-");
+    } else if (m < 0.1) {
+        snprintf(buf, size, "<0.1");
+    } else {
+        snprintf(buf, size, "%.1f", m);
+    }
+}
+
+typedef struct {
+    int id_w, addr_w, ep_w, any_name;
+} top_cols_t;
+
+static void top_client_row(status_buf_t *b, const top_cols_t *w,
+                           const server_client_t *c)
+{
+    char ip[16], pend[16], addr[48], ep[64], seen[32], rr[16], tr[16];
+    char rx[24], tx[24], idbuf[CAMEX_CLIENT_ID_LEN];
+    const char *name = status_name(c->client_id);
+    int wp = config_db_web_port(c->client_id, c->web_port);
+    double last = c->last_data != 0 ? difftime(g_now, c->last_data) : -1.0;
+
+    ip_text(ntohl(c->ip_be), ip, sizeof(ip));
+    if (c->pending_ip_be != 0U) {
+        ip_text(ntohl(c->pending_ip_be), pend, sizeof(pend));
+        snprintf(addr, sizeof(addr), "%s -> %s", ip, pend);
+    } else {
+        snprintf(addr, sizeof(addr), "%s", ip);
+    }
+    if (wp > 0) {
+        size_t al = strlen(addr);
+
+        snprintf(addr + al, sizeof(addr) - al, ":%d", wp);
+    }
+    net_sockaddr_to_string(&c->addr, ep, sizeof(ep));
+    if (last < 0.0) {
+        snprintf(seen, sizeof(seen), "-");
+    } else {
+        status_dur(seen, sizeof(seen), last);
+    }
+    top_mbit(rr, sizeof(rr), c->rx_rate);
+    top_mbit(tr, sizeof(tr), c->tx_rate);
+    status_bytes(rx, sizeof(rx), c->rx_bytes);
+    status_bytes(tx, sizeof(tx), c->tx_bytes);
+    sb_printf(b, "  %-*s  %-*s  %-*s  %-3s  %9s  %10s  %10s  %10s  %5s%s%s\n",
+              w->id_w, status_id(idbuf, sizeof(idbuf), c->client_id),
+              w->addr_w, addr, w->ep_w, ep, c->tcp_fd >= 0 ? "TCP" : "UDP",
+              rr, tr, rx, tx, seen, name != NULL ? "  " : "",
+              name != NULL ? name : "");
+}
+
+static void top_client_head(status_buf_t *b, const top_cols_t *w)
+{
+    sb_printf(b, "  %-*s  %-*s  %-*s  %-3s  %9s  %10s  %10s  %10s  %5s%s\n",
+              w->id_w, "CLIENT", w->addr_w, "ADDRESS", w->ep_w, "ENDPOINT",
+              "VIA", "IN Mbit/s", "OUT Mbit/s", "IN", "OUT", "SEEN",
+              w->any_name ? "  NAME" : "");
+}
+
+#ifdef CAMEX_MESH
+/* A pair of peers in --top: both clients' reports and the server's relay
+ * of their packets, put together */
+typedef struct {
+    char a[CAMEX_CLIENT_ID_LEN], b[CAMEX_CLIENT_ID_LEN];
+    char state[16];
+    uint64_t rate;     /* bytes/s, both ways */
+} top_pair_t;
+
+#define TOP_PAIRS 64U
+
+static top_pair_t *top_pair_of(top_pair_t *pairs, size_t *n, const char *x,
+                               const char *y)
+{
+    const char *a = strcmp(x, y) <= 0 ? x : y;
+    const char *bb = strcmp(x, y) <= 0 ? y : x;
+    size_t i;
+
+    for (i = 0U; i < *n; ++i) {
+        if (strcmp(pairs[i].a, a) == 0 && strcmp(pairs[i].b, bb) == 0) {
+            return &pairs[i];
+        }
+    }
+    if (*n >= TOP_PAIRS) {
+        return NULL;
+    }
+    memset(&pairs[*n], 0, sizeof(pairs[*n]));
+    snprintf(pairs[*n].a, sizeof(pairs[*n].a), "%s", a);
+    snprintf(pairs[*n].b, sizeof(pairs[*n].b), "%s", bb);
+    return &pairs[(*n)++];
+}
+
+/* The pairs of network n1 (its slot + 1; 0: clients without a network) */
+static void top_mesh_lines(status_buf_t *b, const top_cols_t *w, uint32_t n1)
+{
+    static top_pair_t pairs[TOP_PAIRS];
+    size_t np = 0U;
+    size_t i;
+
+    for (i = 0U; server_meshes != NULL && i < server_max_clients; ++i) {
+        const server_client_t *c = &server_clients[i];
+        const server_mesh_t *m = server_meshes[i];
+        const char *p;
+
+        if (m == NULL || !c->active || c->net1 != n1 ||
+            m->owner != c->registered_at || m->stats_at == 0 ||
+            difftime(g_now, m->stats_at) > 90.0) {
+            continue;
+        }
+        for (p = strchr(m->stats, '|'); p != NULL; p = strchr(p + 1, '|')) {
+            char peer[CAMEX_CLIENT_ID_LEN], state[16];
+            unsigned long long rx, tx;
+            unsigned int rr, tr;
+            long since;
+            top_pair_t *t;
+
+            if (sscanf(p + 1, "%31s %15s %llu %llu %u %u %ld", peer, state,
+                       &rx, &tx, &rr, &tr, &since) != 7 ||
+                strcmp(state, "none") == 0) {
+                continue;
+            }
+            t = top_pair_of(pairs, &np, c->client_id, peer);
+            if (t == NULL) {
+                continue;
+            }
+            if (t->state[0] == '\0' || strcmp(state, "direct") == 0) {
+                snprintf(t->state, sizeof(t->state), "%s",
+                         strcmp(state, "relay") == 0 ? "relayed" : state);
+            }
+            if ((uint64_t)rr + tr > t->rate) {
+                t->rate = (uint64_t)rr + tr;
+            }
+        }
+    }
+    /* What the server relays now, live */
+    for (i = 0U; i < SERVER_RELAY_PAIRS; ++i) {
+        const server_relay_t *r = &server_relays[i];
+        const server_client_t *x;
+        const server_client_t *y;
+        top_pair_t *t;
+
+        if (r->a1 == 0U || r->a1 > server_max_clients ||
+            r->b1 == 0U || r->b1 > server_max_clients ||
+            difftime(g_now, r->last) > 60.0) {
+            continue;
+        }
+        x = &server_clients[r->a1 - 1U];
+        y = &server_clients[r->b1 - 1U];
+        if (!x->active || !y->active || x->net1 != n1) {
+            continue;
+        }
+        t = top_pair_of(pairs, &np, x->client_id, y->client_id);
+        if (t == NULL) {
+            continue;
+        }
+        if (strcmp(t->state, "direct") != 0) {
+            snprintf(t->state, sizeof(t->state), "relayed");
+            t->rate = 0U;   /* the reports are older: the live rate */
+        }
+    }
+    for (i = 0U; i < SERVER_RELAY_PAIRS; ++i) {
+        const server_relay_t *r = &server_relays[i];
+        top_pair_t *t;
+
+        if (r->a1 == 0U || r->a1 > server_max_clients ||
+            r->b1 == 0U || r->b1 > server_max_clients ||
+            difftime(g_now, r->last) > 60.0 ||
+            server_clients[r->a1 - 1U].net1 != n1) {
+            continue;
+        }
+        t = top_pair_of(pairs, &np, server_clients[r->a1 - 1U].client_id,
+                        server_clients[r->b1 - 1U].client_id);
+        if (t != NULL && strcmp(t->state, "direct") != 0) {
+            t->rate += r->rate;
+        }
+    }
+    for (i = 0U; i < np; ++i) {
+        char rate[16];
+
+        top_mbit(rate, sizeof(rate), pairs[i].rate);
+        sb_printf(b, "  Mesh  %-*s <-> %-*s  %-8s  %s%s\n", w->id_w,
+                  pairs[i].a, w->id_w, pairs[i].b, pairs[i].state, rate,
+                  pairs[i].rate != 0U ? " Mbit/s" : "");
+    }
+}
+
+static uint64_t top_relayed_rate(void)
+{
+    uint64_t sum = 0U;
+    size_t i;
+
+    for (i = 0U; i < SERVER_RELAY_PAIRS; ++i) {
+        if (server_relays[i].a1 != 0U &&
+            difftime(g_now, server_relays[i].last) <= 60.0) {
+            sum += server_relays[i].rate;
+        }
+    }
+    return sum;
+}
+#endif
+
+/* camex --top: a summary, then one block per network (its clients, the
+ * busiest first, and its mesh pairs), then the clients without one */
+static void status_top(status_buf_t *b)
+{
+    top_cols_t w = { 6, 7, 8, 0 };
+    size_t *order = NULL;
+    size_t n = 0U, i, k;
+    size_t slots_used = 0U;
+    uint64_t in = 0U, out = 0U, relayed = 0U;
+    char d[32], when[16];
+    time_t now = time(NULL);
+    struct tm *tmv = localtime(&now);
+    int any_plain = 0;
+
+    for (i = 0U; i < server_max_clients; ++i) {
+        const server_client_t *c = &server_clients[i];
+        char ep[64];
+        int x;
+
+        if (!c->active) {
+            continue;
+        }
+        slots_used++;
+        if (!c->registered) {
+            continue;
+        }
+        n++;
+        in += c->rx_rate;
+        out += c->tx_rate;
+        w.any_name |= status_name(c->client_id) != NULL;
+        any_plain |= c->net1 == 0U;
+        x = (int)strlen(c->client_id[0] != '\0' ? c->client_id : "-");
+        w.id_w = x > w.id_w ? x : w.id_w;
+        net_sockaddr_to_string(&c->addr, ep, sizeof(ep));
+        x = (int)strlen(ep);
+        w.ep_w = x > w.ep_w ? x : w.ep_w;
+        x = c->pending_ip_be != 0U ? 34 : 15;
+        if (config_db_web_port(c->client_id, c->web_port) > 0) {
+            x += 6;
+        }
+        w.addr_w = x > w.addr_w ? x : w.addr_w;
+    }
+#ifdef CAMEX_MESH
+    relayed = top_relayed_rate();
+#endif
+    status_dur(d, sizeof(d), server_started != 0
+                                 ? difftime(g_now, server_started) : 0.0);
+    if (tmv == NULL || strftime(when, sizeof(when), "%H:%M:%S", tmv) == 0U) {
+        when[0] = '\0';
+    }
+    sb_printf(b, "camex %s server   up %s   %s port %d   tunnel %s   %s\n",
+              CAMEX_VERSION, d,
+              current_config.transport == CAMEX_TRANSPORT_TCP    ? "TCP"
+              : current_config.transport == CAMEX_TRANSPORT_BOTH ? "UDP+TCP"
+                                                                 : "UDP",
+              current_config.port,
+              current_config.local_cidr[0] != '\0'
+                  ? current_config.local_cidr : "none", when);
+    sb_printf(b, "Clients %u of %u   In %.1f Mbit/s   Out %.1f Mbit/s   "
+              "Relayed %.1f Mbit/s\n", (unsigned)n,
+              (unsigned)server_max_clients, (double)in * 8.0 / 1e6,
+              (double)out * 8.0 / 1e6, (double)relayed * 8.0 / 1e6);
+    if (server_client_isolation()) {
+        sb_printf(b, "Client isolation on: %llu client-to-client packets "
+                  "dropped\n", (unsigned long long)server_isolation_drops);
+    }
+    (void)slots_used;
+
+    if (n > 0U) {
+        order = malloc(n * sizeof(*order));
+    }
+    if (order != NULL) {
+        size_t m = 0U;
+
+        for (i = 0U; i < server_max_clients && m < n; ++i) {
+            if (server_clients[i].active && server_clients[i].registered) {
+                order[m++] = i;
+            }
+        }
+        n = m;
+        qsort(order, n, sizeof(*order), status_rate_cmp);
+    } else {
+        n = 0U;
+    }
+    /* One block per network, in the server's order */
+    for (k = 0U; netw_table != NULL && k < CAMEX_NET_MAX; ++k) {
+        const camex_network_t *t = &netw_table[k];
+        char pool[24];
+        unsigned int count = 0U;
+
+        if (!t->active) {
+            continue;
+        }
+        for (i = 0U; i < n; ++i) {
+            count += server_clients[order[i]].net1 == (uint32_t)k + 1U;
+        }
+        netw_pool_text((int)k, pool, sizeof(pool));
+        sb_printf(b, "\nNETWORK %s  %s%s%s%s\n", netw_label((int)k), pool,
+                  t->mesh ? ", mesh" : "", t->tap ? ", TAP" : "",
+                  count == 0U ? "   (no clients)" : "");
+        if (count == 0U) {
+            continue;
+        }
+        top_client_head(b, &w);
+        for (i = 0U; i < n; ++i) {
+            if (server_clients[order[i]].net1 == (uint32_t)k + 1U) {
+                top_client_row(b, &w, &server_clients[order[i]]);
+            }
+        }
+#ifdef CAMEX_MESH
+        top_mesh_lines(b, &w, (uint32_t)k + 1U);
+#endif
+    }
+    if (any_plain) {
+        char ip[16];
+
+        ip_text(server_db.globals.pool_net, ip, sizeof(ip));
+        sb_printf(b, "\nCLIENTS  auto pool %s/%u\n", ip,
+                  (unsigned)server_db.globals.pool_prefix);
+        top_client_head(b, &w);
+        for (i = 0U; i < n; ++i) {
+            if (server_clients[order[i]].net1 == 0U) {
+                top_client_row(b, &w, &server_clients[order[i]]);
+            }
+        }
+#ifdef CAMEX_MESH
+        top_mesh_lines(b, &w, 0U);
+#endif
+    }
+    if (n == 0U && netw_table == NULL) {
+        sb_printf(b, "\nNo clients\n");
+    }
+    free(order);
+}
+
 char *server_status(int json, size_t *len)
 {
     status_buf_t b = { NULL, 0U, 0U, 0 };
+    int top = json == 2;
+    int any_net = 0;
+    int net_w = 7;
+    size_t *order = NULL;
+    size_t order_n = 0U;
+    size_t oi;
     char pool[24], ip[16], peer[64];
     size_t i, used = 0U, slots_used = 0U, leased = 0U;
     double up = server_started != 0 ? difftime(g_now, server_started) : 0.0;
@@ -2742,6 +4539,16 @@ char *server_status(int json, size_t *len)
     int id_w = 2, addr_w = 7, peer_w = 4;
     int any_name = 0;   /* the table gets a NAME column (#105) */
     long pid;
+
+    if (top) {
+        status_top(&b);
+        if (b.err) {
+            free(b.p);
+            return NULL;
+        }
+        *len = b.len;
+        return b.p;
+    }
 
 #ifdef _WIN32
     pid = (long)GetCurrentProcessId();
@@ -2764,6 +4571,12 @@ char *server_status(int json, size_t *len)
         }
         used++;
         any_name |= status_name(c->client_id) != NULL;
+        if (c->net1 != 0U) {
+            int nw = (int)strlen(netw_label((int)c->net1 - 1));
+
+            any_net = 1;
+            net_w = nw > net_w ? nw : net_w;
+        }
         w = (int)strlen(c->client_id[0] != '\0' ? c->client_id : "-");
         id_w = w > id_w ? w : id_w;
         net_sockaddr_to_string(&c->addr, peer, sizeof(peer));
@@ -2784,11 +4597,13 @@ char *server_status(int json, size_t *len)
         sb_json_str(&b, current_config.local_cidr);
         sb_printf(&b, ",\"pool\":\"%s\",\"started\":%ld,\"uptime\":%.0f,"
                   "\"slots\":{\"used\":%u,\"max\":%u},"
-                  "\"client_isolation\":%s,\"isolation_drops\":%llu,"
-                  "\"clients\":[", pool, (long)server_started, up,
+                  "\"client_isolation\":%s,\"isolation_drops\":%llu,",
+                  pool, (long)server_started, up,
                   (unsigned)slots_used, (unsigned)server_max_clients,
                   server_client_isolation() ? "true" : "false",
                   (unsigned long long)server_isolation_drops);
+        status_networks(&b, 1);
+        sb_printf(&b, "\"clients\":[");
     } else {
         char d[32];
 
@@ -2806,7 +4621,17 @@ char *server_status(int json, size_t *len)
                       "packets dropped\n",
                       (unsigned long long)server_isolation_drops);
         }
-        if (used > 0U) {
+        status_networks(&b, 0);
+        if (top) {
+            if (used > 0U) {
+                sb_printf(&b, "\n%-*s  %-*s%s%-*s  %-*s  %-3s  %10s  %10s  "
+                          "%10s  %10s  %-9s%s\n", id_w, "ID",
+                          any_net ? net_w : 0, any_net ? "NETWORK" : "",
+                          any_net ? "  " : "", addr_w, "ADDRESS", peer_w,
+                          "PEER", "VIA", "RX/s", "TX/s", "RX", "TX", "LAST",
+                          any_name ? "  NAME" : "");
+            }
+        } else if (used > 0U) {
             sb_printf(&b, "\n%-*s  %-6s  %-6s  %-*s  %-*s  %-3s  %-9s  "
                       "%-9s  %-9s  %5s  %10s  %8s  %10s  %8s%s\n", id_w, "ID",
                       "MODE", "KEY", addr_w, "ADDRESS", peer_w, "PEER", "VIA",
@@ -2815,9 +4640,24 @@ char *server_status(int json, size_t *len)
         }
     }
 
+    /* --top lists the busiest first */
+    if (top && used > 0U) {
+        order = malloc(used * sizeof(*order));
+        if (order != NULL) {
+            for (i = 0U; i < server_max_clients; ++i) {
+                if (server_clients[i].active &&
+                    server_clients[i].registered && order_n < used) {
+                    order[order_n++] = i;
+                }
+            }
+            qsort(order, order_n, sizeof(*order), status_rate_cmp);
+        }
+    }
     used = 0U;
-    for (i = 0U; i < server_max_clients; ++i) {
-        const server_client_t *c = &server_clients[i];
+    for (oi = 0U; oi < (order != NULL ? order_n : server_max_clients);
+         ++oi) {
+        const server_client_t *c = &server_clients[order != NULL
+                                                       ? order[oi] : oi];
         char pend[16] = "", prev[16] = "";
         /* The current connection; "registered" is the first one */
         double since = c->session_since != 0
@@ -2883,6 +4723,14 @@ char *server_status(int json, size_t *len)
             } else {
                 sb_printf(&b, "%.0f", last);
             }
+            sb_printf(&b, ",\"network\":");
+            if (c->net1 != 0U) {
+                sb_json_str(&b, netw_label((int)c->net1 - 1));
+            } else {
+                sb_printf(&b, "null");
+            }
+            sb_printf(&b, ",\"rx_rate\":%u,\"tx_rate\":%u",
+                      (unsigned)c->rx_rate, (unsigned)c->tx_rate);
             sb_printf(&b, ",\"last_handshake_s\":%.0f,\"handshakes\":%u,"
                       "\"rx_packets\":%llu,\"rx_bytes\":%llu,"
                       "\"tx_packets\":%llu,\"tx_bytes\":%llu,"
@@ -2920,6 +4768,25 @@ char *server_status(int json, size_t *len)
             status_dur(d3, sizeof(d3), hs);
             status_bytes(rx, sizeof(rx), c->rx_bytes);
             status_bytes(tx, sizeof(tx), c->tx_bytes);
+            if (top) {
+                char rr[24], tr[24];
+
+                status_bytes(rr, sizeof(rr), c->rx_rate);
+                status_bytes(tr, sizeof(tr), c->tx_rate);
+                sb_printf(&b, "%-*s  %-*s%s%-*s  %-*s  %-3s  %10s  %10s  "
+                          "%10s  %10s  %-9s%s%s\n", id_w,
+                          status_id(idbuf, sizeof(idbuf), c->client_id),
+                          any_net ? net_w : 0,
+                          any_net ? (c->net1 != 0U
+                                         ? netw_label((int)c->net1 - 1)
+                                         : "-") : "",
+                          any_net ? "  " : "", addr_w, addr, peer_w, peer,
+                          c->tcp_fd >= 0 ? "tcp" : "udp", rr, tr, rx, tx, d2,
+                          name != NULL ? "  " : "",
+                          name != NULL ? name : "");
+                used++;
+                continue;
+            }
             /* VIA: its transport (#178) */
             sb_printf(&b, "%-*s  %-6s  %-6s  %-*s  %-*s  %-3s  %-9s  %-9s  "
                       "%-9s  %5u  %10s  %8llu  %10s  %8llu%s%s\n", id_w,
@@ -2934,6 +4801,10 @@ char *server_status(int json, size_t *len)
         }
         used++;
     }
+    free(order);
+#ifdef CAMEX_MESH
+    status_mesh(&b, json);
+#endif
 
     if (json) {
         size_t n = 0U;
@@ -2956,7 +4827,7 @@ char *server_status(int json, size_t *len)
             n++;
         }
         sb_printf(&b, "]}\n");
-    } else if (leased > 0U) {
+    } else if (leased > 0U && !top) {
         sb_printf(&b, "\nAddresses kept for clients that are gone (#81): "
                   "%u\n", (unsigned)leased);
         for (i = 0U, used = 0U; i < server_lease_cap && used < leased; ++i) {
@@ -3209,4 +5080,141 @@ char *server_clients_list(int names, int web, size_t *len)
     }
     *len = b.len;
     return b.p;
+}
+
+int server_networks_sync(void)
+{
+    const camex_server_globals_t *g = &server_db.globals;
+    uint32_t reserved[4];
+    size_t nres = 0U;
+    char ip[16];
+    char mask[16];
+    struct in_addr a;
+    struct in_addr m;
+
+    /* Derived pools stay out of the auto pool and the server's tunnel
+     * network */
+    reserved[nres * 2U] = g->pool_net;
+    reserved[nres * 2U + 1U] = g->pool_prefix;
+    ++nres;
+    if (current_config.local_cidr[0] != '\0' &&
+        parse_local_cidr(current_config.local_cidr, ip, sizeof(ip), mask,
+                         sizeof(mask)) == 0 &&
+        inet_pton(AF_INET, ip, &a) == 1 && inet_pton(AF_INET, mask, &m) == 1) {
+        uint32_t mh = ntohl(m.s_addr);
+        uint8_t p = 0U;
+
+        while (p < 32U && (mh & (0x80000000U >> p)) != 0U) {
+            ++p;
+        }
+        reserved[nres * 2U] = ntohl(a.s_addr) & mh;
+        reserved[nres * 2U + 1U] = p;
+        ++nres;
+    }
+    if (config_networks_enabled() && current_config.local_cidr[0] == '\0') {
+        log_message(LOG_ERR, "Named networks need the server's tunnel: "
+                    "local_cidr= in [server] or --local-cidr");
+        return -1;
+    }
+    return netw_sync(server_db.nets, server_db.net_count,
+                     g->allow_new_networks, g->net_supernet,
+                     g->net_super_prefix, g->net_pool_prefix, reserved,
+                     nres);
+}
+
+void server_networks_apply(void)
+{
+    size_t i;
+
+    if (netw_table == NULL) {
+        return;
+    }
+    for (i = 0U; i < CAMEX_NET_MAX; ++i) {
+        camex_network_t *t = &netw_table[i];
+        uint32_t gw = t->active ? t->pool_net + 1U : 0U;
+
+        if (t->alias_up && (!t->active || t->alias_ip != gw)) {
+            tun_alias_clear((unsigned int)i);
+            t->alias_up = 0U;
+            t->alias_ip = 0U;
+        }
+        if (t->active && !t->noaddr && !t->alias_up && tun_fd >= 0) {
+            if (tun_alias_set((unsigned int)i, gw, t->pool_prefix) == 0) {
+                char pool[24];
+
+                t->alias_up = 1U;
+                t->alias_ip = gw;
+                netw_pool_text((int)i, pool, sizeof(pool));
+                log_message(LOG_INFO, "Network %s: pool %s", t->label, pool);
+            }
+        }
+    }
+    /* Clients whose network went away, or whose address left its pool */
+    for (i = 0U; i < server_max_clients; ++i) {
+        server_client_t *c = &server_clients[i];
+        int n;
+
+        if (!c->active || c->net1 == 0U) {
+            continue;
+        }
+        n = (int)c->net1 - 1;
+        if (netw_table[n].active &&
+            (c->ip_be == 0U || netw_has(n, c->ip_be)) &&
+            (c->pending_ip_be == 0U || netw_has(n, c->pending_ip_be))) {
+            continue;
+        }
+        log_message(LOG_NOTICE, "Ended session of client %s: its network "
+                    "changed", c->client_id);
+        server_drop_entry(c);
+    }
+}
+
+void server_networks_down(void)
+{
+    size_t i;
+
+    if (netw_table == NULL) {
+        return;
+    }
+    for (i = 0U; i < CAMEX_NET_MAX; ++i) {
+        if (netw_table[i].alias_up) {
+            tun_alias_clear((unsigned int)i);
+            netw_table[i].alias_up = 0U;
+        }
+    }
+}
+
+void server_rates_tick(void)
+{
+    static time_t last = 0;
+    double dt;
+    size_t i;
+
+    if (last == 0) {
+        last = g_now;
+        return;
+    }
+    dt = difftime(g_now, last);
+    if (dt < 1.0) {
+        return;
+    }
+    last = g_now;
+    for (i = 0U; i < server_max_clients; ++i) {
+        server_client_t *c = &server_clients[i];
+
+        if (!c->active) {
+            continue;
+        }
+        if (c->rx_bytes < c->rate_rx_mark || c->tx_bytes < c->rate_tx_mark) {
+            c->rate_rx_mark = c->rx_bytes;   /* a reused slot */
+            c->rate_tx_mark = c->tx_bytes;
+        }
+        c->rx_rate = (uint32_t)((double)(c->rx_bytes - c->rate_rx_mark) / dt);
+        c->tx_rate = (uint32_t)((double)(c->tx_bytes - c->rate_tx_mark) / dt);
+        c->rate_rx_mark = c->rx_bytes;
+        c->rate_tx_mark = c->tx_bytes;
+    }
+#ifdef CAMEX_MESH
+    server_relay_rates(dt);
+#endif
 }

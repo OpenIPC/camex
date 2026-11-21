@@ -586,7 +586,7 @@ int main(void)
         if (proto_build_register(&c, buf, sizeof(buf)) != 0 ||
             strstr(buf, " WEB_PORT=8080") == NULL ||
             proto_parse_register(buf, id, sizeof(id), ip, sizeof(ip),
-                                 &autoreq, &wp) != 0 ||
+                                 &autoreq, &wp, NULL, NULL) != 0 ||
             wp != 8080 || !autoreq || strcmp(id, "box1") != 0) {
             fprintf(stderr, "FAIL: REGISTER WEB_PORT=8080 round trip: %d\n", wp);
             ++failures;
@@ -597,7 +597,7 @@ int main(void)
                      badwp[k]);
             id[0] = ip[0] = '\0';
             if (proto_parse_register(buf, id, sizeof(id), ip, sizeof(ip),
-                                     &autoreq, &wp) == 0) {
+                                     &autoreq, &wp, NULL, NULL) == 0) {
                 fprintf(stderr, "FAIL: bad WEB_PORT=%s accepted\n", badwp[k]);
                 ++failures;
             }

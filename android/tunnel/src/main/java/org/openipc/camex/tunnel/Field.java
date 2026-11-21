@@ -74,6 +74,11 @@ public final class Field {
         return new Field(key, label, Kind.SECRET, "", true, "");
     }
 
+    /** A secret that may stay empty (Values.check() says when it may not) */
+    static Field secret(String key, String label, String hint) {
+        return new Field(key, label, Kind.SECRET, "", false, hint);
+    }
+
     static Field choice(String key, String label, String initial, String... choices) {
         return new Field(key, label, Kind.CHOICE, initial, true, "", choices);
     }

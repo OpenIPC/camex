@@ -10,6 +10,7 @@
 #include "util.h"
 #include "log.h"
 #include "camex.h"
+#include "offload.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -25,6 +26,7 @@
 #if !defined(_WIN32) && !defined(__APPLE__)
 #include <arpa/inet.h>
 #include <linux/if_tun.h>
+#include <sys/uio.h>
 #include <net/if.h>
 #include <net/if_arp.h>
 #include <netinet/in.h>
@@ -150,6 +152,48 @@ int tun_is_inherited(void)
     return tun_inherited;
 }
 
+static int tun_l2 = 0;
+static uint8_t tun_l2_mac[6];
+
+void tun_set_l2(int l2, const uint8_t *mac)
+{
+    tun_l2 = l2 ? 1 : 0;
+    if (l2 && mac != NULL) {
+        memcpy(tun_l2_mac, mac, sizeof(tun_l2_mac));
+    }
+}
+
+/* TUN offloads (offload.h): Linux, a TUN device camex makes itself */
+#define CAMEX_IOC_VNET _IOW(0xCA, 1, int)   /* camex-k.c */
+static int tun_offload_ok = 1;
+#if defined(__linux__)
+static int tun_vnet = 0;
+/* camex.ko has write() only: writev() would reach it as two writes, so
+ * header and packet go in one buffer */
+static int tun_vnet_one_buffer = 0;
+static offload_seg_t tun_seg;
+/* Allocated when a device takes offloads (tun_offload_buffers()), so a
+ * camex without them carries none of it: camex locks all its memory */
+static offload_gro_t *tun_gro = NULL;
+static uint8_t *tun_raw = NULL;   /* a TSO packet with its vnet header */
+
+static int tun_offload_buffers(void)
+{
+    if (tun_gro == NULL) {
+        tun_gro = calloc(1U, sizeof(*tun_gro));
+    }
+    if (tun_raw == NULL) {
+        tun_raw = malloc(OFFLOAD_VNET_LEN + OFFLOAD_MAX);
+    }
+    return tun_gro != NULL && tun_raw != NULL ? 0 : -1;
+}
+#endif
+
+void tun_set_offload(int on)
+{
+    tun_offload_ok = on ? 1 : 0;
+}
+
 #if !defined(_WIN32)
 static void copy_ifreq_name(struct ifreq *req, const char *name)
 {
@@ -196,14 +240,14 @@ static void tun_disable_ipv6(const char *ifname)
     fd = open(path, O_RDONLY | TUN_OPEN_CLOEXEC);
     if (fd < 0) {
         if (errno != ENOENT) {
-            log_message(LOG_WARNING, "IPv6 stays on on %s: %s: %s", ifname,
+            log_message(LOG_WARNING, "IPv6 stays on for %s: %s: %s", ifname,
                         path, strerror(errno));
         }
         return;
     }
     if (read(fd, &cur, 1) != 1) {
         /* Unknown before: changing it could not be undone, leave it */
-        log_message(LOG_WARNING, "IPv6 stays on on %s: %s: unreadable",
+        log_message(LOG_WARNING, "IPv6 stays on for %s: %s: unreadable",
                     ifname, path);
         close(fd);
         return;
@@ -214,7 +258,7 @@ static void tun_disable_ipv6(const char *ifname)
     }
     fd = open(path, O_WRONLY | TUN_OPEN_CLOEXEC);
     if (fd < 0 || write(fd, "1", 1) != 1) {
-        log_message(LOG_WARNING, "IPv6 stays on on %s: %s: %s", ifname, path,
+        log_message(LOG_WARNING, "IPv6 stays on for %s: %s: %s", ifname, path,
                     strerror(errno));
     } else if (cur == '0') {
         tun_ipv6_was = cur;
@@ -466,6 +510,12 @@ static int set_ip_windows(const char *adapter_name,
 int tun_create_device(const char *local_ip, const char *netmask,
                       int mtu, const char *tun_dev_override)
 {
+#if defined(_WIN32) || defined(__APPLE__)
+    if (tun_l2) {
+        log_message(LOG_ERR, "TAP networks need a Linux client");
+        return -1;
+    }
+#endif
     (void)local_ip;
     (void)netmask;
     (void)mtu;
@@ -631,6 +681,7 @@ int tun_create_device(const char *local_ip, const char *netmask,
     static const char DEV_NET_TUN[] = "/dev/net/tun";
     static const char DEV_CAMEX[]   = "/dev/camex";
     const char *p;
+    int offload_want;
 
     if (local_ip == NULL || netmask == NULL || mtu <= 0) {
         return -1;
@@ -638,6 +689,7 @@ int tun_create_device(const char *local_ip, const char *netmask,
     /* A failure before tun_disable_ipv6() must not put back a value saved
      * for an earlier interface */
     tun_ipv6_was = 0;
+    offload_want = tun_offload_ok && !tun_l2 && tun_offload_buffers() == 0;
 
     if (tun_dev_override != NULL && tun_dev_override[0] != '\0') {
         devpath_used = tun_dev_override;
@@ -650,8 +702,9 @@ int tun_create_device(const char *local_ip, const char *netmask,
     } else {
         fd = open(DEV_NET_TUN, O_RDWR | TUN_OPEN_CLOEXEC);
         if (fd >= 0) {
-            copy_ifreq_name(&ifr, "tun%d");
-            ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
+            copy_ifreq_name(&ifr, tun_l2 ? "tap%d" : "tun%d");
+            ifr.ifr_flags = (short)((tun_l2 ? IFF_TAP : IFF_TUN) | IFF_NO_PI |
+                                    (offload_want ? IFF_VNET_HDR : 0));
             if (ioctl(fd, TUNSETIFF, (void *)&ifr) >= 0) {
                 devpath_used  = DEV_NET_TUN;
                 use_tunsetiff = 1;
@@ -676,14 +729,16 @@ int tun_create_device(const char *local_ip, const char *netmask,
 
     if (!use_tunsetiff) {
         if (strcmp(devpath_used, DEV_NET_TUN) == 0) {
-            copy_ifreq_name(&ifr, "tun%d");
-            ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
+            copy_ifreq_name(&ifr, tun_l2 ? "tap%d" : "tun%d");
+            ifr.ifr_flags = (short)((tun_l2 ? IFF_TAP : IFF_TUN) | IFF_NO_PI |
+                                    (offload_want ? IFF_VNET_HDR : 0));
             if (ioctl(fd, TUNSETIFF, (void *)&ifr) < 0) {
                 print_errno_message(LOG_ERR, "ioctl(TUNSETIFF)");
                 close_tun_creation(-1, fd);
                 return -1;
             }
             snprintf(tun_name, sizeof(tun_name), "%s", ifr.ifr_name);
+            use_tunsetiff = 1;
         } else {
             p = strrchr(devpath_used, '/');
             strncpy(tun_name, (p != NULL) ? p + 1 : devpath_used,
@@ -692,7 +747,40 @@ int tun_create_device(const char *local_ip, const char *netmask,
         }
     }
 
-    log_message(LOG_INFO, "TUN backend: %s (%s)", tun_name, devpath_used);
+    /* Offloads: TCP of up to 64 KB at once both ways, checksums left to
+     * camex (TSO, CSUM). The vnet header stays even if the kernel takes
+     * none of them */
+    tun_vnet = use_tunsetiff && offload_want;
+    tun_vnet_one_buffer = 0;
+    memset(&tun_seg, 0, sizeof(tun_seg));
+    if (tun_gro != NULL) {
+        tun_gro->len = 0U;
+    }
+    {
+        /* One line for the device: which, and its offloads */
+        const char *offloads = "offloads off";
+
+        if (!use_tunsetiff && offload_want) {
+            /* camex.ko: the same vnet header by its own ioctl (camex-k.c);
+             * a module without it answers ENOTTY and stays as it was */
+            int on = 1;
+
+            if (ioctl(fd, CAMEX_IOC_VNET, &on) == 0) {
+                tun_vnet = 1;
+                tun_vnet_one_buffer = 1;
+                offloads = "offloads on (camex.ko)";
+            }
+        } else if (tun_vnet) {
+            unsigned int off = TUN_F_CSUM | TUN_F_TSO4 | TUN_F_TSO6 |
+                               TUN_F_TSO_ECN;
+
+            offloads = ioctl(fd, TUNSETOFFLOAD, off) < 0
+                           ? "offloads not taken by the kernel"
+                           : "offloads on";
+        }
+        log_message(LOG_INFO, "%s backend: %s (%s), %s",
+                    tun_l2 ? "TAP" : "TUN", tun_name, devpath_used, offloads);
+    }
 
     sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
@@ -701,24 +789,50 @@ int tun_create_device(const char *local_ip, const char *netmask,
         return -1;
     }
 
-    copy_ifreq_name(&cfg, tun_name);
-    sin = (struct sockaddr_in *)&cfg.ifr_addr;
-    sin->sin_family = AF_INET;
-    if (inet_pton(AF_INET, local_ip, &sin->sin_addr) != 1 ||
-        ioctl(sock, SIOCSIFADDR, &cfg) < 0) {
-        print_errno_message(LOG_ERR, "ioctl(SIOCSIFADDR)");
-        close_tun_creation(sock, fd);
-        return -1;
+    /* A TAP device: an Ethernet interface (camex.ko only when loaded with
+     * mode=tap), and the MAC the server gave */
+    if (tun_l2) {
+        copy_ifreq_name(&cfg, tun_name);
+        if (ioctl(sock, SIOCGIFHWADDR, &cfg) < 0 ||
+            cfg.ifr_hwaddr.sa_family != ARPHRD_ETHER) {
+            log_message(LOG_ERR, "%s is not an Ethernet device: a TAP "
+                        "network needs /dev/net/tun, or camex.ko loaded "
+                        "with mode=tap", tun_name);
+            close_tun_creation(sock, fd);
+            return -1;
+        }
+        copy_ifreq_name(&cfg, tun_name);
+        cfg.ifr_hwaddr.sa_family = ARPHRD_ETHER;
+        memcpy(cfg.ifr_hwaddr.sa_data, tun_l2_mac, 6);
+        if (ioctl(sock, SIOCSIFHWADDR, &cfg) < 0) {
+            print_errno_message(LOG_ERR, "ioctl(SIOCSIFHWADDR)");
+            close_tun_creation(sock, fd);
+            return -1;
+        }
     }
 
-    copy_ifreq_name(&cfg, tun_name);
-    sin = (struct sockaddr_in *)&cfg.ifr_netmask;
-    sin->sin_family = AF_INET;
-    if (inet_pton(AF_INET, netmask, &sin->sin_addr) != 1 ||
-        ioctl(sock, SIOCSIFNETMASK, &cfg) < 0) {
-        print_errno_message(LOG_ERR, "ioctl(SIOCSIFNETMASK)");
-        close_tun_creation(sock, fd);
-        return -1;
+    /* 0.0.0.0: a TAP network without addresses (the interface gets
+     * none from camex) */
+    if (strcmp(local_ip, "0.0.0.0") != 0) {
+        copy_ifreq_name(&cfg, tun_name);
+        sin = (struct sockaddr_in *)&cfg.ifr_addr;
+        sin->sin_family = AF_INET;
+        if (inet_pton(AF_INET, local_ip, &sin->sin_addr) != 1 ||
+            ioctl(sock, SIOCSIFADDR, &cfg) < 0) {
+            print_errno_message(LOG_ERR, "ioctl(SIOCSIFADDR)");
+            close_tun_creation(sock, fd);
+            return -1;
+        }
+
+        copy_ifreq_name(&cfg, tun_name);
+        sin = (struct sockaddr_in *)&cfg.ifr_netmask;
+        sin->sin_family = AF_INET;
+        if (inet_pton(AF_INET, netmask, &sin->sin_addr) != 1 ||
+            ioctl(sock, SIOCSIFNETMASK, &cfg) < 0) {
+            print_errno_message(LOG_ERR, "ioctl(SIOCSIFNETMASK)");
+            close_tun_creation(sock, fd);
+            return -1;
+        }
     }
 
     copy_ifreq_name(&cfg, tun_name);
@@ -848,6 +962,149 @@ void tun_close_device(void)
 #endif
 }
 
+#if defined(__linux__)
+/* A packet with its vnet header (none of the offloads: all zero) */
+static int tun_writev(const offload_vnet_t *vh, const uint8_t *pkt, size_t len)
+{
+    uint8_t hdr[OFFLOAD_VNET_LEN];
+    struct iovec iov[2];
+    ssize_t written;
+
+    offload_vnet_write(hdr, vh);
+    if (tun_vnet_one_buffer) {
+        /* A joined packet has the room for its header in front (no copy, no
+         * second 64 KB buffer); another packet is at most an MTU's */
+        uint8_t one[OFFLOAD_VNET_LEN + TUN_PACKET_MAX];
+        uint8_t *start;
+
+        if (pkt == tun_gro->buf) {
+            memcpy(tun_gro->head, hdr, sizeof(hdr));
+            start = tun_gro->head;
+        } else if (len <= TUN_PACKET_MAX) {
+            memcpy(one, hdr, sizeof(hdr));
+            memcpy(one + sizeof(hdr), pkt, len);
+            start = one;
+        } else {
+            return -1;
+        }
+        written = write(tun_fd, start, len + sizeof(hdr));
+        return (written < 0 || (size_t)written != len + sizeof(hdr)) ? -1 : 0;
+    }
+    iov[0].iov_base = hdr;
+    iov[0].iov_len = sizeof(hdr);
+    iov[1].iov_base = (void *)(uintptr_t)pkt;
+    iov[1].iov_len = len;
+    written = writev(tun_fd, iov, 2);
+    return (written < 0 || (size_t)written != len + sizeof(hdr)) ? -1 : 0;
+}
+
+void tun_flush(void)
+{
+    offload_vnet_t vh;
+    const uint8_t *pkt;
+    size_t len;
+
+    if (!tun_vnet || tun_fd < 0) {
+        return;
+    }
+    len = offload_gro_take(tun_gro, &vh, &pkt);
+    if (len != 0U && tun_writev(&vh, pkt, len) != 0) {
+        static log_limit_t limit;
+
+        log_limited(&limit, LOG_WARNING, "write(tun) of %u bytes: %s",
+                    (unsigned)len, strerror(errno));
+    }
+}
+
+int tun_pending(void)
+{
+    return tun_vnet && tun_seg.active;
+}
+
+/* TCP packets of one connection wait to be written together (tun_flush(),
+ * at the latest before the event loop sleeps); any other packet goes at
+ * once, after the waiting ones of its own connection */
+static int tun_write_vnet(const uint8_t *buffer, size_t len)
+{
+    offload_vnet_t none;
+    int rc = offload_gro_add(tun_gro, buffer, len);
+
+    if (rc == 0) {
+        tun_flush();
+        rc = offload_gro_add(tun_gro, buffer, len);
+    }
+    if (rc == 1) {
+        if (tun_gro->closed) {
+            tun_flush();
+        }
+        return 0;
+    }
+    if (offload_gro_same_flow(tun_gro, buffer, len)) {
+        tun_flush();
+    }
+    memset(&none, 0, sizeof(none));
+    return tun_writev(&none, buffer, len);
+}
+
+/* A TSO packet comes out as packets of the MTU one per call; checksums
+ * left to the device are completed */
+static ssize_t tun_read_vnet(uint8_t *buffer, size_t size)
+{
+    uint8_t *raw = tun_raw;
+
+    for (;;) {
+        offload_vnet_t vh;
+        uint8_t *pkt = raw + OFFLOAD_VNET_LEN;
+        ssize_t len;
+        size_t plen;
+        unsigned int gso;
+
+        if (tun_seg.active) {
+            len = offload_seg_next(&tun_seg, buffer, size);
+            if (len > 0) {
+                return len;
+            }
+            continue;   /* too large for the buffer: dropped */
+        }
+        len = read(tun_fd, raw, OFFLOAD_VNET_LEN + OFFLOAD_MAX);
+        if (len < 0) {
+            return -1;
+        }
+        if ((size_t)len <= OFFLOAD_VNET_LEN) {
+            continue;
+        }
+        offload_vnet_parse(&vh, raw);
+        plen = (size_t)len - OFFLOAD_VNET_LEN;
+        gso = vh.gso_type & (unsigned int)~OFFLOAD_GSO_ECN;
+        if (gso == OFFLOAD_GSO_TCPV4 || gso == OFFLOAD_GSO_TCPV6) {
+            if (offload_seg_init(&tun_seg, pkt, plen, vh.gso_size) != 0) {
+                continue;
+            }
+            continue;
+        }
+        if (gso != OFFLOAD_GSO_NONE || plen > size) {
+            continue;   /* UDP fragmentation offload is never asked for */
+        }
+        if ((vh.flags & OFFLOAD_F_NEEDS_CSUM) != 0U &&
+            offload_complete_csum(pkt, plen, vh.csum_start,
+                                  vh.csum_offset) != 0) {
+            continue;
+        }
+        memcpy(buffer, pkt, plen);
+        return (ssize_t)plen;
+    }
+}
+#else
+void tun_flush(void)
+{
+}
+
+int tun_pending(void)
+{
+    return 0;
+}
+#endif
+
 ssize_t tun_read_packet(uint8_t *buffer, size_t size)
 {
 #if defined(__APPLE__)
@@ -892,6 +1149,9 @@ ssize_t tun_read_packet(uint8_t *buffer, size_t size)
         return -1;
     }
 
+    if (tun_vnet) {
+        return tun_read_vnet(buffer, size);
+    }
     len = read(tun_fd, buffer, size);
     return len;
 #endif
@@ -942,6 +1202,11 @@ int tun_write_packet(const uint8_t *buffer, size_t len)
     {
         ssize_t written;
 
+#if defined(__linux__)
+        if (tun_vnet) {
+            return tun_write_vnet(buffer, len);
+        }
+#endif
         written = write(tun_fd, buffer, len);
         if (written < 0 || (size_t)written != len) {
             return -1;
@@ -951,3 +1216,93 @@ int tun_write_packet(const uint8_t *buffer, size_t len)
 
     return 0;
 }
+
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+static int tun_alias_name(char *buf, size_t size, unsigned int slot)
+{
+    int n = snprintf(buf, size, "%s:%u", tun_name, slot);
+
+    return n > 0 && (size_t)n < size ? 0 : -1;
+}
+
+int tun_alias_set(unsigned int slot, uint32_t ip_host, uint8_t prefix)
+{
+    struct ifreq cfg;
+    struct sockaddr_in *sin;
+    char name[IFNAMSIZ];
+    int sock;
+    uint32_t mask = prefix == 0U ? 0U : 0xFFFFFFFFU << (32U - prefix);
+
+    if (tun_name[0] == '\0' || tun_alias_name(name, sizeof(name), slot) != 0) {
+        log_message(LOG_ERR, "No address alias on tunnel %s: name too long",
+                    tun_name);
+        return -1;
+    }
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        print_errno_message(LOG_ERR, "socket for the tunnel alias");
+        return -1;
+    }
+    memset(&cfg, 0, sizeof(cfg));
+    copy_ifreq_name(&cfg, name);
+    sin = (struct sockaddr_in *)&cfg.ifr_addr;
+    sin->sin_family = AF_INET;
+    sin->sin_addr.s_addr = htonl(ip_host);
+    if (ioctl(sock, SIOCSIFADDR, &cfg) < 0) {
+        print_errno_message(LOG_ERR, "ioctl(SIOCSIFADDR alias)");
+        close(sock);
+        return -1;
+    }
+    memset(&cfg, 0, sizeof(cfg));
+    copy_ifreq_name(&cfg, name);
+    sin = (struct sockaddr_in *)&cfg.ifr_netmask;
+    sin->sin_family = AF_INET;
+    sin->sin_addr.s_addr = htonl(mask);
+    if (ioctl(sock, SIOCSIFNETMASK, &cfg) < 0) {
+        print_errno_message(LOG_ERR, "ioctl(SIOCSIFNETMASK alias)");
+        close(sock);
+        tun_alias_clear(slot);
+        return -1;
+    }
+    close(sock);
+    return 0;
+}
+
+void tun_alias_clear(unsigned int slot)
+{
+    struct ifreq cfg;
+    char name[IFNAMSIZ];
+    int sock;
+
+    if (tun_name[0] == '\0' || tun_alias_name(name, sizeof(name), slot) != 0) {
+        return;
+    }
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        return;
+    }
+    memset(&cfg, 0, sizeof(cfg));
+    copy_ifreq_name(&cfg, name);
+    /* An alias that is put down loses its address */
+    if (ioctl(sock, SIOCGIFFLAGS, &cfg) == 0) {
+        cfg.ifr_flags &= ~IFF_UP;
+        (void)ioctl(sock, SIOCSIFFLAGS, &cfg);
+    }
+    close(sock);
+}
+#else
+int tun_alias_set(unsigned int slot, uint32_t ip_host, uint8_t prefix)
+{
+    (void)slot;
+    (void)ip_host;
+    (void)prefix;
+    log_message(LOG_ERR, "Named networks need a Linux server");
+    return -1;
+}
+
+void tun_alias_clear(unsigned int slot)
+{
+    (void)slot;
+}
+#endif

@@ -64,10 +64,17 @@ int net_open_udp_socket(void);
 /* Tune UDP buffer sizes */
 int net_tune_udp_socket(int fd);
 
+/* Client: the server's address and this end's, of net_fd; 0 or -1 */
+int net_client_peer_addr(struct sockaddr_in *out);
+int net_client_local_addr(struct sockaddr_in *out);
+
 /* Close net_fd */
 void net_close(void);
 
 /* Send raw payload */
+/* send()/sendto() of one datagram (net.c) */
+ssize_t net_sendto_one(int fd, const void *data, size_t len,
+                        const struct sockaddr_in *to);
 int net_send_payload(int fd, const struct sockaddr_in *to,
                      const uint8_t *data, size_t len);
 int net_send_text(int fd, const struct sockaddr_in *to,

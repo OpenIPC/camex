@@ -32,7 +32,7 @@ void v2_write_u32(uint8_t *p, uint32_t v)
     p[3] = (uint8_t)v;
 }
 
-static uint64_t read_le64(const uint8_t *p)
+uint64_t read_le64(const uint8_t *p)
 {
     uint64_t v = 0U;
     int i;
@@ -43,7 +43,7 @@ static uint64_t read_le64(const uint8_t *p)
     return v;
 }
 
-static void write_le64(uint8_t *p, uint64_t v)
+void write_le64(uint8_t *p, uint64_t v)
 {
     unsigned int i;
 
@@ -66,6 +66,21 @@ uint8_t v2_packet_type(const uint8_t *pkt, size_t len)
         return len >= V2_RESP_HDR + NOISE_MSG2_OVERHEAD ? V2_TYPE_RESP : 0U;
     case V2_TYPE_DATA:
         return len >= V2_OVERHEAD ? V2_TYPE_DATA : 0U;
+    case V2_TYPE_KEYREQ:
+        return len >= V2_KEYREQ_LEN ? V2_TYPE_KEYREQ : 0U;
+    case V2_TYPE_KEY:
+        return len == V2_KEY_LEN ? V2_TYPE_KEY : 0U;
+    case V2_TYPE_PAKE1:
+        return len >= V2_PAKE1_LEN ? V2_TYPE_PAKE1 : 0U;
+    case V2_TYPE_PAKE2:
+        return len >= 5U + 16U + 2U && len <= 5U + 16U + 2U + 24U * 48U
+                   ? V2_TYPE_PAKE2 : 0U;
+    case V2_TYPE_PAKE3:
+        return len == V2_PAKE3_LEN ? V2_TYPE_PAKE3 : 0U;
+    case V2_TYPE_ENDPOINT:
+        return len >= V2_OVERHEAD ? V2_TYPE_ENDPOINT : 0U;
+    case V2_TYPE_P2P:
+        return len >= V2_P2P_HDR + NOISE_TAGLEN ? V2_TYPE_P2P : 0U;
     default:
         return 0U;
     }
@@ -140,12 +155,18 @@ void session_wipe(session_t *s)
 size_t session_seal(session_t *s, const uint8_t *plain, size_t len,
                     uint8_t *out, size_t out_size)
 {
+    return session_seal_as(s, V2_TYPE_DATA, plain, len, out, out_size);
+}
+
+size_t session_seal_as(session_t *s, uint8_t type, const uint8_t *plain,
+                       size_t len, uint8_t *out, size_t out_size)
+{
     if (!s->valid || s->send_n >= V2_REJECT_AFTER_MSGS ||
         out_size < V2_OVERHEAD + len) {
         return 0U;
     }
     memcpy(out, CAMEX_MAGIC, 4);
-    out[4] = V2_TYPE_DATA;
+    out[4] = type;
     v2_write_u32(out + 5, s->remote_index);
     write_le64(out + 9, s->send_n);
     noise_encrypt(s->k_send, s->send_n, out, V2_DATA_HDR, plain, len,
@@ -157,9 +178,17 @@ size_t session_seal(session_t *s, const uint8_t *plain, size_t len,
 int session_open(session_t *s, const uint8_t *pkt, size_t len,
                  uint8_t *plain, size_t plain_size, size_t *plain_len)
 {
+    return session_open_as(s, V2_TYPE_DATA, pkt, len, plain, plain_size,
+                           plain_len);
+}
+
+int session_open_as(session_t *s, uint8_t type, const uint8_t *pkt,
+                    size_t len, uint8_t *plain, size_t plain_size,
+                    size_t *plain_len)
+{
     uint64_t n;
 
-    if (!s->valid || v2_packet_type(pkt, len) != V2_TYPE_DATA ||
+    if (!s->valid || v2_packet_type(pkt, len) != type ||
         v2_data_receiver(pkt) != s->local_index ||
         plain_size < len - V2_OVERHEAD) {
         return -1;

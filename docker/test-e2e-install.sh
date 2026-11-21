@@ -175,6 +175,20 @@ done
 x 'camex --status' | sed 's/^/      /'
 x 'camex --status' | grep -q CAM1
 check $? "the client connects; camex --status answers (control socket in /run/camex)"
+# The short way in: the server's address and the network's name only
+NETNAME=$(x "sed -n 's/^\[network \(.*\)\]$/\1/p' /etc/camex/camex.conf")
+[ ${#NETNAME} -eq 20 ] && echo "$out" | grep -qF -- "--network '$NETNAME'"
+check $? "camex.conf has a [network] of a random name, and the command for it is printed"
+docker run -d --name "$P-cli2" --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD \
+    "$IMAGE" sh -c \
+    'mkdir -p /dev/net && { [ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200; } &&
+     exec /opt/release/camex-x86_64 --server-host '"$P-srv"' --network '"'$NETNAME'"' --name CAM2' >/dev/null
+for _ in $(seq 1 20); do
+    x 'camex --status' 2>/dev/null | grep -q CAM2 && break
+    sleep 1
+done
+x 'camex --status' | grep -q "^CAM2 .*10\."
+check $? "a client joins with the server's address and the network's name"
 
 echo "== 3. run again"
 p1=$(pid)
