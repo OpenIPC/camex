@@ -796,8 +796,11 @@ int camex_init(camex_config_t *config)
         uint8_t k[32];
 
         /* Without --server-pubkey: CPace proves the server knows the
-         * network's name before the name's ID goes anywhere */
-        current_config.pake = current_config.server_pubkey[0] == '\0';
+         * network's name before the name's ID goes anywhere. With it,
+         * CPace still runs: the server's flags say whether it wants the
+         * name, which goes only to a pinned key */
+        current_config.pake = 1U;
+        current_config.pinned = current_config.server_pubkey[0] != '\0';
         char hex[65];
 
         netw_handshake_key(k);
@@ -824,7 +827,8 @@ int camex_init(camex_config_t *config)
         }
         /* Without --server-pubkey: the key kept from the first contact,
          * else the server is asked for it (trust on first use) */
-        if (keys_ok && client_mode && current_config.pake) {
+        if (keys_ok && client_mode && current_config.pake &&
+            !current_config.pinned) {
             client_pake_load_mark();
         } else if (keys_ok && client_mode &&
                    !crypto_get_ctx()->has_server_pub &&

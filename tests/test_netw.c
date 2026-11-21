@@ -367,7 +367,8 @@ static void test_register(void)
                                &autoreq, &wp, net, &has_net) != 0,
           "a short NET accepted");
 
-    /* NAME only to a server that asked for it */
+    /* NAME only when the client decided to send it (a pinned key whose
+     * server asked for it) */
     {
         char name[CAMEX_NET_NAME_MAX + 1U];
         uint8_t mesh = 0U;
@@ -390,6 +391,13 @@ static void test_register(void)
                                       &autoreq, &wp, net, &has_net, &mesh,
                                       name) != 0,
               "a NAME with a control character accepted");
+        /* After CPace: no NET, the name all the same */
+        c.pake_ok = 1U;
+        CHECK(proto_build_register(&c, buf, sizeof(buf)) == 0 &&
+                  strstr(buf, " NET=") == NULL &&
+                  strstr(buf, " NAME=6d792063616d73") != NULL,
+              "REGISTER after CPace: %s", buf);
+        c.pake_ok = 0U;
         c.send_net_name = 0U;
     }
 

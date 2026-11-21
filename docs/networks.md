@@ -137,10 +137,12 @@ either. `isolation_drops` in `camex --status --json` counts the drops.
 
 With `allow_new_networks = yes`, the server takes a network ID it does not
 know as a new network. It gets a derived pool, its gateway on the tunnel, and
-the name its first client sends (inside the encrypted handshake, only after
-the server says over CPace that it takes new networks; a client with
-`--server-pubkey` skips CPace and sends no name, so its network shows as
-`net-`), and it is listed with `(new)` in `camex --status`. Such
+the name a client sends, and it is listed with `(new)` in `camex --status`.
+A client sends the name only when it was given the server's key
+(`--server-pubkey`) and the server says over CPace that it takes names: the
+name then goes inside a handshake only that key opens. A client without a
+pinned key never sends it, so a network only such clients use shows as
+`net-`; the first pinned client that joins it later names it. Such
 networks live until the server stops, or until a reload turns
 `allow_new_networks` off. At most 256 networks exist at once, listed ones
 included.
@@ -150,8 +152,9 @@ only on a server meant to be open.
 
 ## The server's key
 
-A client with `--network` and without `--server-pubkey` (or `--psk`) checks
-the server by the network's name at every connection:
+A client with `--network` and without `--psk` runs CPace at every
+connection. Without `--server-pubkey` it checks the server by the network's
+name:
 
 1. **KEYREQ.** It asks for the server's public key: 64 bytes, answered with
    37.
@@ -178,6 +181,12 @@ The key, once proven this way, is kept in the known servers file with a
 When the server gets a new key, its clients prove it by the name at their next
 connection and keep the new one (`proved it knows the network (CPace); its
 key ... is kept`). Nobody has to remove anything.
+
+With `--server-pubkey` the client skips KEYREQ and keeps nothing: the key is
+the one it was given. CPace still runs, for its flags: `PAKE_FLAG_OPEN`, the
+server takes new networks (the client then sends the ID, which only that key
+opens), and `PAKE_FLAG_NAME`, the server takes the name in REGISTER. A
+server too old to answer CPace gets the ID after three tries, and no name.
 
 **Networks the server does not know yet** (`allow_new_networks = yes`) are the
 exception. The server cannot know a name it never heard, so a new network is
@@ -241,7 +250,10 @@ When this is not good enough:
 
 - **Pin the key.** Give `--server-pubkey` (`install.sh` prints it, and the
   connect link carries it), or ship `/etc/camex/known_servers` in the
-  firmware.
+  firmware. The key is public: a firmware dump gives nothing away, and
+  networks are still made with nothing but `--network`. Only a client with
+  `--server-pubkey` sends a new network's name, so that the server shows it
+  by its name.
 - **Prefer listed networks** to `allow_new_networks = yes`.
 - **Use random names and random psks.** Never use a word or a short phrase.
 - **Watch the first contact.** The client logs the key it kept

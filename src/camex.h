@@ -74,10 +74,13 @@ typedef struct {
     char known_servers[256];   /* client: --known-servers, where the keys of
                                 * servers first met are kept; "none" = off */
     uint8_t top;               /* --top: a live view of the server(s) */
-    uint8_t pake;              /* client: --network alone: CPace (pake.h) */
+    uint8_t pake;              /* client: --network without --psk: CPace
+                                * (pake.h) */
+    uint8_t pinned;            /* client: --server-pubkey: the server's key
+                                * is known, no trust on first use */
     uint8_t pake_ok;           /* this connection's CPace succeeded */
     uint8_t send_net_name;     /* the server asked for the network's name
-                                * (it takes new networks, PAKE_FLAG_NAME) */
+                                * (PAKE_FLAG_NAME) and its key is pinned */
     char bridge_if[IFNAMSIZ];  /* client: --bridge, the LAN interface */
     uint8_t bridge_mode;       /* --bridge-mode: bridge_mode_t */
     uint8_t mesh;              /* client: the server's CONFIG said MESH=1 */

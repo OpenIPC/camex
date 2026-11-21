@@ -2248,9 +2248,10 @@ static int server_handle_pake1(const uint8_t *buf, size_t len,
     memcpy(out, CAMEX_MAGIC, 4);
     out[4] = V2_TYPE_PAKE2;
     memcpy(out + 5, ps->sid, PAKE_SID_LEN);
-    out[5 + PAKE_SID_LEN] = server_db.globals.allow_new_networks
-                                ? (uint8_t)(PAKE_FLAG_OPEN | PAKE_FLAG_NAME)
-                                : 0U;
+    /* NAME: REGISTER may carry the name (a client sends it only to a
+     * key it was given) */
+    out[5 + PAKE_SID_LEN] = (uint8_t)(PAKE_FLAG_NAME |
+        (server_db.globals.allow_new_networks ? PAKE_FLAG_OPEN : 0U));
     o = 5U + PAKE_SID_LEN + 2U;
     for (i = 0U; netw_table != NULL && i < CAMEX_NET_MAX &&
                  ps->count < PAKE_MAX_NETS; ++i) {
@@ -2589,6 +2590,9 @@ static int server_handle_init(const uint8_t *buffer, size_t len,
         }
         has_net = 1U;
         net = pake_net;
+        /* A network made before by a client that sent no name */
+        netw_name_label(net, netw_table[net].id, net_name);
+        crypto_wipe(net_name, sizeof(net_name));
     } else if (has_net) {
         net = netw_find(net_id);
         if (net < 0 && server_db.globals.allow_new_networks) {

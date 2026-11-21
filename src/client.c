@@ -284,7 +284,9 @@ void client_pake_load_mark(void)
 static void client_pake_new_connection(void)
 {
     if (current_config.pake) {
-        crypto_clear_server_pub();
+        if (!current_config.pinned) {
+            crypto_clear_server_pub();
+        }
         client_pake_reset();
     }
 }
@@ -310,6 +312,11 @@ void client_pake_reset(void)
 /* The ID the old way: allowed only for a server never proven by CPace */
 static int client_pake_fall_back(const char *why)
 {
+    /* A pinned key: only the real server can read the ID */
+    if (current_config.pinned) {
+        cpace.fallback = 1U;
+        return 0;
+    }
     if (cpace.marked) {
         log_message(LOG_ERR, "Server %s:%d %s, but it proved it knows this "
                     "network before: not trusted (an impostor?)",
@@ -404,7 +411,12 @@ static int client_handle_pake2(const uint8_t *buf, size_t len)
             crypto_set_psk(psk);
             crypto_wipe(psk, sizeof(psk));
             current_config.pake_ok = 1U;
+            current_config.send_net_name = current_config.pinned &&
+                (flags & PAKE_FLAG_NAME) != 0U ? 1U : 0U;
             (void)net_client_send(p3, sizeof(p3));
+            if (current_config.pinned) {
+                return client_send_init();
+            }
             /* The key, proven by the name, kept with the mark */
             key_base64_encode(ctx->server_pub, KEY_LEN, b64, sizeof(b64));
             if (client_known_find(kept, sizeof(kept), &mark) != 0 ||
@@ -423,7 +435,9 @@ static int client_handle_pake2(const uint8_t *buf, size_t len)
     if ((flags & PAKE_FLAG_OPEN) != 0U) {
         if (client_pake_fall_back("does not know the network but takes new "
                                   "ones") == 0) {
-            current_config.send_net_name =
+            /* The name only to a pinned key: a key believed on first
+             * use may be an impostor's */
+            current_config.send_net_name = current_config.pinned &&
                 (flags & PAKE_FLAG_NAME) != 0U ? 1U : 0U;
             return client_send_init();
         }

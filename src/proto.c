@@ -73,20 +73,20 @@ int proto_build_register(const camex_config_t *config,
                                      b64) != 0) {
                 return -1;
             }
-            /* And the name itself, to a server that asked for it (PAKE2):
-             * it shows the network by its name */
-            if (config->send_net_name) {
-                size_t i;
+        }
+        /* And the name itself, to a pinned server key that asked for it
+         * (PAKE2): it shows the network by its name */
+        if (config->network[0] != '\0' && config->send_net_name) {
+            size_t i;
 
-                if (append_control_field(buffer, size, &offset,
-                                         " NAME=") != 0) {
+            if (append_control_field(buffer, size, &offset,
+                                     " NAME=") != 0) {
+                return -1;
+            }
+            for (i = 0U; config->network[i] != '\0'; ++i) {
+                if (append_control_field(buffer, size, &offset, "%02x",
+                        (unsigned)(unsigned char)config->network[i]) != 0) {
                     return -1;
-                }
-                for (i = 0U; config->network[i] != '\0'; ++i) {
-                    if (append_control_field(buffer, size, &offset, "%02x",
-                            (unsigned)(unsigned char)config->network[i]) != 0) {
-                        return -1;
-                    }
                 }
             }
         }

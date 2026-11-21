@@ -279,10 +279,26 @@ sleep 1
 client f open "anything-$$" --name ANY-F
 F=$(addr_of "$P-f")
 check $? "a client of a name the server never heard of gets an address ($F)"
-wait_log "$P-open" "New network anything-$$ \\(pool 10\\.[0-9]+\\.0\\.0/16\\), created by client ANY-F" 2
-check $? "the server makes the new network"
+wait_log "$P-open" "New network net-[0-9a-f]{8} \\(pool 10\\.[0-9]+\\.0\\.0/16\\), created by client ANY-F" 2
+check $? "the server makes the new network, by its ID: the key is not pinned"
+docker logs "$P-open" 2>&1 | grep -q "anything-$$"
+check $((! $?)) "a client with no pinned key never sends the name"
 docker logs "$P-f" 2>&1 | grep -q "does not know the network but takes new ones: joining by the network's ID"
 check $? "the client joins a new network the old way, and says so"
+client g open "pinned-$$" --name PIN-G --server-pubkey "$SERVER_PUBKEY"
+G=$(addr_of "$P-g")
+check $? "a client with a pinned key makes a new network ($G)"
+wait_log "$P-open" "New network pinned-$$ \\(pool 10\\.[0-9]+\\.0\\.0/16\\), created by client PIN-G" 2
+check $? "to a pinned key the client sends the name: the network shows by it"
+client h open "anything-$$" --name PIN-H --server-pubkey "$SERVER_PUBKEY"
+H=$(addr_of "$P-h")
+check $? "a pinned client joins the network made without a name ($H)"
+docker exec "$P-open" camex --status --json | python3 -c '
+import json, sys
+s = json.load(sys.stdin)["servers"][0]
+assert any(n["label"] == "anything-'$$'" for n in s["networks"])
+' 2>/dev/null
+check $? "after CPace the pinned client names the network"
 
 echo "== 10. camex --top"
 docker exec "$P-srv" sh -c 'timeout 3 camex --top --interval 1 </dev/null' > "$BUILD_CTX/top.txt" 2>&1

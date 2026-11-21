@@ -33,8 +33,11 @@ or server works with a 5.0.0 one as before.
 
 - Networks are shown by their names on the server (logs, `--status`, `--top`) instead of
   `net-` and 4 bytes of the ID: a `[network NAME]` block shows NAME unless `label=` is given,
-  and a client joining a server with `allow_new_networks` sends the name (`NAME=` in REGISTER,
-  only when the server's PAKE2 has `PAKE_FLAG_NAME`), checked against the network's ID.
+  and a client sends the name (`NAME=` in REGISTER, checked against the network's ID) only to a
+  key it was given (`--server-pubkey`) and only when the server's PAKE2 has `PAKE_FLAG_NAME`;
+  a key believed on first use may be an impostor's, so such a client's network shows as `net-`.
+  With `--server-pubkey` the client now runs CPace too (no KEYREQ, nothing kept), to learn those
+  flags.
 - `camex --top` grouped by network: a summary (`Clients 3 of 256   In 0.7 Mbit/s   Out 0.7 Mbit/s
   Relayed 0.0 Mbit/s`), then each network's clients (rates in Mbit/s, `-` when idle, UDP/TCP)
   and its mesh pairs (`Mesh  CAM-BACK <-> CAM-FRONT  direct  3.9 Mbit/s`: the clients' reports
