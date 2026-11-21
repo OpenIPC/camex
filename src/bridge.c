@@ -326,7 +326,18 @@ static void neigh_set(uint32_t ip_be, const uint8_t mac[6], int add);
  * neighbour entry with it */
 static void remote_expire(bridge_remote_t *r)
 {
-    if (r->neigh_ip_be != 0U && br.ifindex != 0) {
+    size_t i;
+    int shared = 0;
+
+    /* Its entry only when no live remote has that address now: a newer one
+     * may have replaced the kernel's entry with its own MAC */
+    for (i = 0U; i < BRIDGE_REMOTES; ++i) {
+        if (&br.remotes[i] != r && br.remotes[i].used &&
+            br.remotes[i].neigh_ip_be == r->neigh_ip_be) {
+            shared = 1;
+        }
+    }
+    if (r->neigh_ip_be != 0U && br.ifindex != 0 && !shared) {
         neigh_set(r->neigh_ip_be, r->mac, 0);
     }
     r->neigh_ip_be = 0U;

@@ -180,12 +180,26 @@ static void client_known_store(const char *pub_b64, int pake_mark)
      * a fixed name another one, or a planted link, could be at */
     snprintf(tmp, sizeof(tmp), "%s.lock", path);
     lockfd = open(tmp, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
-    if (lockfd >= 0) {
-        int tries;
+    {
+        int tries, locked = 0;
 
-        for (tries = 0; tries < 40 && flock(lockfd, LOCK_EX | LOCK_NB) != 0;
-             ++tries) {
+        for (tries = 0; lockfd >= 0 && tries < 40; ++tries) {
+            if (flock(lockfd, LOCK_EX | LOCK_NB) == 0) {
+                locked = 1;
+                break;
+            }
             usleep(50000);
+        }
+        /* Without the lock, a rewrite could drop another writer's line
+         * (its key, its CPace mark): better not to keep this one now */
+        if (!locked) {
+            log_message(LOG_WARNING, "Cannot keep the server key in %s "
+                        "(%s busy or not writable): it is asked for again at "
+                        "the next start", path, tmp);
+            if (lockfd >= 0) {
+                close(lockfd);
+            }
+            return;
         }
     }
     snprintf(tmp, sizeof(tmp), "%s.XXXXXX", path);

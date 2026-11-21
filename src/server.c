@@ -5178,7 +5178,8 @@ void server_networks_apply(void)
             !netw_table[n].iso_applied) {
             log_message(LOG_NOTICE, "Ended session of client %s: client "
                         "isolation is on in its network now", c->client_id);
-            server_drop_entry(c);
+            /* The same network: it keeps its address when it comes back */
+            server_end_client(c);
             continue;
         }
         /* The same network, in the same mode: not one that took its slot
