@@ -16,7 +16,6 @@
 #define GUARD_PROBES 8U
 #define GUARD_GOOD_SLOTS 256U
 #define GUARD_GOOD_SECS 3600
-#define GUARD_SOFT_EVERY 60      /* a soft ban lets one attempt through */
 
 /* Buckets count in sixtieths of an attempt: per_min of them come back
  * each second, so per_min attempts a minute */
@@ -28,8 +27,6 @@ typedef struct {
     unsigned long tokens;    /* sixtieths */
     unsigned int row;        /* attempts in a row without a confirm */
     time_t banned_until;
-    time_t soft_next;        /* a soft ban's next attempt */
-    uint8_t hard;            /* the ban was made over TCP */
 } guard_entry_t;
 
 /* An address whose client confirmed within GUARD_GOOD_SECS: never banned,
@@ -180,7 +177,6 @@ int cpace_guard_attempt(uint32_t ip, time_t now, int *banned_now, int proven)
 {
     guard_entry_t *e = guard_find(ip, now, 1);
     int good = good_find(ip, now, 0) != NULL;
-    int soft_pass = 0;
 
     if (banned_now != NULL) {
         *banned_now = 0;
@@ -191,23 +187,18 @@ int cpace_guard_attempt(uint32_t ip, time_t now, int *banned_now, int proven)
     }
     e->seen = now;
     if (e->banned_until > now) {
-        /* Soft (made over UDP): one attempt a minute, from either */
-        if (e->hard || now < e->soft_next) {
-            counts.refused++;
-            return CPACE_GUARD_BANNED;
-        }
-        e->soft_next = now + GUARD_SOFT_EVERY;
-        soft_pass = 1;
+        counts.refused++;
+        return CPACE_GUARD_BANNED;
     }
-    if (!soft_pass) {
+    /* Only attempts over TCP, whose handshake proves the address, make a
+     * row toward a ban: a forged UDP source would ban its victim (#207) */
+    if (proven) {
         e->row++;
     }
-    if (cfg_ban_after != 0U && cfg_ban_secs != 0U && !good &&
+    if (cfg_ban_after != 0U && cfg_ban_secs != 0U && !good && proven &&
         e->row >= cfg_ban_after) {
         e->row = 0U;
         e->banned_until = now + (time_t)cfg_ban_secs;
-        e->hard = proven ? 1U : 0U;
-        e->soft_next = now + GUARD_SOFT_EVERY;
         counts.bans++;
         counts.refused++;
         if (banned_now != NULL) {
@@ -257,7 +248,6 @@ void cpace_guard_confirm(uint32_t ip, time_t now)
     e->seen = now;
     e->row = 0U;
     e->banned_until = 0;
-    e->hard = 0U;
     if (cfg_per_ip != 0U) {
         cap = (unsigned long)cfg_per_ip * 60UL;
         e->tokens = e->tokens + 60UL > cap ? cap : e->tokens + 60UL;

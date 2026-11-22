@@ -8,13 +8,15 @@ release, rebuilt from every push to `master`; this file is the change history.
 
 ## 5.2.3 — 2026-11-22
 
-- CPace guard: forged UDP packets can no longer lock a camera out for `cpace_ban_time`
-  ([#207](https://github.com/OpenIPC/camex/issues/207)). A ban made by UDP attempts, whose source
-  can be forged, still lets one attempt a minute through, and a client of the address that confirms
-  ends it; a ban made over TCP holds. The addresses with a confirmed client are kept in a table of
-  their own, so a flood of sources cannot push them out.
-- `--bridge`: at most 4 checks of address claims a second, each a read of the host's neighbour
-  table in the tunnel's loop (the review of #212).
+- CPace guard: forged UDP packets can no longer ban a camera's address
+  ([#207](https://github.com/OpenIPC/camex/issues/207)). Only attempts over TCP, whose handshake
+  proves the address, make a row toward `cpace_ban_after`; a ban then refuses the address over UDP
+  and TCP. UDP attempts are limited by `cpace_per_ip` and `cpace_total` only. The addresses with a
+  confirmed client are kept in a table of their own, so a flood of sources cannot push them out.
+  Still open: forged UDP sources can use up `cpace_total` for clients with no confirmed history; a
+  cookie round trip before CPace is to close that in 6.0.0.
+- `--bridge`: a check of a device's address claim (a read of the host's neighbour table in the
+  tunnel's loop) at most once a second for each device and 32 a second in all (the review of #212).
 
 ## 5.2.2 — 2026-11-22
 
