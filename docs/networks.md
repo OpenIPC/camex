@@ -281,7 +281,13 @@ keys above):
   confirmed refuse its CPace for `cpace_ban_time` seconds
   (`CPace: 30 attempts in a row from ... : its CPace refused for 600 s`). An
   address with a client that confirmed within the hour (a NAT with real
-  cameras behind it) is limited, never banned.
+  cameras behind it) is limited, never banned. Over UDP a packet's source
+  can be forged, so a ban made by UDP attempts still lets one attempt a
+  minute through, and a client of the address that confirms ends it: forged
+  packets in a camera's name hold it back for a minute, not for
+  `cpace_ban_time`. A ban made over TCP, whose handshake proves the address,
+  holds. The addresses with a confirmed client are kept apart from the rest,
+  so a flood of sources cannot push them out.
 
 `camex --status` shows the counts
 (`cpace: 12 attempts, 10 confirmed, 2 refused, 0 bans (0 banned now)`), and

@@ -30,7 +30,14 @@
  *    is limited, never banned.
  * A limit of 0 turns it off. Sources live in a fixed table placed by a
  * keyed hash: a flood of addresses evicts the oldest entries, never the
- * live bans first.
+ * live bans first. The addresses with a confirmed client live in a table
+ * of their own, which unconfirmed attempts never fill (#207).
+ *
+ * Over UDP the source of a PAKE1 can be forged, so a ban made by UDP
+ * attempts is soft: one attempt a minute still goes through, and a client
+ * of the address that confirms ends the ban. Forged packets in a victim's
+ * name then hold its clients back for a minute, not for ban_secs (#207).
+ * A ban made over TCP, whose handshake proves the address, holds.
  */
 
 #define CPACE_GUARD_PER_IP_DEFAULT   20U
@@ -58,11 +65,12 @@ void cpace_guard_config(unsigned int per_ip, unsigned int total,
                         unsigned int ban_after, unsigned int ban_secs);
 
 /* A PAKE1 from ip (IPv4, host order) at now: CPACE_GUARD_OK or why it is
- * refused. *banned_now is 1 when this attempt made the ban (for the log) */
-int cpace_guard_attempt(uint32_t ip, time_t now, int *banned_now);
+ * refused. proven: it came over TCP (the address is the sender's).
+ * *banned_now is 1 when this attempt made the ban (for the log) */
+int cpace_guard_attempt(uint32_t ip, time_t now, int *banned_now, int proven);
 
 /* A PAKE3 from ip confirmed: its attempt is given back, its row of
- * attempts ends */
+ * attempts and any ban of it end */
 void cpace_guard_confirm(uint32_t ip, time_t now);
 
 void cpace_guard_stats(cpace_guard_stats_t *s, time_t now);

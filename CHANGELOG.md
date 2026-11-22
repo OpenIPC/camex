@@ -6,6 +6,16 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 5.2.3 — 2026-11-22
+
+- CPace guard: forged UDP packets can no longer lock a camera out for `cpace_ban_time`
+  ([#207](https://github.com/OpenIPC/camex/issues/207)). A ban made by UDP attempts, whose source
+  can be forged, still lets one attempt a minute through, and a client of the address that confirms
+  ends it; a ban made over TCP holds. The addresses with a confirmed client are kept in a table of
+  their own, so a flood of sources cannot push them out.
+- `--bridge`: at most 4 checks of address claims a second, each a read of the host's neighbour
+  table in the tunnel's loop (the review of #212).
+
 ## 5.2.2 — 2026-11-22
 
 - `--bridge`: a remote device can no longer take over the address of a LAN device on the bridging
