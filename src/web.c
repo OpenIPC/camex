@@ -851,16 +851,19 @@ static void request(web_conn_t *c)
         return;
     }
     head_only = strcmp(method, "HEAD") == 0;
-    if (strcmp(method, "GET") != 0 && !head_only) {
-        respond_text(c, 405, "Method Not Allowed", "Allow: GET, HEAD\r\n",
-                     "Only GET and HEAD\n", 0);
-        return;
-    }
     path = target;
     /* The query is not looked at */
     target[strcspn(target, "?#")] = '\0';
+    /* nginx's auth_request asks with the method of the request it checks:
+     * a firmware upload through a device's page is a POST (its body is
+     * not passed on). The answer is the same for any method. */
     if (strcmp(path, "/resolve") == 0) {
         resolve(c, head_only);
+        return;
+    }
+    if (strcmp(method, "GET") != 0 && !head_only) {
+        respond_text(c, 405, "Method Not Allowed", "Allow: GET, HEAD\r\n",
+                     "Only GET and HEAD\n", 0);
         return;
     }
     if (strcmp(path, "/") != 0 && strcmp(path, "/index.html") != 0 &&

@@ -285,6 +285,18 @@ done
 page "cam1.$DOMAIN" | grep -q "I am CAM1"
 check $? "after systemctl restart camex the client is reached again, with no reload of nginx"
 
+echo "== 5b. a file of camex 5.2: the lookup gets client_max_body_size 0 (5.2.4)"
+x 'sed -i "/client_max_body_size 0;$/{N;/proxy_pass_request_body/!P;D}" /etc/nginx/conf.d/camex-nginx.conf;
+   awk "/_camex_resolve \\{/{r=1} r&&/client_max_body_size/{f=1} r&&/^ *}/{exit} END{exit f}" /etc/nginx/conf.d/camex-nginx.conf'
+check $? "(set up: the file without it in /_camex_resolve)"
+out=$(run)
+echo "$out" | grep -q "added client_max_body_size 0 to /_camex_resolve" &&
+    x 'awk "/_camex_resolve \\{/{r=1} r&&/client_max_body_size 0/{f=1} r&&/^ *}/{exit} END{exit !f}" /etc/nginx/conf.d/camex-nginx.conf && nginx -t 2>/dev/null'
+check $? "a rerun adds it there, and nginx takes the file"
+out=$(run)
+! echo "$out" | grep -q "added client_max_body_size"
+check $? "once: the next rerun leaves the file alone"
+
 echo "== 6. an nginx of camex 5.1.0, and the layouts of camex-nginx-setup.sh and 3.10"
 # camex 5.1.0: the map, the sync script and its service, no web_listen=
 x 'sed "s/openipc\.click/'"$DOMAIN"'/g" /opt/src/examples/nginx-camex-map.conf > /etc/nginx/conf.d/camex-nginx.conf &&
