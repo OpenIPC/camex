@@ -296,6 +296,15 @@ check $? "a rerun adds it there, and nginx takes the file"
 out=$(run)
 ! echo "$out" | grep -q "added client_max_body_size"
 check $? "once: the next rerun leaves the file alone"
+# A second block after it, with the line only in a comment: it gets its
+# own, the first is left as it is (each block on its own)
+x 'printf "server {\n    listen 8099;\n    server_name x.invalid;\n    location = /_camex_resolve {\n        internal;\n        # client_max_body_size 5m;\n        return 204;\n    }\n}\n" >> /etc/nginx/conf.d/camex-nginx.conf'
+out=$(run)
+echo "$out" | grep -q "added client_max_body_size 0 to /_camex_resolve" &&
+    [ "$(x 'grep -c "^[[:space:]]*client_max_body_size 0;   # uploads above 1 MB" /etc/nginx/conf.d/camex-nginx.conf')" = 2 ] &&
+    x 'nginx -t 2>/dev/null'
+check $? "a second block with only a commented line gets its own; nginx takes the file"
+x 'head -n -9 /etc/nginx/conf.d/camex-nginx.conf > /tmp/n && cat /tmp/n > /etc/nginx/conf.d/camex-nginx.conf && nginx -t 2>/dev/null && nginx -s reload'
 
 echo "== 6. an nginx of camex 5.1.0, and the layouts of camex-nginx-setup.sh and 3.10"
 # camex 5.1.0: the map, the sync script and its service, no web_listen=
