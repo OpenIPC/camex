@@ -610,6 +610,22 @@ fi
 step 5 "The server's settings: $CONF"
 if [ -f "$CONF" ]; then
     say "kept: $CONF"
+    # A network block without label=: camex logs the network by its name,
+    # which is its key, so the journal has it (6.0.1); the file is the
+    # admin's, so only a word on it
+    nolabel=$(awk '
+        /^[[:space:]]*\[/ {
+            if (net != "" && !lab) print net
+            net = ""; lab = 0
+            if (tolower($0) ~ /^[[:space:]]*\[[[:space:]]*network[[:space:]]/) net = "x"
+            next
+        }
+        net != "" && tolower($0) ~ /^[[:space:]]*label[[:space:]]*=/ { lab = 1 }
+        END { if (net != "" && !lab) print net }' "$CONF" | wc -l)
+    [ "$nolabel" -eq 0 ] ||
+        say "WARNING: $nolabel [network] block(s) of $CONF without label=: camex logs" \
+            "such a network by its name, which is its key, so the journal has it." \
+            "Add label = <a word> to each, then systemctl reload camex"
     # nginx added later: its domain goes to [server]
     if [ -n "$DOMAIN" ] && [ -z "$(conf_domain)" ]; then
         backup "$CONF"
@@ -687,7 +703,9 @@ else
         echo "# https://github.com/OpenIPC/camex/blob/master/examples/camex.conf"
         echo "# The network clients join with: camex --server-host <host> --network <name>"
         echo "# Its name is its key: whoever knows it can join (docs/networks.md)"
-        printf '[network %s]\n\n' "$NET"
+        printf '[network %s]\n' "$NET"
+        echo "# Shown in the log and --status instead of the name, which is the key"
+        printf 'label = main\n\n'
         sed '1,2d' "$TMP/camex.server"
     } > "$TMP/camex.conf"
     (umask 077; cp "$TMP/camex.conf" "$CONF") || die "cannot write $CONF"

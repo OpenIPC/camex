@@ -6,6 +6,13 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 6.0.1 — 2026-11-22
+
+- `install.sh` gives the network it makes `label = main`: camex logs a network by its name unless
+  the block has a label, so the journal had the network's name, which is its key. A kept
+  `camex.conf` with a `[network]` block without `label=` is left as it is, with a warning on how to
+  add one. (`deploy/`'s first start does the same since #216.)
+
 ## 6.0.0 — 2026-11-22
 
 Incompatible: what a client does when it first meets a server, the nginx map and its sync script.
