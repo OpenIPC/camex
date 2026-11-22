@@ -166,6 +166,36 @@ check $? "the bridging host reaches the remote"
 docker exec "$P-br" sh -c "ip neigh show $RIP dev \$(cat /tmp/lan_if)" | grep -q PERMANENT
 check $? "the host has the remote as a neighbour entry"
 
+echo "== 3a. a tunnel device cannot take a LAN device's address (#206)"
+# claim <ip> <count>: the remote sends ARP replies "<ip> is at my MAC"
+CLAIM='import socket,sys,time
+s=socket.socket(socket.AF_PACKET,socket.SOCK_RAW); s.bind(("tap0",0))
+mac=bytes.fromhex(open("/sys/class/net/tap0/address").read().strip().replace(":",""))
+ip=socket.inet_aton(sys.argv[1])
+f=b"\xff"*6+mac+b"\x08\x06"+bytes([0,1,8,0,6,4,0,2])+mac+ip+b"\xff"*6+ip+bytes(18)
+for _ in range(int(sys.argv[2])):
+    s.send(f); time.sleep(1)'
+claim() { docker exec "$P-rem" python3 -c "$CLAIM" "$1" "$2"; }
+nbr() { docker exec "$P-br" sh -c "ip neigh show $1 dev \$(cat /tmp/lan_if)"; }
+REM_MAC=$(docker exec "$P-rem" cat /sys/class/net/tap0/address)
+docker exec "$P-br" ping -c 1 -W 2 192.168.77.10 >/dev/null
+claim 192.168.77.10 3
+nbr 192.168.77.10 > "$BUILD_CTX/n10.txt"
+! grep -q PERMANENT "$BUILD_CTX/n10.txt" && ! grep -qi "$REM_MAC" "$BUILD_CTX/n10.txt"
+check $? "the host keeps the LAN device's own entry: $(cat "$BUILD_CTX/n10.txt")"
+blog br | grep -q "claims 192.168.77.10, a LAN device's address: ignored"
+check $? "the claim is logged"
+docker exec "$P-br" ping -c 2 -W 2 192.168.77.10 >/dev/null
+check $? "the bridging host still reaches the LAN device"
+# A stale entry nobody answers for (a device gone, its address reused):
+# probed by ARP, then the claim stands
+docker exec "$P-br" sh -c 'ip neigh replace 192.168.77.99 lladdr 02:00:00:00:00:99 nud stale dev $(cat /tmp/lan_if)'
+claim 192.168.77.99 15
+nbr 192.168.77.99 > "$BUILD_CTX/n99.txt"
+grep -q PERMANENT "$BUILD_CTX/n99.txt" && grep -qi "$REM_MAC" "$BUILD_CTX/n99.txt"
+check $? "a stale entry nobody answers for is taken: $(cat "$BUILD_CTX/n99.txt")"
+claim "$RIP" 1   # its own address again, so it is the one camex sends to
+
 echo "== 4. 8 MB over TCP each way"
 SRV='import socket,sys,hashlib
 s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("",9000)); s.listen(1)

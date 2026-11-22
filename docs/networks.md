@@ -399,7 +399,10 @@ own settings and goes on reaching everything:
   reaches the host's own stack, so camex hands IPv4 packets for the host to it
   through a raw IP socket. It answers ARP for the host's address, and gives the
   host permanent neighbour entries for the remote devices, which it removes
-  when it stops.
+  when it stops. An address the host already knows as a LAN device's (an
+  entry it learned itself, or one somebody set) is never taken over by a
+  remote device that claims it: the claim is ignored and logged. A stale
+  entry is asked for by ARP first, and taken only if nobody answers.
 - **Offloads:** the kernel says which frames still need their checksum
   (checksum offload) and which are TCP segments merged by TSO or GRO
   (`PACKET_VNET_HDR`). camex completes the checksums and cuts the merged

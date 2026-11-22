@@ -6,6 +6,15 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 5.2.2 — 2026-11-22
+
+- `--bridge`: a remote device can no longer take over the address of a LAN device on the bridging
+  host ([#206](https://github.com/OpenIPC/camex/issues/206)). The host's neighbour entry for an
+  address it learned from the LAN itself, or that somebody set, is kept; the claim is ignored and
+  logged. A stale entry is asked for by ARP first and taken only if nobody answers (a device gone,
+  its address handed out again).
+- The control socket's answer to an unknown command lists `DEVICE PORT` too.
+
 ## 5.2.1 — 2026-11-22
 
 Fixes from the review of 5.2.0 ([#210](https://github.com/OpenIPC/camex/pull/210)), mostly for a
