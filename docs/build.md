@@ -14,22 +14,59 @@
 ## Userspace app
 
 ```sh
-make
+make                    # the full camex: everything (PROFILE=full, the default)
+make PROFILE=client     # a client only: no server, with TAP networks and mesh
 ```
 
-## The full camex (optional features)
+## Profiles and flags
+
+A profile is a set of the flags below. A flag given on its own wins over its
+profile, so an integration builds exactly what it needs:
 
 ```sh
-make CAMEX_L2=1 CAMEX_MESH=1
+make PROFILE=client CAMEX_L2=0 CAMEX_MESH=0   # the smallest client: TUN only
+make CAMEX_MESH=0                             # a server without mesh
 ```
 
-| Flag           | Adds                                                                                       |
-|----------------|--------------------------------------------------------------------------------------------|
-| `CAMEX_L2=1`   | TAP networks (`mode = tap`) and bridging a LAN (`--bridge`), Linux ([networks.md](networks.md#tap-networks-mode--tap)) |
-| `CAMEX_MESH=1` | mesh networks (`mesh = yes`): peers direct through NATs, relay otherwise ([networks.md](networks.md#mesh-networks-mesh--yes)) |
+| Profile              | `CAMEX_SERVER` | `CAMEX_L2` | `CAMEX_MESH` | For                                                      |
+|----------------------|----------------|------------|--------------|----------------------------------------------------------|
+| `full` (the default) | 1              | 1          | 1            | servers, and anyone who wants everything: `camex-<arch>` |
+| `client`             | 0              | 1          | 1            | cameras, routers, Android: `camex-<arch>-client`         |
 
-Without them the build is the core camex, as before. The releases have both:
-`camex-<arch>` and `camex-<arch>-full`.
+`PROFILE=server` is the same as `full`. On Windows and macOS a profile leaves
+`CAMEX_L2` out: TAP networks and `--bridge` are Linux only.
+
+| Flag             | Default (`full`) | What it adds                                                                                                                  |
+|------------------|------------------|-------------------------------------------------------------------------------------------------------------------------------|
+| `CAMEX_SERVER=1` | 1                | the server (`--mode server`), its control socket answers for `--status` and `--top`, `--format nginx-map` and `nginx-index`   |
+| `CAMEX_L2=1`     | 1 (Linux)        | TAP networks (`mode = tap`) and bridging a LAN (`--bridge`), Linux ([networks.md](networks.md#tap-networks-mode--tap))        |
+| `CAMEX_MESH=1`   | 1                | mesh networks (`mesh = yes`): peers direct through NATs, relay otherwise ([networks.md](networks.md#mesh-networks-mesh--yes)) |
+| `CAMEX_NEON=0`   | 1 (32-bit ARM)   | leaves out ChaCha20 and Poly1305 with NEON (below)                                                                            |
+
+A camex built without a part refuses it and says why: without the server,
+`--mode server` and `--format nginx-map` / `nginx-index` end with an error, and
+`--help` shows no server options. `camex --version` names what the build has:
+
+```
+camex 5.1.0
+features: client, l2, mesh
+```
+
+A build directory remembers the flags its objects were built with: another
+profile or flag in the same `BUILD_DIR` rebuilds them all.
+
+### A client for a firmware
+
+A firmware (OpenIPC, OpenWrt, Keenetic) that runs camex as a client builds the
+client profile with its own toolchain, and turns off what it does not use:
+
+```sh
+make CROSS_COMPILE=arm-openipc-linux-musleabi- LDLIBS=-static PROFILE=client
+make CROSS_COMPILE=mipsel-openwrt-linux-musl- PROFILE=client CAMEX_L2=0
+```
+
+The Android library builds the client profile without L2 (VpnService has no
+TAP) and, for now, without mesh (`android/camex-sources.cmake`).
 
 ## ChaCha20 and Poly1305 with NEON (32-bit ARM)
 
@@ -79,12 +116,14 @@ make distclean      # clean everything
 
 ## Binary sizes
 
-| Platform | Toolchain                            | Size    |
-|----------|--------------------------------------|---------|
-| x86_64   | Bootlin x86-64 musl                  | ~195 KB |
-| arm      | OpenIPC arm musleabi                 | ~200 KB |
-| aarch64  | Bootlin aarch64 musl                 | ~205 KB |
-| mipsel   | OpenWrt mipsel_24kc musl, soft-float | ~230 KB |
+Static ARM build (OpenIPC arm musleabi) of camex 5.1.0:
+
+| Build                               | Size    |
+|-------------------------------------|---------|
+| `full` (`camex-arm`)                | ~360 KB |
+| `full`, `CAMEX_L2=0 CAMEX_MESH=0`   | ~330 KB |
+| `client` (`camex-arm-client`)       | ~270 KB |
+| `client`, `CAMEX_L2=0 CAMEX_MESH=0` | ~250 KB |
 
 Release binaries are static and linked against musl: they need no libc on the
 device and run on any OpenIPC firmware. They are not packed with UPX, so they

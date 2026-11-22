@@ -12,8 +12,10 @@
 #                  kernels often lack FPU emulation, so hard-float code dies with SIGILL
 #         aarch64 | x86_64   Bootlin musl toolchains
 #
-# Produces <outdir>/camex-<target> and <outdir>/camex-<target>-full (CAMEX_L2=1
-# CAMEX_MESH=1: TAP networks, --bridge, mesh): static, stripped, not packed. musl is used because
+# Produces <outdir>/camex-<target>, the full camex (the default profile, #204: server,
+# TAP networks, --bridge, mesh), the same as <outdir>/camex-<target>-full (the name of
+# 5.0.0 and before, kept until 6.0.0), and for arm and mipsel <outdir>/camex-<target>-client
+# (PROFILE=client: no server; for cameras and routers): static, stripped, not packed. musl is used because
 # a static glibc binary cannot resolve host names (getaddrinfo) without the NSS libraries
 # of the same glibc on the device, and OpenIPC firmware has no glibc at all. With QEMU=1
 # the unit tests and `camex --version` are run under qemu-user as well.
@@ -101,17 +103,25 @@ if "${CROSS}readelf" -l "$BIN" | grep -q 'Requesting program interpreter'; then
 fi
 echo "camex-$ARCH: $(wc -c < "$BIN") bytes, static"
 
-# The full camex: the optional features (src/Makefile)
-FULL_BUILD=$ROOT/build/musl-$ARCH-full
-rm -rf "$FULL_BUILD"
-mkdir -p "$FULL_BUILD"
-make -s -C "$ROOT/src" TARGET=camex BUILD_DIR="$FULL_BUILD" CROSS_COMPILE="$CROSS" \
-    LDLIBS=-static CAMEX_L2=1 CAMEX_MESH=1 all
-cp "$FULL_BUILD/camex" "$OUT/camex-$ARCH-full"
-if "${CROSS}readelf" -l "$OUT/camex-$ARCH-full" | grep -q 'Requesting program interpreter'; then
-    echo "$OUT/camex-$ARCH-full is dynamically linked" >&2; exit 1
-fi
-echo "camex-$ARCH-full: $(wc -c < "$OUT/camex-$ARCH-full") bytes, static"
+# The name of the full camex until 5.0.0: the same file (#204), until 6.0.0
+cp "$BIN" "$OUT/camex-$ARCH-full"
+
+# The client profile (#204, docs/build.md) where the size matters: cameras, routers
+CLIENT_BIN=
+case "$ARCH" in
+    arm|mipsel)
+        CLIENT_BUILD=$ROOT/build/musl-$ARCH-client
+        rm -rf "$CLIENT_BUILD"
+        mkdir -p "$CLIENT_BUILD"
+        make -s -C "$ROOT/src" TARGET=camex BUILD_DIR="$CLIENT_BUILD" CROSS_COMPILE="$CROSS" \
+            LDLIBS=-static PROFILE=client all
+        CLIENT_BIN=$OUT/camex-$ARCH-client
+        cp "$CLIENT_BUILD/camex" "$CLIENT_BIN"
+        if "${CROSS}readelf" -l "$CLIENT_BIN" | grep -q 'Requesting program interpreter'; then
+            echo "$CLIENT_BIN is dynamically linked" >&2; exit 1
+        fi
+        echo "camex-$ARCH-client: $(wc -c < "$CLIENT_BIN") bytes, static" ;;
+esac
 
 if [ "${QEMU:-0}" = 1 ]; then
     # tests/Makefile builds in tests/: build there, then move the binaries away
@@ -127,4 +137,13 @@ if [ "${QEMU:-0}" = 1 ]; then
         echo "$out" | tail -1
     done
     "$QEMU_BIN" "$BIN" --version
+    if [ -n "$CLIENT_BIN" ]; then
+        "$QEMU_BIN" "$CLIENT_BIN" --version
+        # It must be the client profile, and refuse to be a server
+        "$QEMU_BIN" "$CLIENT_BIN" --version | grep -qx 'features: client, l2, mesh' ||
+            { echo "$CLIENT_BIN is not the client profile" >&2; exit 1; }
+        if "$QEMU_BIN" "$CLIENT_BIN" --mode server --port 5800 --psk x >/dev/null 2>&1; then
+            echo "$CLIENT_BIN did not refuse --mode server" >&2; exit 1
+        fi
+    fi
 fi

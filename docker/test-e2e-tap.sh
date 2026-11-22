@@ -15,8 +15,12 @@
 #     says why, and a server does not start with mode = tap
 #
 # Usage: ./test-e2e-tap.sh
-#   CAMEX_BINARY=path/to/camex            the core camex (default: ../camex)
-#   CAMEX_FULL_BINARY=path/to/camex-full  the full one (default: built here)
+#   CAMEX_BINARY=path/to/camex            camex as built by default (../camex):
+#                                         the full one when it has l2 (#204)
+#   CAMEX_FULL_BINARY=path/to/camex-full  the full one (default: CAMEX_BINARY
+#                                         when it has l2, else built here)
+#   CAMEX_CORE_BINARY=path/to/camex-core  one without L2 (default: built here,
+#                                         CAMEX_L2=0 CAMEX_MESH=0)
 #   KEEP=1                                keep containers for debugging
 #
 
@@ -46,13 +50,23 @@ check() {   # check <condition-exit-code> <message>
 }
 
 [ -x "$CAMEX_BINARY" ] || { echo "camex binary not found: $CAMEX_BINARY"; exit 1; }
+# Since #204 the default build is the full one: --version says what it has
+if [ -z "$CAMEX_FULL_BINARY" ] &&
+   "$CAMEX_BINARY" --version 2>/dev/null | grep -q '^features:.* l2'; then
+    CAMEX_FULL_BINARY=$CAMEX_BINARY
+fi
 if [ -z "$CAMEX_FULL_BINARY" ]; then
     make -s -C "$REPO_DIR/src" CAMEX_L2=1 CAMEX_MESH=1 \
         BUILD_DIR="$BUILD_CTX/full" >/dev/null || { echo "cannot build the full camex"; exit 1; }
     CAMEX_FULL_BINARY="$BUILD_CTX/full/camex"
 fi
+if [ -z "$CAMEX_CORE_BINARY" ]; then
+    make -s -C "$REPO_DIR/src" CAMEX_L2=0 CAMEX_MESH=0 \
+        BUILD_DIR="$BUILD_CTX/core" >/dev/null || { echo "cannot build a camex without L2"; exit 1; }
+    CAMEX_CORE_BINARY="$BUILD_CTX/core/camex"
+fi
 
-cp "$CAMEX_BINARY" "$BUILD_CTX/camex-core"
+cp "$CAMEX_CORE_BINARY" "$BUILD_CTX/camex-core"
 cp "$CAMEX_FULL_BINARY" "$BUILD_CTX/camex"
 . "$SCRIPT_DIR/lib-keys.sh"
 gen_server_key "$BUILD_CTX" "$CAMEX_BINARY" || { echo "cannot create a server key"; exit 1; }

@@ -46,13 +46,47 @@ else
   LDFLAGS  += -Wl,-dead_strip
 endif
 
-SRCS = main.c camex.c netw.c pake.c cpaceguard.c monocypher.c util.c log.c crypto.c noise.c keys.c session.c tun.c offload.c packet.c net.c proto.c config.c client.c server.c slotidx.c control.c nginxmap.c tcpgate.c
+SRCS = main.c camex.c netw.c pake.c monocypher.c util.c log.c crypto.c noise.c keys.c session.c tun.c offload.c packet.c net.c proto.c config.c client.c slotidx.c control.c nginxmap.c tcpgate.c
 SRCS += wintun.c
 
-# Optional features (#mesh): make CAMEX_L2=1 CAMEX_MESH=1 builds the full
-# camex (camex-<arch>-full); without them it is the core camex as before
-CAMEX_L2 ?= 0
-CAMEX_MESH ?= 0
+# Build profiles (#204), docs/build.md: a set of the flags below; a flag
+# given on its own wins over its profile (PROFILE=client CAMEX_MESH=0)
+#   full    everything: CAMEX_SERVER=1 CAMEX_L2=1 CAMEX_MESH=1 (the default;
+#           "server" is the same)
+#   client  cameras, routers, Android, desktops: CAMEX_SERVER=0, with
+#           CAMEX_L2=1 CAMEX_MESH=1
+PROFILE ?= full
+ifneq ($(filter full server,$(PROFILE)),)
+  PROFILE_SERVER = 1
+else ifeq ($(PROFILE),client)
+  PROFILE_SERVER = 0
+else
+  $(error PROFILE must be full (or server) or client, not "$(PROFILE)")
+endif
+# TAP and --bridge are Linux only: a profile leaves L2 out on Windows and
+# macOS (CAMEX_L2=1 still builds it there)
+ifneq ($(findstring mingw,$(CC))$(filter Darwin,$(shell uname -s 2>/dev/null)),)
+  PROFILE_L2 = 0
+else
+  PROFILE_L2 = 1
+endif
+PROFILE_MESH = 1
+
+# Optional features (#mesh, #204): CAMEX_L2=1 (TAP networks, LAN bridge),
+# CAMEX_MESH=1 (peer to peer), CAMEX_SERVER=0 (a client only: no
+# --mode server, no server code)
+CAMEX_SERVER ?= $(PROFILE_SERVER)
+CAMEX_L2 ?= $(PROFILE_L2)
+CAMEX_MESH ?= $(PROFILE_MESH)
+ifneq ($(words $(filter 0 1,$(CAMEX_SERVER) $(CAMEX_L2) $(CAMEX_MESH))),3)
+  $(error CAMEX_SERVER, CAMEX_L2 and CAMEX_MESH are 0 or 1)
+endif
+ifeq ($(CAMEX_SERVER),1)
+  SRCS += server.c cpaceguard.c
+else
+  CPPFLAGS += -DCAMEX_NO_SERVER
+  SRCS += noserver.c
+endif
 ifeq ($(CAMEX_L2),1)
   CPPFLAGS += -DCAMEX_L2
   SRCS += l2.c bridge.c
@@ -82,6 +116,14 @@ OBJS = $(addprefix $(objdir)/, $(SRCS:.c=.o))
 # Ensure object directory exists
 $(shell mkdir -p $(objdir))
 
+# The flags the objects were built with (#204): another profile or flag in
+# the same BUILD_DIR rebuilds them all instead of mixing the two
+FLAGS_STAMP = $(objdir)/.flags
+FLAGS_NOW = $(CC) $(CPPFLAGS) $(CFLAGS) $(NEON_CFLAGS)
+ifneq ($(shell cat $(FLAGS_STAMP) 2>/dev/null),$(strip $(FLAGS_NOW)))
+  $(shell echo '$(strip $(FLAGS_NOW))' > $(FLAGS_STAMP))
+endif
+
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
 # Platform-specific libraries
@@ -101,11 +143,11 @@ $(BUILD_DIR)/$(TARGET): $(OBJS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(OBJS) $(LDFLAGS) $(LDLIBS)
 	$(STRIP) --strip-unneeded $@ 2>/dev/null || true
 
-$(objdir)/%.o: %.c
+$(objdir)/%.o: %.c $(FLAGS_STAMP)
 	mkdir -p $(objdir)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 
-$(objdir)/chacha_neon.o: chacha_neon.c
+$(objdir)/chacha_neon.o: chacha_neon.c $(FLAGS_STAMP)
 	mkdir -p $(objdir)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(NEON_CFLAGS) -MMD -MP -c $< -o $@
 

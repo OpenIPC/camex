@@ -27,8 +27,10 @@ device's web UI by name, with a start page of all of them.
 - **Auto-config mode** — client fetches tunnel parameters from the server
 - **Named networks** — a client joins with the server's address and the network's name; its
   address follows from the name and its ID, the same after any restart ([docs/networks.md](docs/networks.md))
-- **The full camex** (`camex-<arch>-full`) — TAP networks, a LAN bridged without a bridge device
+- **TAP networks and mesh** — TAP networks, a LAN bridged without a bridge device
   (`--bridge`, Wi-Fi too), and mesh networks: peers go direct through NATs, through the server otherwise
+- **Two builds** — `camex-<arch>` has everything; `camex-<arch>-client` (ARM, MIPS) is a client
+  without the server, for cameras and routers; build flags choose any other set ([docs/build.md](docs/build.md#profiles-and-flags))
 - **Protocol v2** — Noise handshake (`NKpsk0`, X25519, ChaCha20-Poly1305,
   BLAKE2b), fresh keys per session and direction, always encrypted
 - **No external dependencies** — only libc required
@@ -106,16 +108,21 @@ rebuilt by CI from every push to `master`. Its title shows the camex version
 - release page: `https://github.com/OpenIPC/camex/releases/latest`
 - a file: `https://github.com/OpenIPC/camex/releases/latest/download/<file>`
 
-| File                       | Platform                                                                      |
-|----------------------------|-------------------------------------------------------------------------------|
-| `camex-aarch64`            | Linux AArch64, static (musl)                                                  |
-| `camex-arm`                | Linux 32-bit ARM, static (musl): OpenIPC cameras                              |
-| `camex-mipsel`             | Linux MIPS little-endian, static (musl, soft-float): Ingenic cameras, routers |
-| `camex-x86_64`             | Linux x86_64, static (musl)                                                   |
-| `camex-android.apk`        | Android 5.0 and later                                                         |
-| `camex-macos.zip`          | macOS (utun): `camex`, LICENSE, README                                        |
-| `camex-windows-x86_64.zip` | Windows 64-bit: `camex.exe` and `wintun.dll`                                  |
-| `camex-windows-i686.zip`   | Windows 32-bit: `camex.exe` and `wintun.dll`                                  |
+| File                       | Platform                                                                               |
+|----------------------------|----------------------------------------------------------------------------------------|
+| `camex-aarch64`            | Linux AArch64, static (musl)                                                           |
+| `camex-arm`                | Linux 32-bit ARM, static (musl): OpenIPC cameras                                       |
+| `camex-arm-client`         | Linux 32-bit ARM, static (musl): a client only, without the server                     |
+| `camex-mipsel`             | Linux MIPS little-endian, static (musl, soft-float): Ingenic cameras, routers          |
+| `camex-mipsel-client`      | Linux MIPS little-endian, static (musl, soft-float): a client only, without the server |
+| `camex-x86_64`             | Linux x86_64, static (musl)                                                            |
+| `camex-android.apk`        | Android 5.0 and later                                                                  |
+| `camex-macos.zip`          | macOS (utun): `camex`, LICENSE, README                                                 |
+| `camex-windows-x86_64.zip` | Windows 64-bit: `camex.exe` and `wintun.dll`                                           |
+| `camex-windows-i686.zip`   | Windows 32-bit: `camex.exe` and `wintun.dll`                                           |
+
+`camex-<arch>-full`, the name of the full camex until 5.0.0, is the same file as
+`camex-<arch>` until 6.0.0.
 
 ```sh
 URL=https://github.com/OpenIPC/camex/releases/latest/download

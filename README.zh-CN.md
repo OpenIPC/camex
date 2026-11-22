@@ -26,7 +26,8 @@
 - **客户端/服务器架构**，基于 UDP 或 TCP：服务器在同一端口同时监听两者，共用一个地址池
 - **自动配置模式** —— 客户端从服务器获取隧道参数
 - **命名网络** —— 客户端只需服务器地址和网络名称即可加入；其地址由名称和客户端 ID 推导，重启后保持不变（[docs/networks.md](docs/networks.md)）
-- **完整版 camex**（`camex-<arch>-full`）—— TAP 网络、无需网桥设备的局域网桥接（`--bridge`，支持 Wi-Fi）、mesh 网络：节点穿透 NAT 直连，否则经服务器中转
+- **TAP 网络与 mesh** —— TAP 网络、无需网桥设备的局域网桥接（`--bridge`，支持 Wi-Fi）、mesh 网络：节点穿透 NAT 直连，否则经服务器中转
+- **两种构建** —— `camex-<arch>` 包含全部功能；`camex-<arch>-client`（ARM、MIPS）是不含服务器的客户端，用于摄像头和路由器；构建选项可组合出其他功能集（[docs/build.md](docs/build.md#profiles-and-flags)）
 - **协议 v2** —— Noise 握手（`NKpsk0`、X25519、ChaCha20-Poly1305、BLAKE2b），
   每个会话、每个方向使用新的密钥，始终加密
 - **无外部依赖** —— 仅需 libc
@@ -98,16 +99,20 @@ CI 会在每次推送到 `master` 时重新构建。其标题显示 camex 版本
 - 发布页面：`https://github.com/OpenIPC/camex/releases/latest`
 - 单个文件：`https://github.com/OpenIPC/camex/releases/latest/download/<文件>`
 
-| 文件                       | 平台                                                          |
-|----------------------------|---------------------------------------------------------------|
-| `camex-aarch64`            | Linux AArch64，静态链接（musl）                               |
-| `camex-arm`                | Linux 32 位 ARM，静态链接（musl）：OpenIPC 摄像头             |
-| `camex-mipsel`             | Linux MIPS 小端，静态链接（musl，软浮点）：君正摄像头、路由器 |
-| `camex-x86_64`             | Linux x86_64，静态链接（musl）                                |
-| `camex-android.apk`        | Android 5.0 及更高版本                                        |
-| `camex-macos.zip`          | macOS（utun）：`camex`、LICENSE、README                       |
-| `camex-windows-x86_64.zip` | Windows 64 位：`camex.exe` 和 `wintun.dll`                    |
-| `camex-windows-i686.zip`   | Windows 32 位：`camex.exe` 和 `wintun.dll`                    |
+| 文件                       | 平台                                                            |
+|----------------------------|-----------------------------------------------------------------|
+| `camex-aarch64`            | Linux AArch64，静态链接（musl）                                 |
+| `camex-arm`                | Linux 32 位 ARM，静态链接（musl）：OpenIPC 摄像头               |
+| `camex-arm-client`         | Linux 32 位 ARM，静态链接（musl）：仅客户端，不含服务器         |
+| `camex-mipsel`             | Linux MIPS 小端，静态链接（musl，软浮点）：君正摄像头、路由器   |
+| `camex-mipsel-client`      | Linux MIPS 小端，静态链接（musl，软浮点）：仅客户端，不含服务器 |
+| `camex-x86_64`             | Linux x86_64，静态链接（musl）                                  |
+| `camex-android.apk`        | Android 5.0 及更高版本                                          |
+| `camex-macos.zip`          | macOS（utun）：`camex`、LICENSE、README                         |
+| `camex-windows-x86_64.zip` | Windows 64 位：`camex.exe` 和 `wintun.dll`                      |
+| `camex-windows-i686.zip`   | Windows 32 位：`camex.exe` 和 `wintun.dll`                      |
+
+`camex-<arch>-full` 是 5.0.0 及以前完整版 camex 的文件名，在 6.0.0 之前与 `camex-<arch>` 为同一文件。
 
 ```sh
 URL=https://github.com/OpenIPC/camex/releases/latest/download

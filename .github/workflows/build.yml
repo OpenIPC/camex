@@ -153,6 +153,10 @@ jobs:
         run: ./docker/test-e2e-mesh.sh
         if: matrix.target == 'x86_64'
 
+      - name: E2E test (the client profile, without the server, issue #204)
+        run: ./docker/test-e2e-client-profile.sh
+        if: matrix.target == 'x86_64'
+
       - name: E2E test (nginx map of the clients, issue #84)
         run: ./docker/test-e2e-nginx-map.sh
         if: matrix.target == 'x86_64'
@@ -188,8 +192,10 @@ jobs:
       - name: Report size
         run: |
           echo "## ${{ matrix.target }} binary sizes" | tee -a sizes.md
+          # camex-<arch> (full; -full is the same file) and, for arm and mipsel,
+          # camex-<arch>-client (#204)
           ls -lh "${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.target }}" \
-                 "${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.target }}-full" | \
+                 "${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.target }}"-client 2>/dev/null | \
             awk '{print "- `" $5 "`  " $9}' | tee -a sizes.md
 
       - name: Upload artifact
@@ -199,6 +205,7 @@ jobs:
           path: |
             ${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.target }}
             ${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.target }}-full
+            ${{ env.BUILD_DIR }}/${{ env.TARGET }}-${{ matrix.target }}-client
           if-no-files-found: error
 
       - name: Upload size report
@@ -713,10 +720,15 @@ jobs:
           [ "$PREV" = "Camex $VER" ] || echo "new=true" >> "$GITHUB_OUTPUT"
 
           mkdir release
-          # Linux: static musl binaries, one per architecture
-          # ... and the full camex (TAP networks, --bridge, mesh) of each
+          # Linux: static musl binaries, one per architecture: the full camex
+          # (server, TAP networks, --bridge, mesh); camex-<arch>-full is the
+          # same file under its name of 5.0.0 and before, until 6.0.0 (#204)
           for arch in aarch64 arm mipsel x86_64; do
             cp -v "artifacts/camex-$arch" "artifacts/camex-$arch-full" release/
+          done
+          # ... and the client profile (no server) for cameras and routers
+          for arch in arm mipsel; do
+            cp -v "artifacts/camex-$arch-client" release/
           done
           # Android: the signed release APK only (the debug APK has another name)
           cp -v artifacts/camex-android.apk release/

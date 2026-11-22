@@ -32,7 +32,9 @@ else
   MAKE_BUILDDIR_ARG =
 endif
 # The optional features (src/Makefile): passed on when given
-MAKE_FEATURE_ARGS = $(if $(CAMEX_L2),CAMEX_L2='$(CAMEX_L2)') \
+MAKE_FEATURE_ARGS = $(if $(PROFILE),PROFILE='$(PROFILE)') \
+                    $(if $(CAMEX_SERVER),CAMEX_SERVER='$(CAMEX_SERVER)') \
+                    $(if $(CAMEX_L2),CAMEX_L2='$(CAMEX_L2)') \
                     $(if $(CAMEX_MESH),CAMEX_MESH='$(CAMEX_MESH)')
 MAKE_ARGS = $(MAKE_CC_ARG) $(MAKE_STRIP_ARG) $(MAKE_TARGET_ARG) $(MAKE_BUILDDIR_ARG) \
             $(MAKE_FEATURE_ARGS)

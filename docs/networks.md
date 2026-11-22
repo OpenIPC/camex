@@ -328,15 +328,16 @@ of the auto pool.
 
 ## The full camex
 
-Three features are built only into the full camex: TAP networks, bridging a
-LAN, and mesh networks. Each release has both binaries: `camex-<arch>`, the
-core as before, and `camex-<arch>-full`. To build the full one:
+TAP networks, bridging a LAN and mesh networks are built in by default, in
+both build profiles ([build.md](build.md#profiles-and-flags)): `camex-<arch>`
+(full) and `camex-<arch>-client` have them. `CAMEX_L2=0` and `CAMEX_MESH=0`
+leave them out:
 
 ```sh
-make CAMEX_L2=1 CAMEX_MESH=1        # both; either flag alone works too
+make PROFILE=client CAMEX_L2=0 CAMEX_MESH=0   # a client with TUN networks only
 ```
 
-A core camex refuses what it was built without, and says so:
+A camex built without them refuses what it lacks, and says so:
 
 - a server refuses `mode = tap` or `mesh = yes` in its file;
 - a client refuses a server's `MODE=TAP`;

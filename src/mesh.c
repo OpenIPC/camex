@@ -104,7 +104,7 @@ static struct {
     uint32_t gw_be;
     uint32_t own_be;
     mesh_peer_t peers[MESH_PEERS];
-} mesh = { 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, { { 0 } } };
+} mesh;   /* all zero (bss, #204): fd is a socket only while active */
 
 static long now_ms(void)
 {
@@ -214,7 +214,8 @@ void mesh_client_stop(void)
 #endif
         mesh.peers[i].used = 0U;
     }
-    if (mesh.fd >= 0) {
+    /* A socket only while active: start closes its own on a failure */
+    if (mesh.active && mesh.fd >= 0) {
         close(mesh.fd);
     }
     mesh.fd = -1;
