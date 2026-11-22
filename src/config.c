@@ -1097,12 +1097,7 @@ int config_db_web_port(const char *client_id, int announced)
     if (announced > 0 && announced <= 65535) {
         return announced;
     }
-    if (server_db.defaults.web_port > 0) {
-        return server_db.defaults.web_port;
-    }
-    /* device_port= of [server] (#203): in the records too, so the start
-     * page of another server on the host takes this one's (#210) */
-    return server_db.globals.device_port > 0 ? server_db.globals.device_port : 0;
+    return server_db.defaults.web_port > 0 ? server_db.defaults.web_port : 0;
 }
 
 /* Key store lookups (#5): by key (32 bytes) and by owner (client ID) */

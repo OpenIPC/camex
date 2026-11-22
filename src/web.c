@@ -72,9 +72,10 @@ typedef struct {
 } web_conn_t;
 
 /* What the other servers answered: one command each */
-enum { PEER_WEB, PEER_INDEX, PEER_JSON, PEER_CMDS };
+enum { PEER_WEB, PEER_INDEX, PEER_JSON, PEER_DPORT, PEER_CMDS };
 static const char *const peer_cmd[PEER_CMDS] = {
-    "CLIENTS WEB\n", "CLIENTS INDEX VIA\n", "STATUS JSON\n"
+    "CLIENTS WEB\n", "CLIENTS INDEX VIA\n", "STATUS JSON\n",
+    "DEVICE PORT\n"
 };
 
 typedef struct {
@@ -460,11 +461,40 @@ static char *gather(int kind)
         for (i = 0; !server_db.globals.web_scope_self && i < web_npeers; ++i) {
             const char *t = peer_got(&web_peers[i], kind);
 
-            if (t != NULL) {
-                if (b.len > 0U && b.p[b.len - 1U] != '\n') {
-                    wb_str(&b, "\n");
-                }
+            if (t == NULL) {
+                continue;
+            }
+            if (b.len > 0U && b.p[b.len - 1U] != '\n') {
+                wb_str(&b, "\n");
+            }
+            if (kind != PEER_WEB) {
                 wb_str(&b, t);
+                continue;
+            }
+            /* Its records without a web port take its device_port=, not
+             * this server's (#211) */
+            {
+                const char *dp = peer_got(&web_peers[i], PEER_DPORT);
+                int port = dp != NULL ? atoi(dp) : 0;
+
+                while (*t != '\0') {
+                    const char *eol = strchr(t, '\n');
+                    size_t ll = eol != NULL ? (size_t)(eol - t) : strlen(t);
+                    size_t k, fields = 1U;
+
+                    for (k = 0U; k < ll; ++k) {
+                        fields += t[k] == ' ' ? 1U : 0U;
+                    }
+                    wb_add(&b, t, ll);
+                    if (fields == 2U && port > 0 && port <= 65535) {
+                        char extra[8];
+
+                        snprintf(extra, sizeof(extra), " %d", port);
+                        wb_str(&b, extra);
+                    }
+                    wb_str(&b, "\n");
+                    t += ll + (eol != NULL ? 1U : 0U);
+                }
             }
         }
         if (b.p == NULL && !b.err) {
@@ -682,9 +712,16 @@ static int authorized(web_conn_t *c, const char *pw, int head_only)
             web_pw_count = 0U;
         }
         if (++web_pw_count > WEB_PW_PER_SEC) {
-            /* Not checked, but counted: a flood of guesses shuts its
-             * address out as wrong ones would */
-            count_fail(c->ip, now);
+            /* Not checked: counted only for an address that has wrong
+             * ones already (a flood of guesses), never for one that may
+             * have the right password (#211) */
+            {
+                web_fail_t *had = fail_slot(c->ip, 0);
+
+                if (had != NULL && had->fails > 0U) {
+                    count_fail(c->ip, now);
+                }
+            }
             respond_text(c, 429, "Too Many Requests", "Retry-After: 1\r\n",
                          "Busy: try again in a second\n", head_only);
             return 0;
@@ -1053,6 +1090,11 @@ void web_handle(const fd_set *readset, const fd_set *writeset)
                     break;
                 }
             }
+            if (fd >= FD_SETSIZE || set_nonblock(fd) != 0 ||
+                from.sin_family != AF_INET) {
+                close(fd);   /* before it could push another one out (#211) */
+                continue;
+            }
             /* All taken: the oldest one still sending its head makes room,
              * one from beyond this host first, so idle visitors cannot keep
              * nginx's lookups out (#210) */
@@ -1080,8 +1122,7 @@ void web_handle(const fd_set *readset, const fd_set *writeset)
                     c = victim;
                 }
             }
-            if (c == NULL || fd >= FD_SETSIZE || set_nonblock(fd) != 0 ||
-                from.sin_family != AF_INET) {
+            if (c == NULL) {
                 close(fd);
                 continue;
             }
