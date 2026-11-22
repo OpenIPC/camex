@@ -44,6 +44,7 @@
 #ifndef _WIN32
 #include <sys/mman.h>
 #include <sys/syslog.h>
+#include <termios.h>
 #endif
 
 void signal_handler(int sig)
@@ -67,6 +68,9 @@ void print_version(void)
     printf("features: client"
 #ifndef CAMEX_NO_SERVER
            ", server"
+#endif
+#ifndef CAMEX_NO_WEB
+           ", web"
 #endif
 #ifdef CAMEX_L2
            ", l2"
@@ -146,6 +150,48 @@ static int bench_crypto(void)
     return 1;
 }
 
+#ifndef CAMEX_NO_WEB
+/* camex --hash-password (#203): the start page's password from stdin (no
+ * echo on a terminal), its web_password= line on stdout */
+static int hash_password(void)
+{
+    char pass[256], hash[128];
+    size_t n;
+#ifndef _WIN32
+    struct termios old, quiet;
+    int tty = isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &old) == 0;
+
+    if (tty) {
+        fputs("Password for the start page: ", stderr);
+        fflush(stderr);
+        quiet = old;
+        quiet.c_lflag &= (tcflag_t)~ECHO;
+        (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &quiet);
+    }
+#endif
+    if (fgets(pass, sizeof(pass), stdin) == NULL) {
+        pass[0] = '\0';
+    }
+#ifndef _WIN32
+    if (tty) {
+        (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &old);
+        fputc('\n', stderr);
+    }
+#endif
+    n = strcspn(pass, "\r\n");
+    pass[n] = '\0';
+    if (n == 0U || key_password_hash(pass, hash, sizeof(hash)) != 0) {
+        crypto_wipe(pass, sizeof(pass));
+        log_message(LOG_ERR, n == 0U ? "No password given (stdin)"
+                                     : "Cannot hash the password");
+        return -1;
+    }
+    crypto_wipe(pass, sizeof(pass));
+    printf("web_password=%s\n", hash);
+    return 0;
+}
+#endif
+
 int parse_arguments(int argc, char **argv, camex_config_t *config)
 {
     static const struct option long_options[] = {
@@ -195,6 +241,9 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         { "no-tun-offload", no_argument, NULL, 1008 },
         { "verbose", no_argument, NULL, 1009 },
         { "quiet", no_argument, NULL, 1010 },
+#ifndef CAMEX_NO_WEB
+        { "hash-password", no_argument, NULL, 1011 },
+#endif
         { NULL, 0, NULL, 0 }
     };
     int opt;
@@ -301,6 +350,10 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
                 crypto_wipe(priv, sizeof(priv));
             }
             return 1;
+#ifndef CAMEX_NO_WEB
+        case 1011:
+            return hash_password() == 0 ? 1 : -1;
+#endif
         case 'S':
             if (copy_option(config->server_key_file,
                             sizeof(config->server_key_file), optarg,
@@ -768,7 +821,10 @@ void print_usage(const char *progname)
            " --port <port> [options]\n", progname);
     printf("  %s --mode client --auto --server-host <addr>"
            " --port <port> [options]\n", progname);
-    printf("  %s --mode server --port <port> [options]\n\n", progname);
+#ifndef CAMEX_NO_SERVER
+    printf("  %s --mode server --port <port> [options]\n", progname);
+#endif
+    printf("\n");
 
     printf("Mode selection:\n");
     printf("  -M, --mode <mode>    "
@@ -777,8 +833,13 @@ void print_usage(const char *progname)
     printf("Modes:\n");
     printf("  client    Creates a TUN device and connects outbound"
            " to the server\n");
+#ifndef CAMEX_NO_SERVER
     printf("  server    Listens on UDP/TCP and relays packets"
-           " between clients\n\n");
+           " between clients\n");
+#else
+    printf("  server    Not in this build (CAMEX_SERVER=0): a client only\n");
+#endif
+    printf("\n");
 
     printf("Client options:\n");
     printf("  -a, --auto              "
@@ -840,7 +901,9 @@ void print_usage(const char *progname)
     printf("      --control <path> Ask only the server at this socket\n");
 #ifndef CAMEX_NO_SERVER
     printf("      --format nginx-map  An nginx map of the clients"
-           " (<id>[.<domain>] -> <address>:<port>)\n");
+           " (<id>[.<domain>] -> <address>:<port>);\n"
+           "                       deprecated, as nginx-index: web_listen="
+           " in [server] (docs/nginx.md)\n");
     printf("      --format nginx-index  A start page of the clients (HTML:"
            " Configured and Auto tabs; name,\n"
            "                       link, address, peer link (peer_port=),"
@@ -881,8 +944,15 @@ void print_usage(const char *progname)
            "                       a lost link noticed after 20 s +"
            " --server-timeout\n");
     printf("      --genkey         Print a new server key pair and exit\n");
+#ifndef CAMEX_NO_WEB
+    printf("      --hash-password  Read the start page's password from stdin,"
+           " print its\n"
+           "                       web_password= line for [server] and exit\n");
+#endif
+#ifndef CAMEX_NO_SERVER
     printf("      --server-key-file <path> Server: file with its private key\n"
            "                       (or server_key= in [server])\n");
+#endif
     printf("      --server-pubkey <key> Client: the server's public key"
            " (without it the key\n"
            "                       the server gives on first contact is"
@@ -902,6 +972,7 @@ void print_usage(const char *progname)
     printf("  -h, --help           Show this help message and exit\n\n");
 
     printf("Examples:\n");
+#ifndef CAMEX_NO_SERVER
     printf("  # Server key pair (once): keep server_key secret, give\n"
            "  # public_key to the clients\n");
     printf("  (umask 077; %s --genkey > /etc/camex/server.key)\n\n", progname);
@@ -915,6 +986,7 @@ void print_usage(const char *progname)
            " --config /etc/camex/camex.conf"
            " --server-key-file /etc/camex/server.key --psk secret\n\n",
            progname);
+#endif
     printf("  # Client joining a network: the server, the network's name;"
            " the ID is the MAC\n");
     printf("  %s --server-host cloud.openipc.org --network my-cams\n\n",

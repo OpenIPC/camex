@@ -278,6 +278,50 @@ int config_parse_cidr_key(const char *value, const char *what,
 }
 
 /* client_timeout= (#143): seconds of silence before a client expires */
+/* web_listen= (#203): yes (127.0.0.1:5801), no, <port> (on 127.0.0.1) or
+ * <IPv4>:<port>; out gets "<IPv4>:<port>", or "" for no */
+static int parse_web_listen(const char *value, char *out, size_t size)
+{
+    char ip[16] = "127.0.0.1";
+    const char *colon = strrchr(value, ':');
+    const char *port = value;
+    struct in_addr a;
+    char *end = NULL;
+    long p;
+
+    if (strcmp(value, "no") == 0 || value[0] == '\0') {
+        out[0] = '\0';
+        return 0;
+    }
+    if (strcmp(value, "yes") == 0) {
+        snprintf(out, size, "127.0.0.1:%d", CAMEX_WEB_PORT_DEFAULT);
+        return 0;
+    }
+    if (colon != NULL) {
+        size_t n = (size_t)(colon - value);
+
+        if (n == 0U || n >= sizeof(ip)) {
+            goto bad;
+        }
+        memcpy(ip, value, n);
+        ip[n] = '\0';
+        port = colon + 1;
+    }
+    if (inet_pton(AF_INET, ip, &a) != 1) {
+        goto bad;
+    }
+    p = strtol(port, &end, 10);
+    if (port[0] == '\0' || *end != '\0' || p < 1L || p > 65535L) {
+        goto bad;
+    }
+    snprintf(out, size, "%s:%ld", ip, p);
+    return 0;
+bad:
+    log_message(LOG_ERR, "Invalid web_listen=: %s (yes, no, <port> or "
+                "<IPv4>:<port>)", value);
+    return -1;
+}
+
 static int parse_client_timeout(const char *value, unsigned int *out)
 {
     char *end = NULL;
@@ -800,6 +844,41 @@ static int config_db_parse_file(const char *path, char *line,
                 } else {
                     rc = copy_option(g->domain, sizeof(g->domain), val,
                                      "domain");
+                }
+            } else if (strcmp(content, "web_listen") == 0) {
+                rc = parse_web_listen(val, g->web_listen,
+                                      sizeof(g->web_listen));
+            } else if (strcmp(content, "web_password") == 0) {
+                /* argon2id$<salt>$<hash> of camex --hash-password, or
+                 * none: a page open on purpose (#203) */
+                if (strcmp(val, "none") != 0 &&
+                    strncmp(val, "argon2id$", 9) != 0) {
+                    log_message(LOG_ERR, "Invalid web_password=: a hash of "
+                                "camex --hash-password (argon2id$...) or "
+                                "none, never the password itself");
+                    rc = -1;
+                } else {
+                    rc = copy_option(g->web_password, sizeof(g->web_password),
+                                     val, "web_password");
+                }
+            } else if (strcmp(content, "web_scope") == 0) {
+                if (strcmp(val, "self") == 0 || strcmp(val, "all") == 0) {
+                    g->web_scope_self = strcmp(val, "self") == 0 ? 1U : 0U;
+                } else {
+                    log_message(LOG_ERR, "Invalid web_scope=: %s (all or "
+                                "self)", val);
+                    rc = -1;
+                }
+            } else if (strcmp(content, "device_port") == 0) {
+                char *end = NULL;
+                long v = strtol(val, &end, 10);
+
+                if (val[0] == '\0' || *end != '\0' || v < 1L || v > 65535L) {
+                    log_message(LOG_ERR, "Invalid device_port=: %s (1 to "
+                                "65535)", val);
+                    rc = -1;
+                } else {
+                    g->device_port = (int)v;
                 }
             } else if (strcmp(content, "name") == 0) {
                 /* A client's display name (#105), as in [defaults] */

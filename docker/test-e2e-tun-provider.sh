@@ -55,13 +55,13 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
 COPY src /b/src
 COPY test /b/test
 RUN cd /b/src && CF="-std=c99 -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L -O1 -I." && \
-    for f in camex netw pake cpaceguard offload monocypher util log crypto noise keys session tun packet net proto config client server slotidx control nginxmap tcpgate wintun; do \
+    for f in camex netw pake cpaceguard offload monocypher util log crypto noise keys session tun packet net proto config client server slotidx control nginxmap tcpgate wintun web; do \
         gcc $CF -c $f.c -o /b/$f.o; done && \
     gcc $CF -Dmain=camex_program_main -c main.c -o /b/main.o && \
     gcc $CF -c ../test/test_tun_provider.c -o /b/t.o && \
     gcc -o /usr/local/bin/camex-provider /b/*.o && \
     gcc $CF -o /usr/local/bin/camex camex.c netw.c pake.c cpaceguard.c offload.c monocypher.c util.c log.c crypto.c noise.c keys.c session.c tun.c packet.c \
-        net.c proto.c config.c client.c server.c slotidx.c control.c nginxmap.c tcpgate.c wintun.c main.c
+        net.c proto.c config.c client.c server.c slotidx.c control.c nginxmap.c tcpgate.c wintun.c web.c main.c
 RUN printf '#!/bin/sh\nmkdir -p /dev/net\n[ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200\nexec "$@"\n' \
         > /usr/local/bin/with-tun && chmod +x /usr/local/bin/with-tun
 ENTRYPOINT ["/usr/local/bin/with-tun"]

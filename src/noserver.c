@@ -11,6 +11,12 @@
 
 #include "server.h"
 
+/* A build that takes noserver.c must say so to every file, or main.c and
+ * control.c keep their server parts and only the stubs answer (#204) */
+#ifndef CAMEX_NO_SERVER
+#error "noserver.c needs CAMEX_NO_SERVER (CAMEX_DEFINITIONS of android/camex-sources.cmake, or make CAMEX_SERVER=0)"
+#endif
+
 #include <stddef.h>
 
 size_t server_tcp_reg_cap = 0U;

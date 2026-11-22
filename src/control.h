@@ -56,7 +56,13 @@ int control_fdset(fd_set *readset, fd_set *writeset, int maxfd);
 
 /* Server loop: serve the ready control descriptors */
 void control_handle(const fd_set *readset, const fd_set *writeset);
+
+/* The control sockets of the other servers on this host (#203) */
+int control_peers(char (**out)[108]);
 #endif
+
+/* The end of every answer on a control socket */
+#define CONTROL_END_MARK ".\n"
 
 /* camex --status [--json] [--control <path>]: print the status of one
  * server, or of every server in CAMEX_CONTROL_DIR. Exit code: 0, or 1. */

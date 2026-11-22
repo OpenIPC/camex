@@ -4,7 +4,7 @@
 #
 # test-e2e-nginx-map.sh — nginx in front of camex clients by name (#84)
 #
-# The server and nginx in one container, with examples/nginx-camex.conf
+# The server and nginx in one container, with examples/nginx-camex-map.conf
 # and examples/camex-nginx-sync.sh; each client serves a page with its ID
 # on port 80 of its tunnel address.
 #
@@ -75,7 +75,7 @@ check() {   # check <condition-exit-code> <message>
 
 cp "$CAMEX_BINARY" "$BUILD_CTX/camex"
 cp "$REPO_DIR/examples/camex-nginx-sync.sh" "$BUILD_CTX/"
-sed "s/cam\.example\.lan/$DOMAIN/g" "$REPO_DIR/examples/nginx-camex.conf" > "$BUILD_CTX/nginx-camex.conf"
+sed "s/cam\.example\.lan/$DOMAIN/g" "$REPO_DIR/examples/nginx-camex-map.conf" > "$BUILD_CTX/nginx-camex.conf"
 . "$SCRIPT_DIR/lib-keys.sh"
 gen_server_key "$BUILD_CTX" "$CAMEX_BINARY" || { echo "cannot create a server key"; exit 1; }
 # CAM-Z is configured but never connects: offline on the start page

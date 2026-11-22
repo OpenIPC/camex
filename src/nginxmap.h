@@ -58,4 +58,18 @@ int camex_name_valid(const char *name);
 char *nginx_index_format(const char *lines, const char *domain,
                          int http_port, FILE *warn, size_t *count);
 
+/* The start page served by camex itself (#203): as nginx_index_format();
+ * with direct_port > 0 (no nginx in front) each device links to its tunnel
+ * address and its web port from web_lines (CLIENTS WEB), direct_port when
+ * it gives none */
+char *web_index_format(const char *lines, const char *web_lines,
+                       const char *domain, int http_port, int direct_port,
+                       FILE *warn, size_t *count);
+
+/* nginx's lookup (#203): host (nginx's $host, a port after ':' ignored) in
+ * the CLIENTS WEB records, as the map would send it: "<address>:<port>"
+ * in out, 1; 0 when no device has that name */
+int web_resolve(const char *web_lines, const char *domain, int dflt_port,
+                const char *host, char *out, size_t size);
+
 #endif /* CAMEX_NGINXMAP_H */

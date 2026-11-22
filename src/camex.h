@@ -9,6 +9,12 @@
 #ifndef CAMEX_H
 #define CAMEX_H
 
+/* No server, no start page (#203, #204): a build that leaves out the
+ * server (CAMEX_NO_SERVER, as the Android library's) leaves it out too */
+#if defined(CAMEX_NO_SERVER) && !defined(CAMEX_NO_WEB)
+#define CAMEX_NO_WEB
+#endif
+
 #ifndef _WIN32
 #ifndef __APPLE__
 #include <net/if.h>

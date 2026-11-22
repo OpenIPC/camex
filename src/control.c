@@ -815,6 +815,25 @@ static int control_list(control_path_t **out)
     return n;
 }
 
+/* The control sockets of the other servers on this host (#203: the start
+ * page of web_scope = all): their paths in *out (malloc'd), their number */
+int control_peers(char (**out)[108])
+{
+    control_path_t *paths = NULL;
+    int n = control_list(&paths), i, k = 0;
+
+    for (i = 0; i < n; ++i) {
+        if (control_path[0] == '\0' || strcmp(paths[i], control_path) != 0) {
+            if (k != i) {
+                memcpy(paths[k], paths[i], sizeof(paths[k]));
+            }
+            k++;
+        }
+    }
+    *out = paths;
+    return n < 0 ? 0 : k;
+}
+
 int control_status(const char *path, int json)
 {
     const char *cmd = json ? "STATUS JSON\n" : "STATUS\n";

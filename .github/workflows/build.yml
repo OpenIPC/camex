@@ -69,6 +69,16 @@ jobs:
           ./${{ env.TARGET }} --help 2>&1 | head -5 || true
         if: matrix.target == 'x86_64'
 
+      # Every part a profile or a flag leaves out still builds without a
+      # warning (#204): the client profile, and the server without web
+      - name: Profiles, warnings as errors
+        run: |
+          make -s -C src CC="gcc -Werror" PROFILE=client BUILD_DIR=build/werror-client
+          make -s -C src CC="gcc -Werror" CAMEX_WEB=0 BUILD_DIR=build/werror-noweb
+          make -s -C src CC="gcc -Werror" CAMEX_L2=0 CAMEX_MESH=0 BUILD_DIR=build/werror-core
+          src/build/werror-client/camex --version
+        if: matrix.target == 'x86_64'
+
       - name: Unit tests
         run: make test
         if: matrix.target == 'x86_64'
@@ -157,7 +167,11 @@ jobs:
         run: ./docker/test-e2e-client-profile.sh
         if: matrix.target == 'x86_64'
 
-      - name: E2E test (nginx map of the clients, issue #84)
+      - name: E2E test (camex's own start page and nginx's auth_request, issue #203)
+        run: ./docker/test-e2e-web.sh
+        if: matrix.target == 'x86_64'
+
+      - name: E2E test (nginx map of the clients, issue #84; deprecated)
         run: ./docker/test-e2e-nginx-map.sh
         if: matrix.target == 'x86_64'
 

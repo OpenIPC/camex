@@ -663,7 +663,8 @@ static void buf_kib(map_buf_t *b, unsigned long long v)
 
 /* One list of the page: a table of e[0..n), or a line saying it is empty */
 static void buf_list(map_buf_t *b, const char *cls, const map_entry_t *e,
-                     long n, const char *empty, const char *port)
+                     long n, const char *empty, const char *port,
+                     long direct)
 {
     long i;
 
@@ -684,10 +685,23 @@ static void buf_list(map_buf_t *b, const char *cls, const map_entry_t *e,
 
         /* The host and the ID are host name labels: nothing to escape
          * in them */
-        if (d->live) {
+        if (d->live && direct > 0L) {
+            /* No nginx (#203): its tunnel address and web port */
+            long wp = d->web_port > 0L ? d->web_port : direct;
+
+            buf_printf(b, "<tr class=\"dev\"><td class=\"lamp\"><span "
+                       "class=\"bulb\"></span></td><td><a class=\"peer\" "
+                       "href=\"http://%s", d->addr_text);
+            if (wp != 80L) {
+                buf_printf(b, ":%ld", wp);
+            }
+            buf_printf(b, "/\">");
+        } else if (d->live) {
             buf_printf(b, "<tr class=\"dev\"><td class=\"lamp\"><span "
                        "class=\"bulb\"></span></td><td><a href=\"%s//%s%s/\">",
                        port[0] != '\0' ? "http:" : "", d->host, port);
+        }
+        if (d->live) {
             buf_html(b, shown_name(d));
             buf_printf(b, "</a></td><td class=\"id\">%s</td><td "
                        "class=\"addr\">%s</td><td class=\"addr\">",
@@ -743,8 +757,88 @@ static void buf_list(map_buf_t *b, const char *cls, const map_entry_t *e,
     buf_printf(b, "</tbody>\n</table>\n</div>\n</div>\n");
 }
 
+/* web_lines (CLIENTS WEB records, or NULL): each device's web port into
+ * e, by its ID */
+static void index_web_ports(map_entry_t *e, long n, const char *web_lines)
+{
+    map_entry_t *w = NULL;
+    long m, i, j;
+
+    if (web_lines == NULL) {
+        return;
+    }
+    m = parse_records(web_lines, NULL, 0, NULL, &w);
+    for (i = 0; i < n; ++i) {
+        for (j = 0; j < m; ++j) {
+            if (strcmp(e[i].label, w[j].label) == 0) {
+                e[i].web_port = w[j].web_port;
+                break;
+            }
+        }
+    }
+    free(w);
+}
+
+static char *index_format(const char *lines, const char *web_lines,
+                          const char *domain, int http_port, long direct,
+                          FILE *warn, size_t *count);
+
 char *nginx_index_format(const char *lines, const char *domain,
                          int http_port, FILE *warn, size_t *count)
+{
+    return index_format(lines, NULL, domain, http_port, 0L, warn, count);
+}
+
+char *web_index_format(const char *lines, const char *web_lines,
+                       const char *domain, int http_port, int direct_port,
+                       FILE *warn, size_t *count)
+{
+    return index_format(lines, web_lines, domain, http_port,
+                        direct_port > 0 ? (long)direct_port : 0L, warn, count);
+}
+
+int web_resolve(const char *web_lines, const char *domain, int dflt_port,
+                const char *host, char *out, size_t size)
+{
+    map_entry_t *e = NULL;
+    char want[MAP_HOST_MAX + 1];
+    size_t k, hl;
+    long n, i;
+    int found = 0;
+
+    out[0] = '\0';
+    if (host == NULL) {
+        return 0;
+    }
+    /* The name without nginx's port, in lower case */
+    hl = strcspn(host, ":");
+    if (hl == 0U || hl > MAP_HOST_MAX) {
+        return 0;
+    }
+    for (k = 0U; k < hl; ++k) {
+        want[k] = (char)tolower((unsigned char)host[k]);
+    }
+    want[hl] = '\0';
+    if ((domain != NULL && domain[0] != '\0' && !valid_hostname(domain)) ||
+        (n = parse_records(web_lines, domain, 0, NULL, &e)) <= 0) {
+        free(e);
+        return 0;
+    }
+    /* Sorted by host, then address: the first of a name is the map's */
+    for (i = 0; i < n && !found; ++i) {
+        if (strcmp(e[i].host, want) == 0) {
+            snprintf(out, size, "%s:%ld", e[i].addr_text,
+                     e[i].web_port > 0 ? e[i].web_port : (long)dflt_port);
+            found = 1;
+        }
+    }
+    free(e);
+    return found;
+}
+
+static char *index_format(const char *lines, const char *web_lines,
+                          const char *domain, int http_port, long direct,
+                          FILE *warn, size_t *count)
 {
     /* The links' port: nginx's, when it is not HTTP's own (#141). Then
      * the links say http: the port is that of HTTP, not of HTTPS */
@@ -761,6 +855,9 @@ char *nginx_index_format(const char *lines, const char *domain,
     n = parse_records(lines, domain, 1, warn, &e);
     if (n < 0) {
         return NULL;
+    }
+    if (direct > 0L) {
+        index_web_ports(e, n, web_lines);
     }
     /* The same ID on two servers: a live record before a configured one
      * that is not connected, then the lower address and name, as in the
@@ -966,9 +1063,9 @@ char *nginx_index_format(const char *lines, const char *domain,
         snprintf(port, sizeof(port), ":%d", http_port);
     }
     buf_list(&out, "list-conf", conf, nconf,
-             "No [client ID] blocks in the server's file", port);
+             "No [client ID] blocks in the server's file", port, direct);
     buf_list(&out, "list-auto", autos, nauto, "No auto devices online",
-             port);
+             port, direct);
     buf_printf(&out, "</div>\n<div class=\"foot\">Camex &middot; OpenIPC "
                "&middot; MIT License</div>\n"
                /* Remembers the chosen tab, and every 5 s puts the page
