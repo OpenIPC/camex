@@ -2202,7 +2202,7 @@ static int server_handle_pake1(const uint8_t *buf, size_t len,
      * gives it back (cpaceguard.h) */
     {
         int banned_now = 0;
-        int why = cpace_guard_attempt(src.a, g_now, &banned_now);
+        int why = cpace_guard_attempt(src.a, g_now, &banned_now, fd >= 0);
         char peer[64];
 
         if (why != CPACE_GUARD_OK) {

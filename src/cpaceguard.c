@@ -14,6 +14,7 @@
 
 #define GUARD_SLOTS  256U
 #define GUARD_PROBES 8U
+#define GUARD_GOOD_SLOTS 256U
 #define GUARD_GOOD_SECS 3600
 
 /* Buckets count in sixtieths of an attempt: per_min of them come back
@@ -26,10 +27,17 @@ typedef struct {
     unsigned long tokens;    /* sixtieths */
     unsigned int row;        /* attempts in a row without a confirm */
     time_t banned_until;
-    time_t good_until;       /* a client of it confirmed: never banned */
 } guard_entry_t;
 
+/* An address whose client confirmed within GUARD_GOOD_SECS: never banned,
+ * not held by the total. Apart, so a flood of sources cannot evict it. */
+typedef struct {
+    uint32_t ip;
+    time_t until;
+} guard_good_t;
+
 static guard_entry_t guard[GUARD_SLOTS];
+static guard_good_t good_tab[GUARD_GOOD_SLOTS];
 static uint8_t guard_key[16];
 static int guard_key_ready = 0;
 static unsigned int cfg_per_ip = CPACE_GUARD_PER_IP_DEFAULT;
@@ -55,6 +63,7 @@ void cpace_guard_config(unsigned int per_ip, unsigned int total,
 void cpace_guard_reset(void)
 {
     memset(guard, 0, sizeof(guard));
+    memset(good_tab, 0, sizeof(good_tab));
     memset(&counts, 0, sizeof(counts));
     total_tokens = (unsigned long)cfg_total * 60UL;
     total_filled = 0;
@@ -139,10 +148,35 @@ static guard_entry_t *guard_find(uint32_t ip, time_t now, int create)
     return victim;
 }
 
-int cpace_guard_attempt(uint32_t ip, time_t now, int *banned_now)
+/* Its entry in the good table (create: a free slot or the one that ends
+ * first), or NULL */
+static guard_good_t *good_find(uint32_t ip, time_t now, int create)
+{
+    uint32_t h = guard_hash(ip ^ 0x9E3779B9U);
+    guard_good_t *victim = NULL;
+    uint32_t p;
+
+    for (p = 0U; p < GUARD_PROBES; ++p) {
+        guard_good_t *g = &good_tab[(h + p) % GUARD_GOOD_SLOTS];
+
+        if (g->until > now && g->ip == ip) {
+            return g;
+        }
+        if (create && (victim == NULL || g->until < victim->until)) {
+            victim = g;
+        }
+    }
+    if (victim != NULL) {
+        victim->ip = ip;
+        victim->until = 0;
+    }
+    return victim;
+}
+
+int cpace_guard_attempt(uint32_t ip, time_t now, int *banned_now, int proven)
 {
     guard_entry_t *e = guard_find(ip, now, 1);
-    int good;
+    int good = good_find(ip, now, 0) != NULL;
 
     if (banned_now != NULL) {
         *banned_now = 0;
@@ -156,9 +190,12 @@ int cpace_guard_attempt(uint32_t ip, time_t now, int *banned_now)
         counts.refused++;
         return CPACE_GUARD_BANNED;
     }
-    good = e->good_until > now;
-    e->row++;
-    if (cfg_ban_after != 0U && cfg_ban_secs != 0U && !good &&
+    /* Only attempts over TCP, whose handshake proves the address, make a
+     * row toward a ban: a forged UDP source would ban its victim (#207) */
+    if (proven) {
+        e->row++;
+    }
+    if (cfg_ban_after != 0U && cfg_ban_secs != 0U && !good && proven &&
         e->row >= cfg_ban_after) {
         e->row = 0U;
         e->banned_until = now + (time_t)cfg_ban_secs;
@@ -194,9 +231,13 @@ int cpace_guard_attempt(uint32_t ip, time_t now, int *banned_now)
 void cpace_guard_confirm(uint32_t ip, time_t now)
 {
     guard_entry_t *e = guard_find(ip, now, 1);
+    guard_good_t *g = good_find(ip, now, 1);
     unsigned long cap;
 
     counts.confirmed++;
+    if (g != NULL) {
+        g->until = now + GUARD_GOOD_SECS;
+    }
     if (cfg_total != 0U) {
         cap = (unsigned long)cfg_total * 60UL;
         total_tokens = total_tokens + 60UL > cap ? cap : total_tokens + 60UL;
@@ -206,7 +247,7 @@ void cpace_guard_confirm(uint32_t ip, time_t now)
     }
     e->seen = now;
     e->row = 0U;
-    e->good_until = now + GUARD_GOOD_SECS;
+    e->banned_until = 0;
     if (cfg_per_ip != 0U) {
         cap = (unsigned long)cfg_per_ip * 60UL;
         e->tokens = e->tokens + 60UL > cap ? cap : e->tokens + 60UL;

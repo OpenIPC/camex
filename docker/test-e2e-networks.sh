@@ -344,7 +344,7 @@ check $? "the client does not take an impostor that claims to be open"
 docker logs "$P-srv" 2>&1 | grep -q "New network"
 r=$?; [ $r != 0 ]; check $? "the impostor learned no network"
 
-echo "== 12. CPace limits: a guesser is limited and banned, a real client is not"
+echo "== 12. CPace limits: a guesser over UDP is limited, not banned; a real client is not held"
 docker rm -f "$P-srv" "$P-a" >/dev/null 2>&1
 GUARD_NET="guard network of 24 chars"
 printf '[server]\nlocal_cidr = 10.200.0.1/24\ncpace_per_ip = 5\ncpace_ban_after = 8\ncpace_ban_time = 60\n\n[network %s]\nlabel = guarded\n' \
@@ -374,11 +374,12 @@ docker cp "$BUILD_CTX/guess.py" "$P-guess:/guess.py" >/dev/null
 answers=$(docker start -a "$P-guess" 2>/dev/null | tail -1)
 [ "$answers" = 5 ]
 check $? "the guesser got 5 answers of 10 (cpace_per_ip = 5), got ${answers:-none}"
-wait_log "$P-srv" "CPace: 8 attempts in a row from" 5
-check $? "the server bans it after 8 attempts in a row and says so"
+sleep 1
+! docker logs "$P-srv" 2>&1 | grep -q "CPace: 8 attempts in a row from"
+check $? "over UDP, whose source can be forged, it is not banned (#207)"
 docker exec "$P-srv" camex --status --json 2>/dev/null |
-    python3 -c "import json,sys; c=json.load(sys.stdin)['servers'][0]['cpace']; sys.exit(0 if c['bans']==1 and c['banned_now']==1 and c['refused']==5 else 1)"
-check $? "--status --json counts the attempts, the refusals and the ban"
+    python3 -c "import json,sys; c=json.load(sys.stdin)['servers'][0]['cpace']; sys.exit(0 if c['bans']==0 and c['banned_now']==0 and c['refused']==5 and c['attempts']==5 else 1)"
+check $? "--status --json counts the attempts and the refusals, no ban"
 client a srv "$GUARD_NET" --name CAM-G
 addr_of "$P-a" >/dev/null
 check $? "a real client from another address joins all the same"

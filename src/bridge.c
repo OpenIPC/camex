@@ -56,6 +56,7 @@ typedef struct {
 #define BRIDGE_REMOTES 256U
 #define BRIDGE_REMOTE_AGE 600      /* seconds a remote MAC stays known */
 #define BRIDGE_CLAIM_RECHECK 10    /* a refused address claim, asked again */
+#define BRIDGE_CLAIMS_PER_SEC 32U  /* reads of the host's neighbour table */
 #define BRIDGE_PROBE_EVERY 5
 #define BRIDGE_PEER_HOLD 15        /* a peer bridge counts this long */
 #define BRIDGE_FRAME_MAX 65600U    /* a TSO/GRO frame and its vnet header */
@@ -66,6 +67,7 @@ typedef struct {
     uint32_t neigh_ip_be;    /* the neighbour entry made for it */
     uint32_t refused_ip_be;  /* a LAN device's address it claimed (#206) */
     time_t refused_at;       /* when; asked again BRIDGE_CLAIM_RECHECK on */
+    time_t checked_at;       /* its last claim check: one a second */
     uint8_t probed;          /* a stale entry for it was probed by ARP */
     time_t seen;
     uint8_t used;
@@ -620,8 +622,24 @@ static bridge_remote_t *remote_learn(const uint8_t *frame, size_t len)
     if (ip != 0U && on_lan(ip) && r->neigh_ip_be != ip &&
         (r->refused_ip_be != ip ||
          difftime(r->seen, r->refused_at) >= (double)BRIDGE_CLAIM_RECHECK)) {
-        int may = neigh_may_take(ip, r->mac,
-                                 r->refused_ip_be == ip && r->probed);
+        static time_t claim_sec;
+        static unsigned int claims;
+        int may;
+
+        /* Each check reads the host's table in the tunnel's loop: one a
+         * second for each remote, so none takes the others' turns, and a
+         * bound for all (#212, #213); a claim held back is checked at the
+         * remote's next frame */
+        if (claim_sec != r->seen) {
+            claim_sec = r->seen;
+            claims = 0U;
+        }
+        if (r->checked_at == r->seen || claims >= BRIDGE_CLAIMS_PER_SEC) {
+            return r;
+        }
+        claims++;
+        r->checked_at = r->seen;
+        may = neigh_may_take(ip, r->mac, r->refused_ip_be == ip && r->probed);
 
         if (may == 1) {
             r->refused_ip_be = 0U;
