@@ -224,8 +224,8 @@ reloads camex, then checks and reloads nginx. Run it again at any time: it
 updates camex; nginx's file, `camex.conf` and the password, once made, stay as
 they are, edits included. The domain is never changed by it: another
 `--domain` is refused. A server set up by camex 5.1.0 or before (nginx with
-the map, `camex-nginx-sync`) is kept as it was: see
-[Moving to web_listen](#moving-to-web_listen). DNS and TLS (steps 1 and 2)
+the map, `camex-nginx-sync`) is moved over: see
+[Moving from the map](#moving-from-the-map). DNS and TLS (steps 1 and 2)
 stay yours.
 
 The steps by hand:
@@ -454,11 +454,26 @@ says so in the log and ignores `web_listen=`. Not on Windows.
   reserved address) and, for a page without nginx, wrong passwords; nginx's
   `error.log` shows connection failures to a camera.
 
-## Moving to web_listen
+## Moving from the map
 
-A server set up with the map and `camex-nginx-sync` (camex 5.1.0 and before)
-keeps working after an update: `install.sh` leaves such a setup as it is and
-says so. To move it over:
+Until camex 6.0.0, nginx followed the server through a map file that the
+sync script `camex-nginx-sync` kept current (`camex --status --format
+nginx-map` and `nginx-index`). camex 6.0.0 has neither: camex answers nginx
+itself (`web_listen=`). After an update such a server's devices are not
+reached by name until it is moved over.
+
+**With `install.sh`**: run it again (`install.sh --domain <your domain>`).
+It finds nginx's file of the map and
+
+- writes nginx's file anew from `examples/nginx-camex.conf` with the domain
+  and the `listen` port of the old one; the old one is kept in
+  `/var/backups/camex/` (carry your own edits, TLS lines say, over from it);
+- adds `web_listen=yes` (and `device_port=` from the sync service's
+  `UPSTREAM_PORT=`, when not 80) to `[server]` of `/etc/camex/camex.conf`;
+- stops and disables `camex-nginx-sync.service` (and camex 3.10's timer);
+- names the files no longer used, and removes none of them.
+
+**By hand**:
 
 1. Add `web_listen=yes` to `[server]` of `/etc/camex/camex.conf` (and
    `device_port=<port>` if the sync service had `UPSTREAM_PORT=` other than
@@ -468,71 +483,24 @@ says so. To move it over:
    `examples/nginx-camex.conf` (your domain in it, your `listen` and TLS lines
    carried over), then `sudo nginx -t && sudo systemctl reload nginx`.
 3. Stop the sync service: `sudo systemctl disable --now camex-nginx-sync`.
-4. Remove what is no longer used:
 
-   ```
-   /usr/local/bin/camex-nginx-sync
-   /etc/systemd/system/camex-nginx-sync.service    (then systemctl daemon-reload)
-   /etc/nginx/camex-map.conf
-   /etc/nginx/camex-map.conf.applied
-   /etc/nginx/camex-map.conf.lock
-   /etc/nginx/camex-map.conf.warnings
-   /etc/nginx/camex-map.conf.warnings-index
-   /var/lib/camex-nginx/
-   ```
+Then, either way, remove what is no longer used:
 
-   The start page's password (`/etc/camex/nginx-password`,
-   `/etc/nginx/camex.htpasswd`) stays: the new server blocks use it.
-
-## Sync script (deprecated)
-
-Before camex 5.2.0 nginx followed the server through a map file that this
-script kept current. camex now does that itself (`web_listen=`, see
-[nginx](#nginx)); the script and `--format nginx-map` / `nginx-index` stay
-until camex 6.0.0 for the servers that still use them, and `install.sh` keeps
-such a setup as it is. To leave it: [Moving to web_listen](#moving-to-web_listen).
-
-
-`examples/camex-nginx-sync.sh`, installed as `/usr/local/bin/camex-nginx-sync`
-(POSIX sh). It writes `camex --status --format nginx-map` to the map when it
-changed, then checks and reloads nginx; on a failed check the previous map is
-put back. With `INDEX` set it also writes the start page (`--format
-nginx-index`) when it changed: a static file, so nginx needs no reload for it.
-A server that does not answer leaves the map and the page as they are.
-
-```sh
-camex-nginx-sync               # once (cron, a systemd timer)
-camex-nginx-sync --follow [s]  # at every change of the clients (the service)
-camex-nginx-sync --loop 10     # every 10 seconds
-camex-nginx-sync --check       # check the whole setup; exit code 1 on a FAIL
+```
+/usr/local/bin/camex-nginx-sync
+/usr/local/bin/camex-nginx-sync.sh                 (camex 3.9 and before)
+/etc/systemd/system/camex-nginx-sync.service       (then systemctl daemon-reload)
+/etc/systemd/system/camex-nginx-sync.timer         (camex 3.10)
+/etc/nginx/camex-map.conf
+/etc/nginx/camex-map.conf.applied
+/etc/nginx/camex-map.conf.lock
+/etc/nginx/camex-map.conf.warnings
+/etc/nginx/camex-map.conf.warnings-index
+/var/lib/camex-nginx/
 ```
 
-**`--follow`** (#130), what `camex-nginx-sync.service` runs: a sync as soon
-as a client of any server on the host comes, goes, gets another address or
-peer, the server's file is reloaded with other names or domain, or a server
-starts or stops, within about a second, and none while nothing changes. The start page's live columns
-(connected for, last packet, traffic) change without such an event, so with
-`INDEX` it also syncs every 10 seconds (without `INDEX` every 300; `--follow
-<seconds>` sets it). It waits with `camex --status --wait <token>`: the
-servers answer when the state of their clients is not the one in the token,
-or when the time is up. A server before camex 3.11.0 does not know the wait:
-then the script syncs every 10 seconds and says so once in the log.
-
-Settings (environment; `camex-nginx-sync.service` sets `MAP` and `INDEX`, and
-`--check` run by hand takes those from it):
-
-| Variable             | Meaning                                                                                                                                        |
-|----------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
-| `DOMAIN`             | the domain after the client ID; empty (default): `domain=` in `[server]` of the server                                                         |
-| `HTTP_PORT`          | nginx's port, in the start page's links and what `--check` asks (80)                                                                           |
-| `UPSTREAM_PORT`      | the clients' web port (80)                                                                                                                     |
-| `DEFAULT`            | where unknown names go, `<IPv4>:<port>` (an address: `proxy_pass` with a variable has no resolver); empty: nginx's page "Device not reachable" |
-| `CONTROL`            | one server's control socket; empty: every server                                                                                               |
-| `MAP`                | the map file nginx includes (`/etc/nginx/camex-map.conf`)                                                                                      |
-| `INDEX`              | the start page, e.g. `/var/lib/camex-nginx/index.html`; empty: no updates; its directory must exist                                            |
-| `CHECK_DNS`          | `no`: `--check` skips the DNS records (a container, a private network)                                                                         |
-| `PASSWORD_FILE`      | the start page's password (`/etc/camex/nginx-password`): `--check` opens the page with it                                                      |
-| `CAMEX`, `NGINX_BIN` | the programs (`camex`, `nginx`; not `NGINX`, which nginx itself reads)                                                                         |
+The start page's password (`/etc/camex/nginx-password`,
+`/etc/nginx/camex.htpasswd`) stays: the new server blocks use it.
 
 ## Reference
 
@@ -558,6 +526,6 @@ Settings (environment; `camex-nginx-sync.service` sets `MAP` and `INDEX`, and
   `peer_port=`, 8080 by default, `none` for plain text; #119), how long it has
   been connected, its last packet, its last handshake and their number, and
   RX / TX in KiB.
-- Until camex 6.0.0 also: `camex --status --format nginx-map` / `nginx-index`
-  and `examples/camex-nginx-sync.sh` with `examples/nginx-camex-map.conf`
-  (see [Sync script](#sync-script-deprecated)).
+- camex 6.0.0 removed `camex --status --format nginx-map` / `nginx-index`,
+  `examples/camex-nginx-sync.sh` and `examples/nginx-camex-map.conf` (see
+  [Moving from the map](#moving-from-the-map)).

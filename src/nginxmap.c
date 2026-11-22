@@ -162,6 +162,7 @@ static int parse_addr(const char *a, uint32_t *out)
     return 1;
 }
 
+#ifdef CAMEX_NGINX_MAP_TEST
 /* <IPv4 address>:<port> for --default: the example config proxies to the
  * map's value without a resolver, so a host name would not resolve. The
  * map gets it written out anew (norm), never the text as given */
@@ -200,6 +201,7 @@ static int map_reserved(const char *h)
     return strcmp(h, "default") == 0 || strcmp(h, "hostnames") == 0 ||
            strcmp(h, "include") == 0 || strcmp(h, "volatile") == 0;
 }
+#endif /* CAMEX_NGINX_MAP_TEST */
 
 /* A client ID for a warning: control and non-ASCII bytes as '?', so an ID
  * cannot drive the terminal */
@@ -509,6 +511,10 @@ static long parse_records(const char *lines, const char *domain,
     return (long)n;
 }
 
+/* The map --format nginx-map wrote until 6.0.0 (camex serves nginx's lookup
+ * itself since, web_resolve()): kept for the unit tests only, where it
+ * shows which names and addresses parse_records() takes */
+#ifdef CAMEX_NGINX_MAP_TEST
 char *nginx_map_format(const char *lines, const char *domain, int port,
                        const char *dflt, FILE *warn, size_t *count)
 {
@@ -562,6 +568,7 @@ char *nginx_map_format(const char *lines, const char *domain, int port,
     }
     return out.p;
 }
+#endif /* CAMEX_NGINX_MAP_TEST */
 
 /* The text a row is listed by: its name, or the ID without one */
 static const char *shown_name(const map_entry_t *e)
@@ -782,12 +789,6 @@ static void index_web_ports(map_entry_t *e, long n, const char *web_lines)
 static char *index_format(const char *lines, const char *web_lines,
                           const char *domain, int http_port, long direct,
                           FILE *warn, size_t *count);
-
-char *nginx_index_format(const char *lines, const char *domain,
-                         int http_port, FILE *warn, size_t *count)
-{
-    return index_format(lines, NULL, domain, http_port, 0L, warn, count);
-}
 
 char *web_index_format(const char *lines, const char *web_lines,
                        const char *domain, int http_port, int direct_port,

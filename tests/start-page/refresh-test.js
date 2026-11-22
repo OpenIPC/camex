@@ -2,7 +2,7 @@
 // Copyright (c) OpenIPC  https://openipc.org  MIT License
 //
 // refresh-test.js — the start page's script in jsdom (#142): a.html is the
-// page, b.html the next one. Run by docker/test-e2e-nginx-map.sh.
+// page, b.html the next one. Run by docker/test-e2e-web.sh.
 //
 'use strict';
 const fs = require('fs');

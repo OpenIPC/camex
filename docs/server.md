@@ -36,7 +36,7 @@ client's external IP (8080 by default, `none` for no link; see
 or a `[client ID]` block is the port nginx reaches a client's web UI on (#174):
 the client's own block wins, then the port the client announced itself
 (`--web-port`, for example an Android app that serves its page on 8080), then
-`[defaults]`, then `--upstream-port` of the map (80).
+`[defaults]`, then `device_port=` of `[server]` (80).
 
 The server reads the file again when it changes (it checks every 2 seconds);
 `kill -HUP` does the same at once. A running auto-mode client

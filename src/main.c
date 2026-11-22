@@ -224,12 +224,8 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         { "control", required_argument, NULL, 'C' },
         { "client-isolation", no_argument, NULL, 'I' },
         { "format", required_argument, NULL, 'F' },
-        { "domain", required_argument, NULL, 'D' },
-        { "upstream-port", required_argument, NULL, 'U' },
-        { "default", required_argument, NULL, 'E' },
         { "wait", required_argument, NULL, 'w' },
         { "wait-timeout", required_argument, NULL, 'x' },
-        { "http-port", required_argument, NULL, 'z' },
         { "web-port", required_argument, NULL, 'y' },
         { "network", required_argument, NULL, 1001 },
         { "known-servers", required_argument, NULL, 1002 },
@@ -244,6 +240,7 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
 #ifndef CAMEX_NO_WEB
         { "hash-password", no_argument, NULL, 1011 },
 #endif
+        { "create-network", no_argument, NULL, 1012 },
         { NULL, 0, NULL, 0 }
     };
     int opt;
@@ -258,7 +255,7 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
     tun_set_offload(1);   /* a library run starts from the default */
     log_set_level(LOG_INFO);
     config->transport = CAMEX_TRANSPORT_UNSET;
-    while ((opt = getopt_long(argc, argv, "M:b:an:f:l:g:p:s:c:t:k:evhP:d:T:R:K:W:GS:Y:QJC:IF:D:U:E:",
+    while ((opt = getopt_long(argc, argv, "M:b:an:f:l:g:p:s:c:t:k:evhP:d:T:R:K:W:GS:Y:QJC:IF:",
                              long_options, &option_index)) != -1) {
         switch (opt) {
         case 'M':
@@ -427,6 +424,9 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         case 1010:
             log_set_level(LOG_WARNING);
             break;
+        case 1012:
+            config->create_network = 1U;
+            break;
         case 'Y':
             if (copy_option(config->server_pubkey,
                             sizeof(config->server_pubkey), optarg,
@@ -515,59 +515,21 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
             config->client_isolation = 1U;
             break;
         case 'F':
-            /* The last --format (or --json) wins */
-            config->status_nginx_map = 0U;
-            config->status_nginx_index = 0U;
+            /* The last --format (or --json) wins. nginx-map and
+             * nginx-index went with the sync script in 6.0.0: camex
+             * serves the page and nginx's lookup (web_listen=, #203) */
             config->status_json = 0U;
-            if (strcmp(optarg, "nginx-map") == 0) {
-                config->status_nginx_map = 1U;
-            } else if (strcmp(optarg, "nginx-index") == 0) {
-                config->status_nginx_index = 1U;
-            } else if (strcmp(optarg, "json") == 0) {
+            if (strcmp(optarg, "json") == 0) {
                 config->status_json = 1U;
             } else if (strcmp(optarg, "table") != 0) {
-                log_message(LOG_ERR, "Invalid --format: %s (table, json, "
-                            "nginx-map or nginx-index)", optarg);
+                log_message(LOG_ERR, "Invalid --format: %s (table or json%s)",
+                            optarg,
+                            strncmp(optarg, "nginx-", 6) == 0
+                                ? "; nginx's map and page are camex's own "
+                                  "since 6.0.0: web_listen= in [server], "
+                                  "docs/nginx.md"
+                                : "");
                 return -1;
-            }
-            break;
-        case 'D':
-            if (copy_option(config->map_domain, sizeof(config->map_domain),
-                            optarg, "domain") != 0) {
-                return -1;
-            }
-            break;
-        case 'U':
-            {
-                char *end = NULL;
-                long val = strtol(optarg, &end, 10);
-
-                if (end == optarg || *end != '\0' || val < 1 || val > 65535) {
-                    log_message(LOG_ERR, "--upstream-port must be 1..65535, "
-                                "got: %s", optarg);
-                    return -1;
-                }
-                config->map_port = (int)val;
-            }
-            break;
-        case 'E':
-            if (copy_option(config->map_default, sizeof(config->map_default),
-                            optarg, "default") != 0) {
-                return -1;
-            }
-            break;
-        case 'z':
-            /* Long only: nginx's port, in the start page's links (#141) */
-            {
-                char *end = NULL;
-                long val = strtol(optarg, &end, 10);
-
-                if (end == optarg || *end != '\0' || val < 1 || val > 65535) {
-                    log_message(LOG_ERR, "--http-port must be 1..65535, "
-                                "got: %s", optarg);
-                    return -1;
-                }
-                config->map_http_port = (int)val;
             }
             break;
         case 'y':
@@ -606,8 +568,6 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
             break;
         case 'J':
             config->status_json = 1U;
-            config->status_nginx_map = 0U;
-            config->status_nginx_index = 0U;
             break;
         case 'C':
             if (copy_option(config->control_path,
@@ -848,6 +808,12 @@ void print_usage(const char *progname)
            " (the name is its key;\n"
            "                          implies --auto; with --psk: the"
            " client's own key too)\n");
+    printf("      --create-network    With --network: a server that does"
+           " not know the network\n"
+           "                          and takes new ones creates it (its key"
+           " is then trusted\n"
+           "                          on first use); without it such a"
+           " server is refused\n");
     printf("      --known-servers <path> Keys of servers first met without"
            " --server-pubkey\n"
            "                          (default: %s; none = not kept)\n",
@@ -899,30 +865,9 @@ void print_usage(const char *progname)
     printf("      --interval <s>   With --top: seconds between updates"
            " (default 1)\n");
     printf("      --control <path> Ask only the server at this socket\n");
-#ifndef CAMEX_NO_SERVER
-    printf("      --format nginx-map  An nginx map of the clients"
-           " (<id>[.<domain>] -> <address>:<port>);\n"
-           "                       deprecated, as nginx-index: web_listen="
-           " in [server] (docs/nginx.md)\n");
-    printf("      --format nginx-index  A start page of the clients (HTML:"
-           " Configured and Auto tabs; name,\n"
-           "                       link, address, peer link (peer_port=),"
-           " connection, traffic)\n");
-    printf("      --domain <name>  With nginx-map and nginx-index: the"
-           " domain after the client ID\n"
-           "                       (default: domain= in [server] of the"
-           " server)\n");
-    printf("      --upstream-port <port>  With nginx-map: the clients'"
-           " web port (default: 80)\n");
-    printf("      --http-port <port>  With nginx-index: nginx's port, in the"
-           " links (default: 80)\n");
-    printf("      --default <ip:port>  With nginx-map: where unknown"
-           " names go\n");
-#endif
     printf("      --wait <token>   Wait until the clients change"
            " (\"-\": print the state now), then\n"
-           "                       print the token of the new state"
-           " (camex-nginx-sync --follow)\n");
+           "                       print the token of the new state\n");
     printf("      --wait-timeout <s>  The longest wait (default 60)\n\n");
 
     printf("Common options:\n");
@@ -1055,16 +1000,6 @@ int main(int argc, char *argv[])
                      ? control_wait(config.control_path, config.status_wait,
                                     config.status_wait_timeout > 0
                                         ? config.status_wait_timeout : 60)
-                 : config.status_nginx_map
-                     ? control_nginx_map(config.control_path,
-                                         config.map_domain,
-                                         config.map_port > 0 ? config.map_port
-                                                             : 80,
-                                         config.map_default)
-                 : config.status_nginx_index
-                     ? control_nginx_index(config.control_path,
-                                           config.map_domain,
-                                           config.map_http_port)
                      : control_status(config.control_path,
                                       config.status_json);
 

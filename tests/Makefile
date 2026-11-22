@@ -54,7 +54,7 @@ test_proto: test_proto.c $(SRC)/proto.c $(SRC)/netw.c $(SRC)/pake.c $(SRC)/confi
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
 
 test_nginxmap: test_nginxmap.c $(SRC)/nginxmap.c $(HEADERS)
-	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
+	$(CC) $(CFLAGS) -DCAMEX_NGINX_MAP_TEST -o $@ $(filter %.c,$^)
 
 test_tcpgate: test_tcpgate.c $(SRC)/tcpgate.c $(HEADERS)
 	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)

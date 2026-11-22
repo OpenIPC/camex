@@ -21,10 +21,11 @@
 #    another script, in its IDNA form, #151).
 # 5a. nginx follows a restarted server.
 # 6. An nginx of camex 5.1.0 and before (the map and camex-nginx-sync) is
-#    kept as it is, with a word on moving over; its older layouts: that of
-#    camex-nginx-setup.sh (3.9 and before) moves to the new names; a unit
-#    with its own CAMEX_ARGS keeps them in /etc/default/camex; camex 3.10's
-#    timer is removed.
+#    moved over (6.0.0): nginx's file made anew to ask camex (the old one
+#    kept), web_listen= added, the sync and camex 3.10's timer stopped,
+#    their files named for removal and left; camex-nginx-setup.sh's names
+#    (3.9 and before) move to the new ones; a unit with its own CAMEX_ARGS
+#    keeps them in /etc/default/camex.
 # 7. --uninstall lists the files and removes nothing.
 # 8. Every option on a new host (#141): TCP, port, pool, psk, password,
 #    nginx's port and the cameras' port; a backslash in the psk and the
@@ -298,67 +299,57 @@ out=$(run)
 check $? "once: the next rerun leaves the file alone"
 # A second block after it, with the line only in a comment: it gets its
 # own, the first is left as it is (each block on its own)
-x 'printf "server {\n    listen 8099;\n    server_name x.invalid;\n    location = /_camex_resolve {\n        internal;\n        # client_max_body_size 5m;\n        return 204;\n    }\n}\n" >> /etc/nginx/conf.d/camex-nginx.conf'
+x 'cp /etc/nginx/conf.d/camex-nginx.conf /tmp/before.conf &&
+   printf "server {\n    listen 8099;\n    server_name x.invalid;\n    location = /_camex_resolve {\n        internal;\n        # client_max_body_size 5m;\n        return 204;\n    }\n}\n" >> /etc/nginx/conf.d/camex-nginx.conf'
 out=$(run)
 echo "$out" | grep -q "added client_max_body_size 0 to /_camex_resolve" &&
     [ "$(x 'grep -c "^[[:space:]]*client_max_body_size 0;   # uploads above 1 MB" /etc/nginx/conf.d/camex-nginx.conf')" = 2 ] &&
     x 'nginx -t 2>/dev/null'
 check $? "a second block with only a commented line gets its own; nginx takes the file"
-x 'head -n -9 /etc/nginx/conf.d/camex-nginx.conf > /tmp/n && cat /tmp/n > /etc/nginx/conf.d/camex-nginx.conf && nginx -t 2>/dev/null && nginx -s reload'
+x 'cat /tmp/before.conf > /etc/nginx/conf.d/camex-nginx.conf && nginx -t 2>/dev/null && nginx -s reload'
 
-echo "== 6. an nginx of camex 5.1.0, and the layouts of camex-nginx-setup.sh and 3.10"
-# camex 5.1.0: the map, the sync script and its service, no web_listen=
-x 'sed "s/openipc\.click/'"$DOMAIN"'/g" /opt/src/examples/nginx-camex-map.conf > /etc/nginx/conf.d/camex-nginx.conf &&
-   echo "# my edit" >> /etc/nginx/conf.d/camex-nginx.conf &&
-   printf "map \$host \$camex_upstream {\n}\n" > /etc/nginx/camex-map.conf &&
-   install -m 755 /opt/src/examples/camex-nginx-sync.sh /usr/local/bin/camex-nginx-sync &&
-   install -m 644 /opt/src/examples/camex-nginx-sync.service /etc/systemd/system/camex-nginx-sync.service &&
+echo "== 6. an nginx of camex 5.1.0 (the map, the sync), the layouts of camex-nginx-setup.sh and 3.10"
+# camex 5.1.0's nginx: its file includes the map; the sync's service (here a
+# stand-in that only runs) and script; no web_listen=. With 3.10's timer and
+# camex-nginx-setup.sh's names (camex.conf of nginx, camex-nginx-sync.sh)
+x 'printf "map \$host \$camex_upstream {\n}\n" > /etc/nginx/camex-map.conf &&
+   { echo "include /etc/nginx/camex-map.conf;"; cat /etc/nginx/conf.d/camex-nginx.conf; echo "# my edit"; } > /tmp/old.conf &&
+   rm /etc/nginx/conf.d/camex-nginx.conf && mv /tmp/old.conf /etc/nginx/conf.d/camex.conf &&
+   printf "#!/bin/sh\nexec sleep infinity\n" > /usr/local/bin/camex-nginx-sync.sh && chmod 755 /usr/local/bin/camex-nginx-sync.sh &&
+   printf "[Service]\nExecStart=/usr/local/bin/camex-nginx-sync.sh\nEnvironment=INDEX=/var/lib/camex-nginx/index.html\n[Install]\nWantedBy=multi-user.target\n" \
+       > /etc/systemd/system/camex-nginx-sync.service &&
+   printf "[Timer]\nOnUnitActiveSec=10s\n[Install]\nWantedBy=timers.target\n" > /etc/systemd/system/camex-nginx-sync.timer &&
    mkdir -p /var/lib/camex-nginx && sed -i "/^web_listen=/d" /etc/camex/camex.conf &&
-   systemctl daemon-reload && systemctl reload camex && nginx -s reload &&
-   systemctl enable --now camex-nginx-sync.service' >/dev/null 2>&1
-for _ in $(seq 1 30); do
-    page "cam1.$DOMAIN" | grep -q "I am CAM1" && break
-    sleep 1
-done
-page "cam1.$DOMAIN" | grep -q "I am CAM1"
-check $? "a server set up as by camex 5.1.0 (map, sync script) serves the client"
-# camex 3.10: the sync once from a timer; before: other names
-x 'systemctl disable --now camex-nginx-sync.service
-   printf "[Timer]\nOnUnitActiveSec=10s\n[Install]\nWantedBy=timers.target\n" > /etc/systemd/system/camex-nginx-sync.timer
-   systemctl daemon-reload && systemctl enable --now camex-nginx-sync.timer
-   mv /etc/nginx/conf.d/camex-nginx.conf /etc/nginx/conf.d/camex.conf
-   mv /usr/local/bin/camex-nginx-sync /usr/local/bin/camex-nginx-sync.sh
-   sed -i "s|^ExecStart=.*|ExecStart=/usr/local/bin/camex-nginx-sync.sh|; s|^Environment=INDEX=.*|Environment=INDEX=/var/lib/camex-nginx/start.html|" \
-       /etc/systemd/system/camex-nginx-sync.service
-   rm /etc/default/camex
+   systemctl daemon-reload && systemctl enable --now camex-nginx-sync.service camex-nginx-sync.timer &&
+   rm /etc/default/camex &&
    printf "[Service]\nExecStart=/usr/local/bin/camex \$CAMEX_ARGS\nEnvironment=CAMEX_ARGS=--mode server --config /etc/camex/camex.conf --server-key-file /etc/camex/server.key --mtu 1400 --port 5800\n" \
-       > /etc/systemd/system/camex.service
-   systemctl daemon-reload && systemctl restart camex'
+       > /etc/systemd/system/camex.service &&
+   systemctl daemon-reload && systemctl restart camex && nginx -t && nginx -s reload' >/dev/null 2>&1
+check $? "a server set up as by camex 5.1.0 and before (the map, the sync, the old names)"
 # (--port 5801: the old unit's --port 5800 is the one compared, #149)
 out=$(run --port 5801)
 rc=$?
 echo "$out" | sed 's/^/      /'
 [ $rc -eq 0 ] && x 'test -f /etc/nginx/conf.d/camex-nginx.conf && test ! -e /etc/nginx/conf.d/camex.conf &&
-    grep -qx "# my edit" /etc/nginx/conf.d/camex-nginx.conf &&
-    test ! -e /usr/local/bin/camex-nginx-sync.sh && ls /var/backups/camex | grep -q camex-nginx-sync.sh'
-check $? "nginx's file renamed with its edits, the old sync script removed (a copy kept)"
-echo "$out" | grep -q "this nginx uses the map and camex-nginx-sync (deprecated" &&
-    ! x 'grep -q "^web_listen=" /etc/camex/camex.conf' &&
-    x 'test -x /usr/local/bin/camex-nginx-sync && grep -q camex-map.conf /etc/nginx/conf.d/camex-nginx.conf'
-check $? "the map and the sync script are kept, with a word on moving over; no web_listen= added"
-x 'grep -qx "Environment=INDEX=/var/lib/camex-nginx/start.html" /etc/systemd/system/camex-nginx-sync.service'
-check $? "the start page's path of the old service is kept"
-x 'test ! -e /etc/systemd/system/camex-nginx-sync.timer && ! systemctl is-active --quiet camex-nginx-sync.timer &&
-   ls /var/backups/camex | grep -q camex-nginx-sync.timer'
-check $? "camex 3.10's timer stopped and removed (a copy kept)"
+    ! grep -q camex-map /etc/nginx/conf.d/camex-nginx.conf && grep -q auth_request /etc/nginx/conf.d/camex-nginx.conf &&
+    grep -lx "# my edit" /var/backups/camex/etc_nginx_conf.d_camex-nginx.conf.* >/dev/null'
+check $? "nginx's file of the map renamed, then made anew to ask camex; the old one, with its edits, kept"
+x 'grep -q "^web_listen=yes" /etc/camex/camex.conf'
+check $? "web_listen=yes added to camex.conf"
+x '! systemctl is-active --quiet camex-nginx-sync.service && ! systemctl is-enabled --quiet camex-nginx-sync.service &&
+   ! systemctl is-active --quiet camex-nginx-sync.timer &&
+   test -e /usr/local/bin/camex-nginx-sync.sh && test -e /etc/nginx/camex-map.conf'
+check $? "the sync stopped and disabled, its files left in place"
+echo "$out" | grep -q "no longer used, remove when you like (docs/install.md):.*/usr/local/bin/camex-nginx-sync.sh.*/etc/nginx/camex-map.conf"
+check $? "the files to remove are named"
 x 'grep -q -- "--mtu 1400" /etc/default/camex && [ "$(stat -c %a /etc/default/camex)" = 600 ] && grep -q "^EnvironmentFile=/etc/default/camex" /etc/systemd/system/camex.service &&
-   systemctl is-active --quiet camex && systemctl is-active --quiet camex-nginx-sync.service'
-check $? "the old unit's arguments moved to /etc/default/camex, the services run"
+   systemctl is-active --quiet camex'
+check $? "the old unit's arguments moved to /etc/default/camex, camex runs"
 echo "$out" | grep -q "kept --port 5800 of CAMEX_ARGS in /etc/default/camex" &&
     ! echo "$out" | grep -q "kept port= of"
 check $? "first rerun of an old unit: --port compared with the unit's own --port 5800"
-# The client finds the restarted server again (--server-timeout), the
-# sync service puts it back in the map
+# The client finds the restarted server again (--server-timeout); nginx
+# asks camex for it
 for _ in $(seq 1 90); do
     page "cam1.$DOMAIN" | grep -q "I am CAM1" && break
     sleep 1
@@ -377,9 +368,10 @@ after=$(x 'ls -R /etc/camex /etc/nginx /usr/local/bin /etc/systemd/system /etc/d
 [ $rc -eq 0 ] && [ "$before" = "$after" ] && x 'systemctl is-active --quiet camex'
 check $? "it removes and stops nothing"
 echo "$out" | grep -qx "  + /usr/local/bin/camex" && echo "$out" | grep -qx "  + /etc/nginx/conf.d/camex-nginx.conf" &&
-    echo "$out" | grep -qx "  - /usr/local/bin/camex-nginx-sync.sh" &&
-    echo "$out" | grep -qx "  rm /usr/local/bin/camex-nginx-sync" &&
-    echo "$out" | grep -qx "  systemctl disable --now camex-nginx-sync.service camex.service"
+    echo "$out" | grep -qx "  + /usr/local/bin/camex-nginx-sync.sh" &&
+    echo "$out" | grep -qx "  - /usr/local/bin/camex-nginx-sync" &&
+    echo "$out" | grep -qx "  rm /usr/local/bin/camex-nginx-sync.sh" &&
+    echo "$out" | grep -qx "  systemctl disable --now camex-nginx-sync.timer camex-nginx-sync.service camex.service"
 check $? "it lists the files, which are there, and the commands to remove them"
 
 echo "== 8. every option, on a new host; a rerun with others changes nothing (#141)"

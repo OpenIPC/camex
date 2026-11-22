@@ -2,8 +2,8 @@
  *
  * Copyright (c) OpenIPC  https://openipc.org  MIT License
  *
- * test_nginxmap.c — the nginx map of camex --status --format nginx-map
- * (#84) and the start page of --format nginx-index (#105)
+ * test_nginxmap.c — the start page camex serves (#105, #203), nginx's
+ * lookup (web_resolve) and the names and addresses its records take
  *
  */
 
@@ -60,7 +60,7 @@ static char *page(const char *lines, const char *domain, size_t *count,
     FILE *w = fmemopen(warn, wsize, "w");
     char *m;
 
-    m = nginx_index_format(lines, domain, page_http_port, w, count);
+    m = web_index_format(lines, NULL, domain, page_http_port, 0, w, count);
     if (w != NULL) {
         fclose(w);
     }

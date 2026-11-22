@@ -28,10 +28,12 @@ camex installer for Debian and Ubuntu. Steps:
   8. Print what the clients need: the network's name, or the server's
      public key and psk.
 
-Run it again at any time: it updates camex, the scripts and the services.
-The settings made once (camex.conf, server.key, /etc/default/camex,
-nginx's file, the password) are kept as they are; only domain= is added
-to camex.conf when nginx comes later.
+Run it again at any time: it updates camex and its service. The settings
+made once (camex.conf, server.key, /etc/default/camex, nginx's file, the
+password) are kept as they are; only domain= and web_listen= are added to
+camex.conf when nginx comes later. An nginx of camex 5.1.0 and before (the
+map and camex-nginx-sync, gone in 6.0.0) gets a new file that asks camex
+(a copy of the old one kept), and its sync is stopped.
 EOF_STEPS
 }
 
@@ -238,6 +240,16 @@ read_args() {
         esac
         shift
     done
+}
+# conf_listen_port <file>: the port of nginx's first plain HTTP listen line
+# (<port>, <address>:<port>, [::]:<port>; not ssl or quic), what the links
+# and the checks use (#141); empty without one
+conf_listen_port() {
+    awk '/^[[:space:]]*listen[[:space:]]/ &&
+         !/[[:space:]](ssl|quic)([[:space:];]|$)/ {
+             v = $2; sub(/;.*$/, "", v); sub(/^.*:/, "", v)
+             if (v ~ /^[0-9]+$/) { print v; exit }
+         }' "$1"
 }
 conf_domain() {
     conf_server domain | tr 'A-Z' 'a-z'
@@ -561,13 +573,19 @@ else
 fi
 PUBKEY=$(sed -n 's/^public_key=//p' "$KEY")
 
-# nginx with the map and camex-nginx-sync (camex 5.1.0 and before): kept as
-# it is, the script too; a new nginx gets camex's own page and lookup
-# (web_listen=, #203). Moving over: docs/nginx.md, "Moving to web_listen"
-LEGACY_NGINX=
+# nginx with the map and camex-nginx-sync (camex 5.1.0 and before): the
+# script and the map went in camex 6.0.0, so step 7 moves it over to camex's
+# own page and lookup (web_listen=, #203): nginx's file anew (a copy kept),
+# the sync stopped, its files listed to remove (docs/install.md)
+MOVE_NGINX=
 for f in "$NGINX_CONF" "$OLD_NGINX_CONF"; do
-    [ -f "$f" ] && grep -q 'camex-map\.conf' "$f" && LEGACY_NGINX=1
+    [ -f "$f" ] && grep -q 'camex-map\.conf' "$f" && MOVE_NGINX=1
 done
+# The devices' web port the sync gave nginx: device_port= now
+if [ -n "$MOVE_NGINX" ] && [ -z "$UPSTREAM_PORT" ]; then
+    UPSTREAM_PORT=$(sed -n 's/^Environment=UPSTREAM_PORT=\([0-9]*\)$/\1/p' \
+                    "$UNITS/camex-nginx-sync.service" 2>/dev/null | tail -n 1)
+fi
 
 # 5. camex.conf -------------------------------------------------------------
 step 5 "The server's settings: $CONF"
@@ -587,8 +605,7 @@ if [ -f "$CONF" ]; then
         say "added domain=$DOMAIN to [server]"
     fi
     # nginx asks camex where each name goes (#203)
-    if [ -n "$DOMAIN" ] && [ -z "$LEGACY_NGINX" ] &&
-       [ -z "$(conf_server web_listen)" ]; then
+    if [ -n "$DOMAIN" ] && [ -z "$(conf_server web_listen)" ]; then
         backup "$CONF"
         awk -v dp="$UPSTREAM_PORT" '
             !done && tolower($0) ~ /^[[:space:]]*\[[[:space:]]*server[[:space:]]*\]/ {
@@ -599,7 +616,7 @@ if [ -f "$CONF" ]; then
             { print }' "$CONF" > "$TMP/camex.conf" &&
             cat "$TMP/camex.conf" > "$CONF" || die "cannot write $CONF"
         say "added web_listen=yes to [server]: the start page and nginx's lookup"
-    elif [ -n "$UPSTREAM_PORT" ] && [ -z "$LEGACY_NGINX" ]; then
+    elif [ -n "$UPSTREAM_PORT" ]; then
         dp=$(conf_server device_port)
         [ "${dp:-80}" = "$UPSTREAM_PORT" ] ||
             say "kept device_port=${dp:-80} of $CONF, not --upstream-port" \
@@ -636,7 +653,7 @@ else
         echo "# The clients' pre-shared key"
         printf 'psk=%s\n' "$PSK"
         [ -n "$DOMAIN" ] && echo "domain=$DOMAIN"
-        if [ -n "$DOMAIN" ] && [ -z "$LEGACY_NGINX" ]; then
+        if [ -n "$DOMAIN" ]; then
             echo "# The start page and nginx's lookup, on 127.0.0.1:5801 (nginx"
             echo "# asks camex where each name goes; docs/nginx.md)"
             echo "web_listen=yes"
@@ -756,17 +773,37 @@ else
         mv "$OLD_NGINX_CONF" "$NGINX_CONF" || die "cannot rename $OLD_NGINX_CONF"
         say "renamed $OLD_NGINX_CONF to $NGINX_CONF"
     fi
+    # The map and the sync (camex 5.1.0 and before): nginx's file anew, with
+    # its port; the sync stopped, its files left for the admin to remove
+    if [ -n "$MOVE_NGINX" ]; then
+        old_port=$(conf_listen_port "$NGINX_CONF")
+        backup "$NGINX_CONF"
+        rm -f "$NGINX_CONF"
+        [ -n "$HTTP_PORT" ] || HTTP_PORT=$old_port
+        say "replaced $NGINX_CONF: nginx asks camex now (auth_request), no map;" \
+            "carry your own edits over from the copy above"
+        for u in camex-nginx-sync.service camex-nginx-sync.timer; do
+            if [ -f "$UNITS/$u" ]; then
+                systemctl disable --now "$u" >/dev/null 2>&1
+                say "stopped and disabled $u (the sync script went in camex 6.0.0)"
+            fi
+        done
+        left=
+        for f in "$SYNC" "$OLD_SYNC" "$UNITS/camex-nginx-sync.service" "$OLD_TIMER" \
+                 "$MAP" "$MAP.applied" "$MAP.lock" "$MAP.warnings" \
+                 "$MAP.warnings-index" "$PAGE_DIR"; do
+            [ -e "$f" ] && left="$left $f"
+        done
+        [ -z "$left" ] ||
+            say "no longer used, remove when you like (docs/install.md):$left"
+    fi
     # (its server_name and the other files were checked in step 1)
     if [ -f "$NGINX_CONF" ]; then
         say "kept: $NGINX_CONF"
         # Its port is what the links and --check use (#141): that of the
         # first plain HTTP listen line (<port>, <address>:<port>, [::]:<port>;
         # not ssl or quic)
-        NGINX_PORT=$(awk '/^[[:space:]]*listen[[:space:]]/ &&
-                          !/[[:space:]](ssl|quic)([[:space:];]|$)/ {
-                              v = $2; sub(/;.*$/, "", v); sub(/^.*:/, "", v)
-                              if (v ~ /^[0-9]+$/) { print v; exit }
-                          }' "$NGINX_CONF")
+        NGINX_PORT=$(conf_listen_port "$NGINX_CONF")
         [ -z "$HTTP_PORT" ] || [ "$HTTP_PORT" = "${NGINX_PORT:-80}" ] ||
             say "kept the listen lines of $NGINX_CONF, not --http-port $HTTP_PORT:" \
                 "edit them there, then run this again"
@@ -820,10 +857,6 @@ else
         put "$TMP/nginx.conf" "$NGINX_CONF" 644
         NGINX_PORT=${HTTP_PORT:-80}
     fi
-    if [ -n "$LEGACY_NGINX" ] && [ ! -f "$MAP" ]; then
-        printf 'map $host $camex_upstream {\n}\n' > "$MAP"
-        say "created: $MAP (empty)"
-    fi
     # The start page's password: user camex, made once
     pw_new=
     if [ ! -s "$PASSWORD_FILE" ]; then
@@ -851,60 +884,7 @@ else
             die "cannot write $HTPASSWD for nginx (group www-data)"
         say "wrote the camex line of $HTPASSWD"
     fi
-    if [ -n "$LEGACY_NGINX" ]; then
-        say "this nginx uses the map and camex-nginx-sync (deprecated, removed in" \
-            "camex 6.0.0): kept; to move to camex's own page see docs/nginx.md," \
-            "\"Moving to web_listen\""
-        # The sync script and its service
-        fetch "$CAMEX_SRC/examples/camex-nginx-sync.sh" "$TMP/sync"
-        put "$TMP/sync" "$SYNC" 755 || true
-        if [ -f "$OLD_SYNC" ]; then
-            backup "$OLD_SYNC"
-            rm -f "$OLD_SYNC"
-            say "removed $OLD_SYNC (now $SYNC)"
-        fi
-        fetch "$CAMEX_SRC/examples/camex-nginx-sync.service" "$TMP/sync.service"
-        # The start page where the installed service has it (camex-nginx-setup.sh
-        # --index, an edit; empty: none), as nginx's kept file serves it
-        if grep -q '^Environment=INDEX=' "$UNITS/camex-nginx-sync.service" 2>/dev/null; then
-            index=$(sed -n 's/^Environment=INDEX=//p' "$UNITS/camex-nginx-sync.service" | tail -n 1)
-            case "$index" in
-                *[!A-Za-z0-9/._-]*) say "kept no INDEX=$index: not a plain path" ;;
-                *) sed -i "s|^Environment=INDEX=.*|Environment=INDEX=$index|" "$TMP/sync.service" ;;
-            esac
-        fi
-        # Its ports (#141): HTTP_PORT that of nginx's file (kept or just made);
-        # UPSTREAM_PORT made once: that of the installed service (none there:
-        # 80), else the option
-        for v in HTTP_PORT UPSTREAM_PORT; do
-            eval "opt=\$$v"
-            if [ $v = HTTP_PORT ]; then
-                val=${NGINX_PORT:-80}
-            elif [ -f "$UNITS/camex-nginx-sync.service" ]; then
-                val=$(sed -n "s/^Environment=$v=\([0-9]*\)\$/\1/p" \
-                      "$UNITS/camex-nginx-sync.service" | tail -n 1)
-                val=${val:-80}
-                [ -z "$opt" ] || [ "$opt" = "$val" ] ||
-                    say "kept $v=$val of camex-nginx-sync.service, not $opt: edit it" \
-                        "in $UNITS/camex-nginx-sync.service"
-            else
-                val=${opt:-80}
-            fi
-            [ "$val" != 80 ] &&
-                sed -i "/^Environment=INDEX=/a Environment=$v=$val" "$TMP/sync.service"
-            [ "$v" = HTTP_PORT ] && WEB_PORT=$val
-        done
-        put "$TMP/sync.service" "$UNITS/camex-nginx-sync.service" 644 || true
-        # camex 3.10's timer: the service follows the servers itself now
-        if [ -f "$OLD_TIMER" ]; then
-            systemctl disable --now camex-nginx-sync.timer >/dev/null 2>&1
-            backup "$OLD_TIMER"
-            rm -f "$OLD_TIMER"
-            say "removed $OLD_TIMER (camex-nginx-sync.service follows the servers)"
-        fi
-    else
-        WEB_PORT=${NGINX_PORT:-80}
-    fi
+    WEB_PORT=${NGINX_PORT:-80}
     systemctl daemon-reload
     nginx -t 2>"$TMP/nginx-t" || { cat "$TMP/nginx-t" >&2; die "nginx -t rejects the configuration"; }
     if systemctl is-active --quiet nginx; then
@@ -912,25 +892,15 @@ else
     else
         systemctl enable --now nginx >/dev/null 2>&1 || die "nginx did not start"
     fi
-    if [ -n "$LEGACY_NGINX" ]; then
-        # Restarted: a new script or unit takes over
-        systemctl enable camex-nginx-sync.service >/dev/null 2>&1 &&
-            systemctl restart camex-nginx-sync.service ||
-            die "cannot start camex-nginx-sync.service: journalctl -u camex-nginx-sync"
-        sleep 2   # its first sync
-        say "checking: $SYNC --check"
-        "$SYNC" --check || say "see the FAIL lines above (DNS is yours to set up)"
+    # camex serves the page; nginx asks for the password in front of it
+    code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
+               -u "camex:$(head -n 1 "$PASSWORD_FILE")" \
+               -H "Host: $DOMAIN" "http://127.0.0.1:${NGINX_PORT:-80}/" 2>/dev/null)
+    if [ "$code" = 200 ]; then
+        say "checked: the start page answers through nginx"
     else
-        # camex serves the page; nginx asks for the password in front of it
-        code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 \
-                   -u "camex:$(head -n 1 "$PASSWORD_FILE")" \
-                   -H "Host: $DOMAIN" "http://127.0.0.1:${NGINX_PORT:-80}/" 2>/dev/null)
-        if [ "$code" = 200 ]; then
-            say "checked: the start page answers through nginx"
-        else
-            say "WARNING: the start page through nginx answered ${code:-nothing}" \
-                "(web_listen= in [server] of $CONF, journalctl -u camex)"
-        fi
+        say "WARNING: the start page through nginx answered ${code:-nothing}" \
+            "(web_listen= in [server] of $CONF, journalctl -u camex)"
     fi
 fi
 

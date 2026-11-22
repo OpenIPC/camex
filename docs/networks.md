@@ -35,12 +35,12 @@ that is hard to guess, like a password.
 
 Extra protection on top of the name, all optional:
 
-| What                                    | Stops                                                                      |
-|-----------------------------------------|----------------------------------------------------------------------------|
-| `--server-pubkey` on the client         | a fake server at the very first contact with a server that takes new networks (see below) |
+| What                                    | Stops                                                                                                                |
+|-----------------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| `--server-pubkey` on the client         | a fake server at the very first contact with a server that takes new networks (see below)                            |
 | `psk=` in the client's `[client ID]`    | someone who knows the name posing as that client ID; the client then needs `--psk` with that key besides `--network` |
-| `client_isolation = yes` in `[network]` | clients of the network reaching each other                                 |
-| `allow_unknown_clients = no`            | client IDs without a `[client ID]` block                                   |
+| `client_isolation = yes` in `[network]` | clients of the network reaching each other                                                                           |
+| `allow_unknown_clients = no`            | client IDs without a `[client ID]` block                                                                             |
 
 ## The server's file
 
@@ -65,12 +65,12 @@ spaces around it. It is 1 to 63 bytes and case-sensitive. A name shorter than
 a name could be guessed one CPace attempt at a time (see
 [Guessing a name](#guessing-a-name)), and the client warns about it too.
 
-| Key                | Meaning                                                                                      |
-|--------------------|----------------------------------------------------------------------------------------------|
-| `pool`             | the network's IPv4 pool; without it a `/16` of `network_supernet` picked by the network's ID |
-| `client_isolation` | `yes` or `no`: drop packets between clients of this network; without it the server's setting |
+| Key                | Meaning                                                                                            |
+|--------------------|----------------------------------------------------------------------------------------------------|
+| `pool`             | the network's IPv4 pool; without it a `/16` of `network_supernet` picked by the network's ID       |
+| `client_isolation` | `yes` or `no`: drop packets between clients of this network; without it the server's setting       |
 | `label`            | shown instead of the network's name in logs, `--status` and `--top`; up to 31 bytes without spaces |
-| `weak_name`        | `yes`: take a name shorter than 16 characters (a lab, a test); it could be guessed           |
+| `weak_name`        | `yes`: take a name shorter than 16 characters (a lab, a test); it could be guessed                 |
 
 `[server]`:
 
@@ -138,7 +138,9 @@ either. `isolation_drops` in `camex --status --json` counts the drops.
 With `allow_new_networks = yes`, the server takes a network ID it does not
 know as a new network. It gets a derived pool, its gateway on the tunnel, and
 the name a client sends, and it is listed with `(new)` in `camex --status`.
-A client sends the name only when it was given the server's key
+Since 6.0.0 a client creates a network only when told to: `--create-network`
+(or a pinned key, `--server-pubkey`); without it, it refuses a server that
+does not know the network (#199). A client sends the name only when it was given the server's key
 (`--server-pubkey`) and the server says over CPace that it takes names: the
 name then goes inside a handshake only that key opens. A client without a
 pinned key never sends it, so a network only such clients use shows as
@@ -186,28 +188,34 @@ With `--server-pubkey` the client skips KEYREQ and keeps nothing: the key is
 the one it was given. CPace still runs, for its flags: `PAKE_FLAG_OPEN`, the
 server takes new networks (the client then sends the ID, which only that key
 opens), and `PAKE_FLAG_NAME`, the server takes the name in REGISTER. A
-server too old to answer CPace gets the ID after three tries, and no name.
+server that does not answer CPace gets the ID after three tries, and no
+name: only that key can read it.
 
 **Networks the server does not know yet** (`allow_new_networks = yes`) are the
 exception. The server cannot know a name it never heard, so a new network is
 still created the old way: the network's ID goes inside Noise message 1, and
-the server's key is trusted on first use (kept without the mark). The same
-fallback applies to a server too old for CPace, after three unanswered
-`PAKE1`. Both fallbacks happen only while the file has no `pake` mark for that
-server. A server that once proved it knows the network and then says it does
-not know it but takes new ones is refused as an impostor (`not trusted (an
-impostor?)`).
+the server's key is trusted on first use (kept without the mark). Since 6.0.0
+a client does this only when told to, with `--create-network` (#199):
+without it, a server that does not know the network but takes new ones is
+refused (`it takes new ones, so --create-network would create it there`),
+since a fake server would say just that to get the network's ID. Even with
+it, the fallback happens only while the file has no `pake` mark for that
+server: a server that once proved it knows the network and then says it does
+not know it is refused as an impostor (`not trusted (an impostor?)`).
+
+A server that does not answer `PAKE1` is not one to fall back to either:
+every camex that knows `--network` answers CPace, so it is down or not the
+real server. The client says so once (`does not answer CPace (down, or not a
+camex 5 server?): trying again`) and keeps asking (#199; before 6.0.0 it took
+the old way after three tries).
 
 In short:
 
-- listed networks are protected at every contact once the client has kept the
-  server's key with the `pake` mark;
-- at the first contact, a fake server can force the fallback: it ignores
-  `PAKE1` (posing as an older camex) or says it does not know the network but
-  takes new ones, and is then trusted on first use;
-- creating a new network on an open server is protected only by trust on first
-  use;
-- `--server-pubkey` closes these gaps.
+- listed networks are protected at every contact, the first one included,
+  unless the client was given `--create-network`;
+- creating a new network on an open server (`--create-network`) is protected
+  only by trust on first use;
+- `--server-pubkey` closes that gap too.
 
 ### Why trust on first use, and what it leaves open
 
@@ -219,13 +227,12 @@ later one is checked against it.
 
 What each setup stops, at the first contact and after it:
 
-| The client has                                    | A fake server at the first contact                                                                                                                                                                   | Later contacts                                                        |
-|---------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------|
-| `--server-pubkey`                                 | fails: the key is not its own                                                                                                                                                                        | the same                                                              |
-| `--network`, a network the server lists           | fails: it cannot answer CPace without the name; one online guess per connection. **But** a fake server that ignores CPace or claims to take new networks forces the fallback: **believed**, as below | the same (CPace at every connection) once the key is kept with `pake` |
-| `--network`, a new network (`allow_new_networks`) | **believed**: the client joins the attacker's server, which gets the network's ID and can guess the name **offline**                                                                                 | pinned: a server with another key is refused                          |
-| `--network`, a server too old for CPace           | **believed**, as above                                                                                                                                                                               | pinned                                                                |
-| `--psk` without `--server-pubkey`                 | cannot finish the handshake, but gets the first message to test **psk guesses offline**                                                                                                              | pinned                                                                |
+| The client has                                                     | A fake server at the first contact                                                                                                                                        | Later contacts                               |
+|--------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------|
+| `--server-pubkey`                                                  | fails: the key is not its own                                                                                                                                             | the same                                     |
+| `--network`, a network the server lists                            | fails: it cannot answer CPace without the name; one online guess per connection. A fake server that ignores CPace or claims to take new networks is refused (6.0.0, #199) | the same (CPace at every connection)         |
+| `--network --create-network`, a new network (`allow_new_networks`) | **believed**: the client joins the attacker's server, which gets the network's ID and can guess the name **offline**                                                      | pinned: a server with another key is refused |
+| `--psk` without `--server-pubkey`                                  | cannot finish the handshake, but gets the first message to test **psk guesses offline**                                                                                   | pinned                                       |
 
 The offline guess is the cost of the "believed" rows. The network's ID is a
 BLAKE2b hash of its name. A server that holds it can test names as fast as it
@@ -237,11 +244,10 @@ TOFU is a reasonable default here, for these reasons:
 - **Only the first contact is exposed, and only on the path.** The attacker
   has to sit between this client and the server at that very moment, before
   the key is kept. Later contacts are checked against the kept key.
-- **A listed network does not use it, unless an attacker forces the fallback.**
-  The default `install.sh` setup lists one network with a random 20-character
-  name, so its clients take the CPace path from the first contact on. An
-  attacker on the path at that moment can still force the fallback (see
-  above).
+- **A listed network does not use it.** The default `install.sh` setup lists
+  one network with a random 20-character name, so its clients take the CPace
+  path from the first contact on, and since 6.0.0 nothing on the path can
+  turn them off it.
 - **The name defeats offline guessing.** The name `install.sh` makes has 20
   lowercase letters and digits, about 103 bits, and cannot be guessed offline.
   A short or common name can.
@@ -286,7 +292,14 @@ keys above):
   address, count toward a ban; a ban then refuses the address over UDP and
   TCP alike. UDP attempts are held by the two limits above only. The
   addresses with a confirmed client are kept apart from the rest, so a
-  flood of sources cannot push them out.
+  flood of sources cannot push them out;
+- **cookie** (6.0.0, #207): once more than half of `cpace_total` is spent,
+  a UDP `PAKE1` from an address with no confirmed client gets a short
+  `COOKIE` answer instead (37 bytes for 1200), a keyed hash of its address
+  and port under a secret made anew every 2 minutes. Only a `PAKE1` that
+  brings it back, in its padding, is counted and answered, so forged sources,
+  which never see the answer, no longer use up the total. Clients before
+  6.0.0 do not know `COOKIE`: under such a load they wait for it to pass.
 
 `camex --status` shows the counts
 (`cpace: 12 attempts, 10 confirmed, 2 refused, 0 bans (0 banned now)`), and
@@ -419,11 +432,11 @@ own settings and goes on reaching everything:
 
 `--bridge-mode` sets how frames go onto the LAN:
 
-| Mode   | When                                                   | What passes                                     |
-|--------|--------------------------------------------------------|-------------------------------------------------|
-| `full` | Ethernet, a Wi-Fi access point or 4-address (WDS) link | every frame, as it is                           |
+| Mode   | When                                                   | What passes                                       |
+|--------|--------------------------------------------------------|---------------------------------------------------|
+| `full` | Ethernet, a Wi-Fi access point or 4-address (WDS) link | every frame, as it is                             |
 | `nat`  | a Wi-Fi client (station)                               | IPv4 and ARP, with the host's MAC towards the LAN |
-| `auto` | the default                                            | `nat` on a Wi-Fi interface, `full` elsewhere    |
+| `auto` | the default                                            | `nat` on a Wi-Fi interface, `full` elsewhere      |
 
 A Wi-Fi access point takes frames only from the MACs associated with it, so
 over a Wi-Fi station link the bridge works like OpenWrt's `relayd`:
@@ -475,11 +488,11 @@ networks alike.
   path go on talking. What needs the server waits for it: the server itself,
   relayed peers, peers not yet met, and a peer's new address after it moved.
 
-| Peers behind                                   | Path                    |
-|------------------------------------------------|-------------------------|
-| ordinary NATs (one mapping per inside port)    | direct                  |
-| the same NAT, on one LAN                       | direct, over the LAN    |
-| symmetric NATs on both sides                   | through the server      |
+| Peers behind                                | Path                 |
+|---------------------------------------------|----------------------|
+| ordinary NATs (one mapping per inside port) | direct               |
+| the same NAT, on one LAN                    | direct, over the LAN |
+| symmetric NATs on both sides                | through the server   |
 
 In a TAP mesh network, frames to another client's own MAC go direct.
 Broadcasts, and devices behind a bridging client, go through the server.

@@ -228,6 +228,87 @@ int cpace_guard_attempt(uint32_t ip, time_t now, int *banned_now, int proven)
     return CPACE_GUARD_OK;
 }
 
+int cpace_guard_busy(time_t now)
+{
+    if (cfg_total == 0U) {
+        return 0;
+    }
+    refill(&total_tokens, &total_filled, cfg_total, now);
+    return total_tokens < (unsigned long)cfg_total * 30UL;
+}
+
+int cpace_guard_good(uint32_t ip, time_t now)
+{
+    return good_find(ip, now, 0) != NULL;
+}
+
+#define COOKIE_EPOCH 120
+
+static uint8_t cookie_key[2][32];
+static long cookie_epoch[2] = { -1L, -1L };
+
+/* The secret of epoch ep (slot ep % 2), made when first asked for */
+static const uint8_t *cookie_secret(long ep)
+{
+    int s = (int)(ep & 1L);
+
+    if (cookie_epoch[s] != ep) {
+        if (get_random_bytes(cookie_key[s], sizeof(cookie_key[s])) != 0) {
+            return NULL;
+        }
+        cookie_epoch[s] = ep;
+    }
+    return cookie_key[s];
+}
+
+static int cookie_of(uint32_t ip, uint16_t port, long ep, uint8_t out[16])
+{
+    const uint8_t *k = cookie_secret(ep);
+    uint8_t msg[6];
+
+    if (k == NULL) {
+        return -1;
+    }
+    msg[0] = (uint8_t)(ip >> 24);
+    msg[1] = (uint8_t)(ip >> 16);
+    msg[2] = (uint8_t)(ip >> 8);
+    msg[3] = (uint8_t)ip;
+    msg[4] = (uint8_t)(port >> 8);
+    msg[5] = (uint8_t)port;
+    crypto_blake2b_keyed(out, 16U, k, 32U, msg, sizeof(msg));
+    return 0;
+}
+
+void cpace_cookie_make(uint32_t ip, uint16_t port, time_t now,
+                       uint8_t out[16])
+{
+    if (cookie_of(ip, port, (long)(now / COOKIE_EPOCH), out) != 0) {
+        memset(out, 0, 16U);
+    }
+}
+
+int cpace_cookie_check(uint32_t ip, uint16_t port, time_t now,
+                       const uint8_t cookie[16])
+{
+    long ep = (long)(now / COOKIE_EPOCH);
+    uint8_t want[16];
+    int good = 0;
+    int k;
+
+    for (k = 0; k < 2 && !good; ++k) {
+        /* The last epoch's secret only while it is still the one kept */
+        if (k == 1 && cookie_epoch[(ep - 1L) & 1L] != ep - 1L) {
+            break;
+        }
+        if (cookie_of(ip, port, ep - (long)k, want) == 0 &&
+            crypto_verify16(want, cookie) == 0) {
+            good = 1;
+        }
+    }
+    crypto_wipe(want, sizeof(want));
+    return good;
+}
+
 void cpace_guard_confirm(uint32_t ip, time_t now)
 {
     guard_entry_t *e = guard_find(ip, now, 1);

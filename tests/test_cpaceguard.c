@@ -12,6 +12,8 @@
 
 #include "cpaceguard.h"
 
+#include <string.h>
+
 #include <stdio.h>
 
 static int failures = 0;
@@ -174,6 +176,36 @@ int main(void)
                   CPACE_GUARD_OK,
               "a confirmed address held after a flood (%d)", i);
     }
+
+    /* #207: the cookie of an address, two epochs of 2 minutes */
+    {
+        uint8_t c[16], d[16];
+        time_t t0 = (time_t)1000000 * 120;
+
+        cpace_cookie_make(IP(10, 4, 0, 1), 5800U, t0, c);
+        CHECK(cpace_cookie_check(IP(10, 4, 0, 1), 5800U, t0 + 5, c),
+              "a fresh cookie is not taken");
+        CHECK(!cpace_cookie_check(IP(10, 4, 0, 2), 5800U, t0 + 5, c),
+              "another address's cookie taken");
+        CHECK(!cpace_cookie_check(IP(10, 4, 0, 1), 5801U, t0 + 5, c),
+              "another port's cookie taken");
+        CHECK(cpace_cookie_check(IP(10, 4, 0, 1), 5800U, t0 + 150, c),
+              "a cookie of the last epoch is not taken");
+        CHECK(!cpace_cookie_check(IP(10, 4, 0, 1), 5800U, t0 + 250, c),
+              "a cookie two epochs old taken");
+        memset(d, 0, sizeof(d));
+        CHECK(!cpace_cookie_check(IP(10, 4, 0, 1), 5800U, t0 + 5, d),
+              "no cookie (zeros) taken");
+    }
+    /* busy: more than half of the total spent */
+    cpace_guard_config(5U, 10U, 8U, 600U);
+    cpace_guard_reset();
+    CHECK(!cpace_guard_busy(t), "busy at once");
+    for (i = 0; i < 6; ++i) {
+        (void)cpace_guard_attempt(IP(10, 5, 0, (unsigned)i), t, NULL, 0);
+    }
+    CHECK(cpace_guard_busy(t), "not busy with 6 of 10 spent");
+    CHECK(!cpace_guard_busy(t + 60), "still busy a minute later");
 
     if (failures != 0) {
         fprintf(stderr, "test_cpaceguard: %d failure(s)\n", failures);
