@@ -20,6 +20,12 @@
 #ifndef CAMEX_WEB_H
 #define CAMEX_WEB_H
 
+/* No server, no start page (#203, #204): a build that leaves out the
+ * server (CAMEX_NO_SERVER, as the Android library's) leaves it out too */
+#if defined(CAMEX_NO_SERVER) && !defined(CAMEX_NO_WEB)
+#define CAMEX_NO_WEB
+#endif
+
 #if !defined(CAMEX_NO_WEB) && !defined(_WIN32)
 
 #include <sys/select.h>
