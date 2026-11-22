@@ -471,6 +471,34 @@ check $? "without the selector the same name is not answered"
 client c srv "$OTHER_NET" --name CAM-O
 addr_of "$P-c" >/dev/null
 check $? "a network without a selector is joined as before"
+docker exec "$P-srv" camex --status 2>/dev/null | grep -q "sel selector north" &&
+    docker exec "$P-srv" camex --status --json 2>/dev/null | grep -q '"label":"sel","selector":"north"'
+check $? "--status and --json show the selector"
+docker run --rm --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD "$IMAGE" \
+    --server-host "$P-srv" --network "$SEL_NET" --psk x --network-selector north > "$BUILD_CTX/selpsk.log" 2>&1
+r=$?
+[ $r != 0 ] && grep -q "network-selector is for a client with --network and without --psk" "$BUILD_CTX/selpsk.log"
+check $? "--network-selector with --psk (no CPace) is refused"
+# The answer to an unknown selector looks like a real one: Yb a canonical
+# point (top bit clear) every time
+cat > "$BUILD_CTX/decoy.py" <<'PY'
+import os, socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.settimeout(2)
+top = 0
+for _ in range(16):
+    sel = b"nosuch"
+    pkt = b"CXv2" + bytes([8]) + os.urandom(16) + os.urandom(32) + bytes(16) + bytes([len(sel)]) + sel
+    s.sendto(pkt + bytes(1200 - len(pkt)), (sys.argv[1], 5800))
+    d = s.recv(4096)
+    top += d[23 + 31] >> 7
+print(top)
+PY
+docker create --name "$P-decoy" --network "$NET_NAME" --entrypoint python3 "$IMAGE" /decoy.py "$P-srv" >/dev/null
+docker cp "$BUILD_CTX/decoy.py" "$P-decoy:/decoy.py" >/dev/null
+got=$(docker start -a "$P-decoy" 2>/dev/null | tail -1)
+[ "$got" = 0 ]
+check $? "the answer to an unknown selector is a canonical point every time (top bits set: ${got:-?} of 16)"
 
 echo
 if [ "$FAILS" = 0 ]; then

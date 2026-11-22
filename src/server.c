@@ -2308,10 +2308,26 @@ static int server_handle_pake1(const uint8_t *buf, size_t len,
     }
     out[5 + PAKE_SID_LEN + 1U] = ps->count;
     if ((sel[0] != '\0' || sel_bad) && ps->count == 0U) {
-        /* An answer no key opens; PAKE3 finds no slot for it */
-        if (get_random_bytes(out + o, PAKE_ENTRY_LEN) != 0) {
+        /* An answer made as a real one, for a network of a random ID: a
+         * point like any Yb, the same work and time, a tag no key opens;
+         * PAKE3 finds no slot for it (the review of #218) */
+        uint8_t id[CAMEX_NET_ID_LEN], g[32], yb_secret[32], k[32];
+
+        if (get_random_bytes(id, sizeof(id)) != 0 ||
+            get_random_bytes(yb_secret, sizeof(yb_secret)) != 0) {
             return -1;
         }
+        pake_generator(id, ps->sid, g);
+        if (pake_mult(out + o, yb_secret, g) != 0 ||
+            pake_mult(k, yb_secret, ps->ya) != 0) {
+            crypto_wipe(yb_secret, sizeof(yb_secret));
+            crypto_wipe(k, sizeof(k));
+            return -1;   /* a low-order Ya, as for a real network */
+        }
+        pake_tag(out + o + 32U, 's', k, ps->sid, ps->ya, out + o,
+                 ctx->server_pub);
+        crypto_wipe(yb_secret, sizeof(yb_secret));
+        crypto_wipe(k, sizeof(k));
         o += PAKE_ENTRY_LEN;
         out[5 + PAKE_SID_LEN + 1U] = 1U;
     }
@@ -4180,15 +4196,20 @@ static void status_networks(status_buf_t *b, int json)
         if (json) {
             sb_printf(b, "%s{\"label\":", shown > 0U ? "," : "");
             sb_json_str(b, t->label);
+            if (t->selector[0] != '\0') {
+                sb_printf(b, ",\"selector\":");
+                sb_json_str(b, t->selector);
+            }
             sb_printf(b, ",\"pool\":\"%s\",\"listed\":%s,\"clients\":%u,"
                       "\"client_isolation\":%s}", pool,
                       t->listed ? "true" : "false", clients,
                       net_isolation((int)i) ? "true" : "false");
         } else {
-            sb_printf(b, "%s%s %s, %u client%s%s%s", shown == 0U
-                                                         ? "networks: "
-                                                         : "; ",
-                      t->label, pool, clients, clients == 1U ? "" : "s",
+            sb_printf(b, "%s%s%s%s %s, %u client%s%s%s", shown == 0U
+                                                             ? "networks: "
+                                                             : "; ",
+                      t->label, t->selector[0] != '\0' ? " selector " : "",
+                      t->selector, pool, clients, clients == 1U ? "" : "s",
                       t->listed ? "" : " (new)",
                       net_isolation((int)i) ? ", isolated" : "");
         }

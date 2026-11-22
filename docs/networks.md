@@ -46,16 +46,21 @@ Extra protection on top of the name, all optional:
 
 ```ini
 [server]
-local_cidr = 10.200.0.1/24       # needed: the networks' gateways go on this tunnel
-# allow_new_networks = yes       # any name makes a new network (off by default)
-# network_supernet = 10.0.0.0/8  # where derived pools come from (the default)
-# network_prefix = 16            # their size (the default)
+# Needed: the networks' gateways go on this tunnel
+local_cidr = 10.200.0.1/24
+# Any name makes a new network (off by default)
+# allow_new_networks = yes
+# Where derived pools come from, and their size (the defaults)
+# network_supernet = 10.0.0.0/8
+# network_prefix = 16
 
 [network field cameras of the north site]
-label = cams                     # shown instead of the name in logs and status (optional)
+# Shown instead of the name in logs and status (optional)
+label = cams
 
 [network 7kq2m9x4p1lab8vz3t0c]
-pool = 10.77.0.0/24              # this pool instead of a derived one
+# This pool instead of a derived one
+pool = 10.77.0.0/24
 client_isolation = yes
 ```
 
@@ -320,14 +325,16 @@ networks can give each a **selector**, a public word like a user name:
 
 ```ini
 [network 7kq2m9x4p1lab8vz3t0c]
-selector = north           # public, like a user name: typed on the device
+# Public, like a user name: typed on the device
+selector = north
 ```
 
 ```sh
 camex --server-host cams.example.org --network 7kq2m9x4p1lab8vz3t0c --network-selector north
 ```
 
-A `PAKE1` with a selector is answered for that one network; a network with
+A `PAKE1` with a selector is answered for that one network (`camex --status`
+shows each network's selector); a network with
 a selector is answered only to a `PAKE1` that names it, so a guess tests one
 network at a time. A `PAKE1` without a selector is answered for the networks
 without one, as before. An unknown selector gets one answer of random bytes,
