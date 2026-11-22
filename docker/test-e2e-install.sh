@@ -326,6 +326,16 @@ x 'printf "map \$host \$camex_upstream {\n}\n" > /etc/nginx/camex-map.conf &&
        > /etc/systemd/system/camex.service &&
    systemctl daemon-reload && systemctl restart camex && nginx -t && nginx -s reload' >/dev/null 2>&1
 check $? "a server set up as by camex 5.1.0 and before (the map, the sync, the old names)"
+# One with TLS is not written anew: refused in step 1, nothing changed
+x 'cp /etc/nginx/conf.d/camex.conf /tmp/plain.conf &&
+   sed -i "0,/^\([[:space:]]*\)listen 80;/s//&\n\1listen 8443 ssl;/" /etc/nginx/conf.d/camex.conf'
+out=$(run --port 5801)
+rc=$?
+[ $rc -ne 0 ] && echo "$out" | grep -q "nginx file of the map .* with a listen line with an address, ssl or quic" &&
+    x 'grep -q "listen 8443 ssl;" /etc/nginx/conf.d/camex.conf && ! grep -q "^web_listen=" /etc/camex/camex.conf &&
+       systemctl is-active --quiet camex-nginx-sync.service'
+check $? "an nginx file of the map with TLS is refused in step 1, to move by hand; nothing changed"
+x 'cat /tmp/plain.conf > /etc/nginx/conf.d/camex.conf'
 # (--port 5801: the old unit's --port 5800 is the one compared, #149)
 out=$(run --port 5801)
 rc=$?

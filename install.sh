@@ -516,6 +516,25 @@ if [ -n "$DOMAIN" ]; then
         die "$kept is not for $DOMAIN: fix its server_name lines (or remove" \
             "it), then run this again"
     fi
+    # nginx of the map (camex 5.1.0 and before): step 7 writes its file
+    # anew. Only a plain one: an address or TLS in it, or camex's lookup
+    # set elsewhere, would be lost or left broken; those move by hand
+    if [ -f "$kept" ] && grep -q 'camex-map\.conf' "$kept"; then
+        why=
+        grep -E '^[[:space:]]*listen[[:space:]]' "$kept" |
+            grep -vqE '^[[:space:]]*listen[[:space:]]+(\[::\]:)?[0-9]+([[:space:]]+default_server)?[[:space:]]*;' &&
+            why="a listen line with an address, ssl or quic"
+        grep -qE '^[[:space:]]*ssl_certificate' "$kept" && why="TLS (ssl_certificate)"
+        wl=$(conf_server web_listen)
+        case "$wl" in
+            ""|yes|127.0.0.1:5801) ;;
+            *) why="web_listen=$wl in $CONF (nginx's new file asks 127.0.0.1:5801)" ;;
+        esac
+        [ -z "$why" ] ||
+            die "$kept is an nginx file of the map (camex 5.1.0 and before, gone in" \
+                "6.0.0) with $why, which a new file would not keep: move it over by" \
+                "hand (docs/nginx.md, \"Moving from the map\"), then run this again"
+    fi
     # Another file of nginx with the map: two of them would fight
     for f in /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/*; do
         [ -f "$f" ] && [ "$f" != "$NGINX_CONF" ] && [ "$f" != "$OLD_NGINX_CONF" ] &&
@@ -583,7 +602,7 @@ for f in "$NGINX_CONF" "$OLD_NGINX_CONF"; do
 done
 # The devices' web port the sync gave nginx: device_port= now
 if [ -n "$MOVE_NGINX" ] && [ -z "$UPSTREAM_PORT" ]; then
-    UPSTREAM_PORT=$(sed -n 's/^Environment=UPSTREAM_PORT=\([0-9]*\)$/\1/p' \
+    UPSTREAM_PORT=$(sed -n 's/^Environment="\{0,1\}UPSTREAM_PORT=\([0-9]*\)"\{0,1\}[[:space:]]*$/\1/p' \
                     "$UNITS/camex-nginx-sync.service" 2>/dev/null | tail -n 1)
 fi
 

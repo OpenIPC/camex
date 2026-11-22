@@ -473,6 +473,12 @@ It finds nginx's file of the map and
 - stops and disables `camex-nginx-sync.service` (and camex 3.10's timer);
 - names the files no longer used, and removes none of them.
 
+It does that only for a plain file: one whose `listen` lines have no address,
+`ssl` or `quic`, without `ssl_certificate`, on a host whose `camex.conf` has
+no `web_listen=` other than `yes`. Anything else would be lost or left
+pointing elsewhere, so `install.sh` stops before it changes anything and
+says why: move such a server by hand.
+
 **By hand**:
 
 1. Add `web_listen=yes` to `[server]` of `/etc/camex/camex.conf` (and

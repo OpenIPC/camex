@@ -34,7 +34,9 @@ Incompatible: what a client does when it first meets a server, the nginx map and
   `install.sh` moves a server set up by camex 5.1.0 and before over: nginx's file made anew from
   `examples/nginx-camex.conf` (the old one kept in `/var/backups/camex/`), `web_listen=yes` (and
   `device_port=` from the sync's `UPSTREAM_PORT=`) added to `camex.conf`, the sync service and timer
-  stopped and disabled. It removes none of their files and names them;
+  stopped and disabled. It removes none of their files and names them. A file with TLS or an
+  address in its `listen` lines, or a `camex.conf` with another `web_listen=`, is not written anew:
+  `install.sh` stops before it changes anything;
   [docs/nginx.md](docs/nginx.md#moving-from-the-map) has the list and the steps by hand.
 
 ## 5.2.4 — 2026-11-22
@@ -113,7 +115,7 @@ sync script, no reloads of nginx.
 - `install.sh --domain`: `web_listen=yes` (and `device_port=` with `--upstream-port`) in
   `camex.conf`, the new nginx file, no sync script, the start page opened through nginx as the
   check. A server set up by camex 5.1.0 or before (the map, `camex-nginx-sync`) is kept as it is,
-  with a word on [moving over](docs/nginx.md#moving-to-web_listen), which lists the files to remove.
+  with a word on [moving over](docs/nginx.md#moving-from-the-map), which lists the files to remove.
 - Deprecated until 6.0.0: `examples/camex-nginx-sync.sh` and `.service`, `--format nginx-map` /
   `nginx-index`; the old nginx file is `examples/nginx-camex-map.conf`.
 - `CAMEX_WEB` (#204): in the full profile, not in the client one; `features:` of `--version` says
