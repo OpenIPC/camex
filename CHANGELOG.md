@@ -6,6 +6,15 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 5.2.4 — 2026-11-22
+
+- Uploads above 1 MB through nginx to a device's web UI (a firmware image) work again with camex's
+  own lookup (`web_listen=`, since 5.2.0). nginx held the `auth_request` subrequest to its 1 MB
+  `client_max_body_size` too, answered it 413 and showed the page "Device not reachable".
+  `examples/nginx-camex.conf` has `client_max_body_size 0` (and `proxy_method GET`) in
+  `/_camex_resolve`; `install.sh` adds the first to a file of camex 5.2 that lacks it (a copy kept in
+  `/var/backups/camex/`), and `/resolve` answers any method as GET.
+
 ## 5.2.3 — 2026-11-22
 
 - CPace guard: forged UDP packets can no longer ban a camera's address

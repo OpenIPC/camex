@@ -778,6 +778,36 @@ else
         grep -qE '^[[:space:]]*auth_basic[[:space:]]+"' "$NGINX_CONF" ||
             say "WARNING: $NGINX_CONF has no auth_basic: the start page" \
                 "has no password (see auth_basic in examples/nginx-camex.conf)"
+        # camex 5.2's file: nginx held the lookup subrequest to 1 MB too, so
+        # an upload above it found the device "not reachable" (5.2.4). Each
+        # /_camex_resolve block without an active client_max_body_size
+        # (a commented one does not count) gets it
+        awk '
+            inb {
+                buf[++n] = $0
+                if ($0 ~ /^[[:space:]]*client_max_body_size[[:space:]]/) f = 1
+                if ($0 ~ /^[[:space:]]*}/) {
+                    print head
+                    if (!f) print ind "    client_max_body_size 0;   # uploads above 1 MB (camex 5.2.4)"
+                    for (i = 1; i <= n; i++) print buf[i]
+                    inb = 0
+                }
+                next
+            }
+            /^[[:space:]]*location[[:space:]]+=[[:space:]]*\/_camex_resolve[[:space:]]*\{/ {
+                inb = 1; n = 0; f = 0; head = $0
+                ind = $0; sub(/[^[:space:]].*$/, "", ind)
+                next
+            }
+            { print }
+            END { if (inb) { print head; for (i = 1; i <= n; i++) print buf[i] } }
+        ' "$NGINX_CONF" > "$TMP/nginx-resolve.conf" || die "cannot read $NGINX_CONF"
+        if ! cmp -s "$NGINX_CONF" "$TMP/nginx-resolve.conf"; then
+            backup "$NGINX_CONF"
+            cat "$TMP/nginx-resolve.conf" > "$NGINX_CONF" || die "cannot edit $NGINX_CONF"
+            say "added client_max_body_size 0 to /_camex_resolve of $NGINX_CONF:" \
+                "uploads above 1 MB through nginx"
+        fi
         # nginx's default 1 MB stops a firmware upload through a device's page
         grep -qE '^[[:space:]]*client_max_body_size[[:space:]]' "$NGINX_CONF" ||
             say "WARNING: $NGINX_CONF has no client_max_body_size: uploads to" \
