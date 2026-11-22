@@ -160,7 +160,10 @@ nginx by hand: [nginx.md](nginx.md#nginx).
 [deploy/compose.yaml](../deploy/compose.yaml) runs the server in Alpine with
 the static camex of the [`latest`](../README.md#permanent-links) release
 (`camex-<arch>-full` where the release has it: TAP networks, `--bridge`, mesh).
-It needs only the three files of [deploy/](../deploy):
+The build checks the download against the SHA-256 the release gives for that
+file, and stops on a mismatch; another release (`CAMEX_RELEASE`) needs its
+`CAMEX_SHA256` as a build argument too. It needs only the three files of
+[deploy/](../deploy):
 
 ```sh
 mkdir camex && cd camex
@@ -175,12 +178,16 @@ docker compose logs camex          # how clients join; the name is in data/camex
 On the first start it makes the server's key pair and settings in
 `data/` (`server.key`, `camex.conf`, mode 0600, owned by root), as
 `install.sh` does: a `[network NAME]` block of a random name (with camex
-5.0.0 and later; an older release gets only `psk=`), the pool
-`10.200.0.0/24` with the server at `10.200.0.1`, a new `psk=`. The log says
-how clients join, with the server's public key; the network's name and the
-psk, which are keys, stay in `data/camex.conf` and never go to the
-container's log. `CAMEX_PORT`, `CAMEX_POOL` and `CAMEX_NETWORK` in the compose
-file change them, on the first start only; later, edit `data/camex.conf`.
+5.0.0 and later; an older release gets only `psk=`) with `label = main`, the
+pool `10.200.0.0/24` with the server at `10.200.0.1` (for clients that join
+with `--psk`; the network's clients get a pool of its own,
+[networks.md](networks.md)), a new `psk=`. The log says how clients join,
+with the server's public key; the network's name and the psk, which are
+keys, stay in `data/camex.conf` and never go to the container's log (camex
+logs the network by its label). `CAMEX_PORT`, `CAMEX_POOL` (any address in
+the pool gives its network, as `install.sh --pool`), `CAMEX_NETWORK` and
+`CAMEX_DOMAIN` in the compose file change them, on the first start only;
+later, edit `data/camex.conf`.
 
 - **Host networking** (`network_mode: host`): the tunnel interface is on the
   host, as with `install.sh`, so the host reaches the clients and the port
@@ -196,7 +203,11 @@ file change them, on the first start only; later, edit `data/camex.conf`.
   ```
 
 nginx in front of the clients is not in the container: install it on the
-host ([nginx.md](nginx.md)).
+host. With `CAMEX_DOMAIN` set on the first start, `camex.conf` gets
+`domain=` and `web_listen=yes`: camex then serves the start page and nginx's
+lookup on `127.0.0.1:5801`, which nginx on the host reaches through host
+networking. Put [examples/nginx-camex.conf](../examples/nginx-camex.conf),
+with your domain, in `/etc/nginx/conf.d/` ([nginx.md](nginx.md#nginx)).
 
 ## Files on the server
 

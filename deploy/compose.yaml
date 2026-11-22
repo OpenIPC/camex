@@ -35,3 +35,6 @@ services:
       CAMEX_PORT: "5800"
       # CAMEX_POOL: "10.200.0.0/24"
       # CAMEX_NETWORK: "a-name-of-16-characters-or-more"
+      # The cameras' domain for nginx on the host: domain= and web_listen=yes
+      # (camex's start page and nginx's lookup on 127.0.0.1:5801)
+      # CAMEX_DOMAIN: "cams.example.org"
