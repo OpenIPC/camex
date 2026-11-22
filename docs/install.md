@@ -33,7 +33,9 @@ The steps, printed before it starts and numbered as it goes:
    port, the auto pool `10.200.0.0/24` with the server at `10.200.0.1`,
    `client_isolation=yes`, `client_timeout=60`, a new random `psk=hex:…` and, with `--domain`,
    `domain=`; first in the file, a `[network NAME]` block of a random name of
-   20 letters and digits (`--network` gives one; [networks.md](networks.md)).
+   20 letters and digits (`--network` gives one; [networks.md](networks.md))
+   with `label = main`, so that the log and `--status` show the network by
+   that word and never by its name, which is its key.
 6. Write `/etc/default/camex` (the service's arguments: server mode with that
    config and key), install `camex.service`, enable and start it.
 7. With `--domain` (or when nginx was installed before): `web_listen=yes` in
@@ -102,6 +104,10 @@ once are kept as they are, edits included: `camex.conf`, `server.key`,
   [nginx.md](nginx.md#moving-from-the-map).
 - The domain is never changed: another `--domain` is refused. Change it by
   hand in `camex.conf` and nginx's file.
+- A `[network NAME]` block without `label=` (`install.sh` before 6.0.1) is
+  left as it is, with a warning: camex logs such a network by its name, so
+  the journal has the network's key. Add `label = <a word>` to it and
+  `systemctl reload camex`.
 
 A new password for the start page: remove `/etc/camex/nginx-password` and run
 `install.sh` again; it replaces the `camex` line of `/etc/nginx/camex.htpasswd`,
