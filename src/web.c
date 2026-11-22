@@ -47,6 +47,9 @@
 #define WEB_CONNS        16
 #define WEB_HEAD_MAX     8192U   /* a request's head; more: 431 */
 #define WEB_TIMEOUT      10      /* seconds for a whole request */
+#define WEB_HEAD_TIMEOUT 3       /* seconds for its head to come */
+#define WEB_PW_PER_SEC   2       /* password checks (argon2) a second, all
+                                  * addresses: the loop is the tunnel's */
 #define WEB_PEERS        16
 #define WEB_PEER_EVERY   2       /* seconds between rounds of the others */
 #define WEB_PEER_TIMEOUT 2       /* seconds for one answer of another */
@@ -106,7 +109,10 @@ typedef struct {
     uint32_t ip;
     unsigned int fails;
     time_t until;
+    time_t last;            /* its last wrong password */
 } web_fail_t;
+static time_t web_pw_second = 0;
+static unsigned int web_pw_count = 0;
 static web_fail_t web_fails[WEB_FAIL_SLOTS];
 
 static int set_nonblock(int fd)
@@ -211,12 +217,20 @@ static void peer_ask(web_peer_t *p)
     memset(&sa, 0, sizeof(sa));
     sa.sun_family = AF_UNIX;
     snprintf(sa.sun_path, sizeof(sa.sun_path), "%s", p->path);
-    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0 ||
-        send(fd, cmd, strlen(cmd), MSG_NOSIGNAL) != (ssize_t)strlen(cmd)) {
+    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+        int err = errno;
+
         close(fd);
         /* Nobody there (a server gone, its socket left behind): its
-         * clients are not shown or resolved any more */
-        peer_forget(p);
+         * clients are not shown or resolved any more. Busy (its backlog
+         * full): its last answer stays until WEB_PEER_STALE (#210) */
+        if (err == ECONNREFUSED || err == ENOENT) {
+            peer_forget(p);
+        }
+        return;
+    }
+    if (send(fd, cmd, strlen(cmd), MSG_NOSIGNAL) != (ssize_t)strlen(cmd)) {
+        close(fd);
         return;
     }
     p->fd = fd;
@@ -563,24 +577,61 @@ static void respond_text(web_conn_t *c, int code, const char *reason,
 
 static web_fail_t *fail_slot(uint32_t ip, int create)
 {
-    web_fail_t *oldest = &web_fails[0];
+    web_fail_t *free_slot = NULL, *oldest = NULL;
+    time_t now = time(NULL);
     size_t i;
 
     for (i = 0U; i < WEB_FAIL_SLOTS; ++i) {
-        if (web_fails[i].ip == ip && (web_fails[i].fails > 0U ||
-                                      web_fails[i].until != 0)) {
-            return &web_fails[i];
+        web_fail_t *f = &web_fails[i];
+        int in_use = f->fails > 0U || f->until > now;
+
+        if (in_use && f->ip == ip) {
+            return f;
         }
-        if (web_fails[i].until < oldest->until) {
-            oldest = &web_fails[i];
+        if (!in_use) {
+            if (free_slot == NULL) {
+                free_slot = f;
+            }
+        } else if (f->until <= now &&
+                   (oldest == NULL || f->last < oldest->last)) {
+            oldest = f;   /* counting, not shut out: the oldest goes */
         }
     }
     if (!create) {
         return NULL;
     }
-    memset(oldest, 0, sizeof(*oldest));
-    oldest->ip = ip;
-    return oldest;
+    /* A free slot first; never one that shuts an address out now, nor
+     * one another address counts in while a free one is left (#210) */
+    if (free_slot == NULL) {
+        free_slot = oldest;
+    }
+    if (free_slot == NULL) {
+        return NULL;   /* every slot shuts one out: no count for this one */
+    }
+    memset(free_slot, 0, sizeof(*free_slot));
+    free_slot->ip = ip;
+    return free_slot;
+}
+
+/* A wrong password from ip (or one not checked: the budget was spent);
+ * WEB_FAIL_MAX in a row shut it out for WEB_FAIL_BLOCK */
+static void count_fail(uint32_t ip, time_t now)
+{
+    web_fail_t *f = fail_slot(ip, 1);
+
+    if (f == NULL) {
+        return;
+    }
+    f->last = now;
+    if (++f->fails >= WEB_FAIL_MAX) {
+        f->fails = 0U;
+        f->until = now + WEB_FAIL_BLOCK;
+        log_message(LOG_WARNING, "Start page: %u wrong passwords from "
+                    "%u.%u.%u.%u, refused for %d s", WEB_FAIL_MAX,
+                    (unsigned)(ip >> 24), (unsigned)((ip >> 16) & 255U),
+                    (unsigned)((ip >> 8) & 255U), (unsigned)(ip & 255U),
+                    WEB_FAIL_BLOCK);
+    }
 }
 
 /* 1: the request may see the page; 0: an answer (401, 429) is set */
@@ -624,6 +675,20 @@ static int authorized(web_conn_t *c, const char *pw, int head_only)
                 return 1;
             }
         }
+        /* A new header costs an argon2 (8 MiB) in the tunnel's loop: a
+         * few a second for all addresses together (#210) */
+        if (now != web_pw_second) {
+            web_pw_second = now;
+            web_pw_count = 0U;
+        }
+        if (++web_pw_count > WEB_PW_PER_SEC) {
+            /* Not checked, but counted: a flood of guesses shuts its
+             * address out as wrong ones would */
+            count_fail(c->ip, now);
+            respond_text(c, 429, "Too Many Requests", "Retry-After: 1\r\n",
+                         "Busy: try again in a second\n", head_only);
+            return 0;
+        }
         n = key_base64_decode(auth + 6, dec, sizeof(dec) - 1U);
         if (n > 0) {
             dec[n] = '\0';
@@ -651,16 +716,7 @@ static int authorized(web_conn_t *c, const char *pw, int head_only)
             }
         }
         crypto_wipe(dec, sizeof(dec));
-        f = fail_slot(c->ip, 1);
-        if (++f->fails >= WEB_FAIL_MAX) {
-            f->fails = 0U;
-            f->until = now + WEB_FAIL_BLOCK;
-            log_message(LOG_WARNING, "Start page: %u wrong passwords from "
-                        "%u.%u.%u.%u, refused for %d s", WEB_FAIL_MAX,
-                        (unsigned)(c->ip >> 24), (unsigned)((c->ip >> 16) & 255U),
-                        (unsigned)((c->ip >> 8) & 255U),
-                        (unsigned)(c->ip & 255U), WEB_FAIL_BLOCK);
-        }
+        count_fail(c->ip, now);
     }
     respond_text(c, 401, "Unauthorized",
                  "WWW-Authenticate: Basic realm=\"camex\", charset=\"UTF-8\"\r\n",
@@ -855,8 +911,24 @@ int web_apply(void)
     struct in_addr a;
 
     conns_init();
-    if (strcmp(g->web_listen, web_spec) == 0 && (web_fd >= 0 ||
-                                                 g->web_listen[0] == '\0')) {
+    /* A reload that drops web_password= from a LAN page closes it (#210):
+     * the rule below holds for a page that runs as for a new one */
+    if (web_fd >= 0 && strcmp(g->web_listen, web_spec) == 0) {
+        colon = strrchr(g->web_listen, ':');
+        snprintf(ipt, sizeof(ipt), "%.*s",
+                 colon != NULL ? (int)(colon - g->web_listen) : 0,
+                 g->web_listen);
+        if (inet_pton(AF_INET, ipt, &a) == 1 &&
+            !is_loopback(ntohl(a.s_addr)) && g->web_password[0] == '\0') {
+            log_message(LOG_ERR, "web_listen = %s is reachable from the "
+                        "network and web_password= is gone: the start page "
+                        "is closed", g->web_listen);
+            web_close();
+            return -1;
+        }
+        return 0;
+    }
+    if (strcmp(g->web_listen, web_spec) == 0 && g->web_listen[0] == '\0') {
         return 0;
     }
     web_close();
@@ -913,7 +985,11 @@ int web_fdset(fd_set *readset, fd_set *writeset, int maxfd)
         if (c->fd < 0) {
             continue;
         }
-        if (difftime(now, c->since) > (double)WEB_TIMEOUT) {
+        /* A head not complete in WEB_HEAD_TIMEOUT, a whole request not
+         * done in WEB_TIMEOUT: closed (#210) */
+        if (difftime(now, c->since) > (double)WEB_TIMEOUT ||
+            (c->out == NULL &&
+             difftime(now, c->since) > (double)WEB_HEAD_TIMEOUT)) {
             conn_close(c);
             continue;
         }
@@ -975,6 +1051,33 @@ void web_handle(const fd_set *readset, const fd_set *writeset)
                 if (web_conns[i].fd < 0) {
                     c = &web_conns[i];
                     break;
+                }
+            }
+            /* All taken: the oldest one still sending its head makes room,
+             * one from beyond this host first, so idle visitors cannot keep
+             * nginx's lookups out (#210) */
+            if (c == NULL) {
+                web_conn_t *victim = NULL;
+                int pass;
+
+                /* nginx (127.0.0.1) may take any one; one from the
+                 * network only another one from the network */
+                int passes = is_loopback(ntohl(from.sin_addr.s_addr)) ? 2 : 1;
+
+                for (pass = 0; pass < passes && victim == NULL; ++pass) {
+                    for (i = 0U; i < WEB_CONNS; ++i) {
+                        web_conn_t *o = &web_conns[i];
+
+                        if (o->out == NULL &&
+                            (pass == 1 || !is_loopback(o->ip)) &&
+                            (victim == NULL || o->since < victim->since)) {
+                            victim = o;
+                        }
+                    }
+                }
+                if (victim != NULL) {
+                    conn_close(victim);
+                    c = victim;
                 }
             }
             if (c == NULL || fd >= FD_SETSIZE || set_nonblock(fd) != 0 ||

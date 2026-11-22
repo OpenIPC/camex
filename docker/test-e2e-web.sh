@@ -66,7 +66,8 @@ LAN_HASH=$(printf '%s\n' "$LAN_PW" | "$CAMEX_BINARY" --hash-password | sed -n 's
 printf '[server]\ndomain=%s\nweb_listen=yes\n[client CAM-Z]\nname=Gate\n' "$DOMAIN" \
     > "$BUILD_CTX/camex.conf"
 # The second server on the same host: its own pool, no page of its own
-printf '[server]\ndomain=%s\nauto_pool=10.201.0.0/24\n' "$DOMAIN" > "$BUILD_CTX/camex2.conf"
+# its devices' web port, 8090: on its own records, not the first server's 80
+printf '[server]\ndomain=%s\nauto_pool=10.201.0.0/24\ndevice_port=8090\n' "$DOMAIN" > "$BUILD_CTX/camex2.conf"
 echo "$PAGE_PW" > "$BUILD_CTX/page-pw"
 cat > "$BUILD_CTX/Dockerfile" <<'DOCKERFILE'
 FROM ubuntu:24.04
@@ -99,6 +100,17 @@ client() {  # client <name> [<server port> [<web port>]]: "I am <name>" on its w
          exec /usr/local/bin/camex-run --mode client --auto --name "$CAMEX_ID" \
              --server-host '"$P-srv"' --port '"${2:-5800}"' --server-pubkey '"$SERVER_PUBKEY"' \
              --psk '"$PSK"' --keepalive 2 '"$extra" >/dev/null
+}
+
+client_quiet() {  # client_quiet <name> <server port> <web port>: serves there,
+                  # announces nothing (the server's device_port= applies)
+    docker run -d --name "$P-$1" --network "$NET_NAME" --cap-add NET_ADMIN \
+        --cap-add MKNOD -e CAMEX_ID="$1" -e WEB="$3" --entrypoint /bin/sh "$IMAGE" -c \
+        'mkdir -p /www && echo "I am $CAMEX_ID" > /www/index.html &&
+         (cd /www && python3 -m http.server "$WEB" >/dev/null 2>&1 &) &&
+         exec /usr/local/bin/camex-run --mode client --auto --name "$CAMEX_ID" \
+             --server-host '"$P-srv"' --port '"$2"' --server-pubkey '"$SERVER_PUBKEY"' \
+             --psk '"$PSK"' --keepalive 2' >/dev/null
 }
 
 get() {     # get <host> [path]: what nginx serves for that name
@@ -202,14 +214,14 @@ echo "== 5. a second server on the same host"
 docker exec -d "$P-srv" /usr/local/bin/camex-run --mode server --port 5900 --transport udp \
     --local-cidr 10.201.0.1/24 $SERVER_KEY_ARGS --psk "$PSK" --config /etc/camex/camex2.conf
 sleep 1
-client CAM-C 5900
+client_quiet CAM-C 5900 8090
 for _ in $(seq 1 20); do
     docker exec "$P-srv" camex --status 2>/dev/null | grep -q CAM-C && break
     sleep 1
 done
 sleep 3   # the page asks the others every 2 s
 [ "$(get cam-c.$DOMAIN)" = "I am CAM-C" ]
-check $? "a client of the other server is reached by name"
+check $? "a client of the other server is reached by name, on that server's device_port 8090"
 get "$DOMAIN" | grep -qF "<a href=\"//cam-c.$DOMAIN/\">cam-c</a>"
 check $? "and is on the start page"
 
@@ -280,6 +292,24 @@ for _ in 1 2 3 4 5; do lan -u "any:wrong" -o /dev/null; done
 check $? "after 5 wrong passwords that address gets 429, even with the right one"
 docker logs "$P-lan" 2>&1 | grep -q "wrong passwords from"
 check $? "the server logs it"
+
+echo "   16 idle connections from the network do not keep a request out"
+# (from CAM-W: CAM-A is shut out for a minute by the step above)
+docker exec -d "$P-CAM-W" python3 -c '
+import socket, time
+s = [socket.create_connection(("'"$LAN_IP"'", 5801), 3) for _ in range(16)]
+time.sleep(8)'
+sleep 1
+[ "$(docker exec "$P-CAM-W" curl -s -m 10 -u "any:$LAN_PW" -o /dev/null -w '%{http_code}' "http://$LAN_IP:5801/")" = 200 ]
+check $? "a request gets its answer while 16 idle ones hold the slots"
+
+echo "   a reload that drops web_password= closes the LAN page"
+printf '[server]\nweb_listen=0.0.0.0:5801\n' > "$BUILD_CTX/lan-nopw.conf"
+docker cp "$BUILD_CTX/lan-nopw.conf" "$P-lan:/etc/camex/lan.conf" >/dev/null
+docker exec "$P-lan" kill -HUP 1
+sleep 2
+! lan -o /dev/null && docker logs "$P-lan" 2>&1 | grep -q "web_password= is gone"
+check $? "the page no longer answers, and the log says why"
 
 echo "== 8. what it refuses"
 raw() {     # raw <request>: the status line camex answers on 127.0.0.1:5801
