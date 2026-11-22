@@ -38,10 +38,12 @@ RUN set -eu; \
     if [ -z "$want" ]; then \
         [ "$CAMEX_RELEASE" = https://github.com/OpenIPC/camex/releases/latest/download ] || \
             { echo "CAMEX_RELEASE=$CAMEX_RELEASE needs CAMEX_SHA256 (the file's SHA-256)" >&2; exit 1; }; \
-        # The release's own record of the file: its "digest" after its name
-        want=$(wget -q -O - "$CAMEX_API" | \
-            awk -v n="\"$F\"" '$0 ~ "\"name\": *" n { f = 1 } \
-                f && /"digest": *"sha256:/ { sub(/.*"sha256:/, ""); sub(/".*/, ""); print; exit }'); \
+        # The release's own record of the file: one asset to a line (each
+        # ends with its browser_download_url), then the digest of the one
+        # whose name it is, pretty-printed JSON or not
+        want=$(wget -q -O - "$CAMEX_API" | tr -d '\n' | \
+            sed 's/"browser_download_url"/\n/g' | grep "\"name\": *\"$F\"" | \
+            sed -n 's/.*"digest": *"sha256:\([0-9a-f]\{64\}\)".*/\1/p' | head -n 1); \
         [ -n "$want" ] || { echo "no SHA-256 for $F in $CAMEX_API" >&2; exit 1; }; \
     fi; \
     got=$(sha256sum /tmp/camex | cut -d' ' -f1); \

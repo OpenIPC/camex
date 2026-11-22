@@ -68,11 +68,14 @@ if [ ! -f "$CONF" ]; then
     [ -n "$P" ] || { echo "camex: CAMEX_POOL=$POOL is not <address>/<8..30>" >&2; exit 1; }
     POOL=${P% *}
     FIRST=${P#* }
-    case "${CAMEX_DOMAIN:-}" in
-        ""|*[!A-Za-z0-9.-]*|.*|*.|*..*)
-            [ -z "${CAMEX_DOMAIN:-}" ] ||
-                { echo "camex: CAMEX_DOMAIN=$CAMEX_DOMAIN is not a domain" >&2; exit 1; } ;;
-    esac
+    # A host name as camex takes domain=: labels of letters, digits and
+    # hyphens, none at a label's start or end, 253 characters at most
+    if [ -n "${CAMEX_DOMAIN:-}" ] &&
+       { [ ${#CAMEX_DOMAIN} -gt 253 ] ||
+         ! echo "$CAMEX_DOMAIN" | grep -qE '^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$'; }; then
+        echo "camex: CAMEX_DOMAIN=$CAMEX_DOMAIN is not a domain" >&2
+        exit 1
+    fi
     {
         echo "# camex server settings, made by the container's first start; see"
         echo "# https://github.com/OpenIPC/camex/blob/master/examples/camex.conf"
