@@ -211,9 +211,10 @@ check $? "nothing changes, the psk stays, camex keeps running (pid $p1)"
 # A camex.conf of 6.0.0 and before: the network without label=, a word on it
 x 'cp /etc/camex/camex.conf /tmp/with-label.conf && sed -i "/^label = main$/d" /etc/camex/camex.conf'
 out=$(run)
-echo "$out" | grep -q "1 \[network\] block(s) of /etc/camex/camex.conf without label=" &&
+rc=$?
+[ $rc -eq 0 ] && echo "$out" | grep -q "1 \[network\] block(s) of /etc/camex/camex.conf without label=" &&
     ! x 'grep -q "^label" /etc/camex/camex.conf'
-check $? "a kept camex.conf without label= is left as it is, with a word on it"
+check $? "a kept camex.conf without label= is left as it is, with a word on it (exit $rc)"
 x 'cat /tmp/with-label.conf > /etc/camex/camex.conf && systemctl reload camex'
 
 echo "== 4. --domain $DOMAIN"
