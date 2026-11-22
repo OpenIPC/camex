@@ -241,6 +241,7 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
         { "hash-password", no_argument, NULL, 1011 },
 #endif
         { "create-network", no_argument, NULL, 1012 },
+        { "network-selector", required_argument, NULL, 1013 },
         { NULL, 0, NULL, 0 }
     };
     int opt;
@@ -426,6 +427,16 @@ int parse_arguments(int argc, char **argv, camex_config_t *config)
             break;
         case 1012:
             config->create_network = 1U;
+            break;
+        case 1013:
+            if (!netw_selector_valid(optarg, strlen(optarg))) {
+                log_message(LOG_ERR, "Invalid --network-selector: 1 to %u "
+                            "of A-Z a-z 0-9 . _ -",
+                            (unsigned)CAMEX_NET_SELECTOR_MAX);
+                return -1;
+            }
+            snprintf(config->network_selector,
+                     sizeof(config->network_selector), "%s", optarg);
             break;
         case 'Y':
             if (copy_option(config->server_pubkey,
@@ -808,6 +819,10 @@ void print_usage(const char *progname)
            " (the name is its key;\n"
            "                          implies --auto; with --psk: the"
            " client's own key too)\n");
+    printf("      --network-selector <word>  With --network: the network's"
+           " public selector=, when\n"
+           "                          the server's block has one (one"
+           " CPace answer, #201)\n");
     printf("      --create-network    With --network: a server that does"
            " not know the network\n"
            "                          and takes new ones creates it (its key"

@@ -2189,8 +2189,9 @@ static int server_handle_pake1(const uint8_t *buf, size_t len,
     server_source_t src;
     size_t i;
     size_t o;
+    char sel[CAMEX_NET_SELECTOR_MAX + 1U];
+    int sel_bad = 0;
 
-    (void)len;
     if (!ctx->has_server_key) {
         return -1;
     }
@@ -2272,11 +2273,27 @@ static int server_handle_pake1(const uint8_t *buf, size_t len,
     out[5 + PAKE_SID_LEN] = (uint8_t)(PAKE_FLAG_NAME |
         (server_db.globals.allow_new_networks ? PAKE_FLAG_OPEN : 0U));
     o = 5U + PAKE_SID_LEN + 2U;
+    /* A selector (#201): only its network answers, and a network with one
+     * answers only to it; an unknown selector gets one answer of random
+     * bytes, so the reply does not tell which selectors exist */
+    {
+        size_t sl = len > V2_PAKE1_SELECTOR ? buf[V2_PAKE1_SELECTOR] : 0U;
+
+        if (sl > 0U && (len < V2_PAKE1_SELECTOR + 1U + sl ||
+                        !netw_selector_valid((const char *)buf +
+                                             V2_PAKE1_SELECTOR + 1U, sl))) {
+            sl = 0U;
+            sel_bad = 1;
+        }
+        memcpy(sel, buf + V2_PAKE1_SELECTOR + 1U, sl);
+        sel[sl] = '\0';
+    }
     for (i = 0U; netw_table != NULL && i < CAMEX_NET_MAX &&
-                 ps->count < PAKE_MAX_NETS; ++i) {
+                 ps->count < PAKE_MAX_NETS && !sel_bad; ++i) {
         uint8_t k[32];
 
-        if (!netw_table[i].active) {
+        if (!netw_table[i].active ||
+            strcmp(netw_table[i].selector, sel) != 0) {
             continue;
         }
         if (server_pake_k((int)i, ps->sid, ps->ya, out + o, k) != 0) {
@@ -2290,6 +2307,14 @@ static int server_handle_pake1(const uint8_t *buf, size_t len,
         o += PAKE_ENTRY_LEN;
     }
     out[5 + PAKE_SID_LEN + 1U] = ps->count;
+    if ((sel[0] != '\0' || sel_bad) && ps->count == 0U) {
+        /* An answer no key opens; PAKE3 finds no slot for it */
+        if (get_random_bytes(out + o, PAKE_ENTRY_LEN) != 0) {
+            return -1;
+        }
+        o += PAKE_ENTRY_LEN;
+        out[5 + PAKE_SID_LEN + 1U] = 1U;
+    }
     return server_pake_send(fd, from, out, o);
 }
 

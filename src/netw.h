@@ -30,6 +30,7 @@
 #define CAMEX_NET_ID_LEN     32U
 #define CAMEX_NET_NAME_MAX   63U    /* bytes of a network name */
 #define CAMEX_NET_LABEL_MAX  31U    /* label= */
+#define CAMEX_NET_SELECTOR_MAX 31U  /* selector= (#201) */
 #define CAMEX_NET_MAX        256U   /* networks of a server, all kinds */
 #define CAMEX_NET_PROBES     64U    /* addresses tried around the hash */
 #define CAMEX_NET_ID_B64_LEN 44U    /* the ID in base64, in REGISTER */
@@ -43,6 +44,7 @@
 typedef struct {
     uint8_t id[CAMEX_NET_ID_LEN];
     char label[CAMEX_NET_LABEL_MAX + 1U];   /* label=, "" = none */
+    char selector[CAMEX_NET_SELECTOR_MAX + 1U];  /* selector=, "" = none */
     uint32_t pool_net;      /* pool=, host order */
     uint8_t pool_prefix;
     uint8_t pool_set;
@@ -63,6 +65,9 @@ typedef struct {
 typedef struct {
     uint8_t id[CAMEX_NET_ID_LEN];
     char label[CAMEX_NET_LABEL_MAX + 1U];
+    /* selector= (#201): public; a PAKE1 that names it is answered for this
+     * network only, and only such a PAKE1 is; "" = none */
+    char selector[CAMEX_NET_SELECTOR_MAX + 1U];
     uint32_t pool_net;      /* host order */
     uint8_t pool_prefix;
     uint8_t active;
@@ -91,6 +96,9 @@ int netw_alloc(void);
 
 /* ID of a network name: BLAKE2b-256("camex network v1" || name) */
 void netw_id_from_name(const char *name, uint8_t id[CAMEX_NET_ID_LEN]);
+
+/* A selector is 1..CAMEX_NET_SELECTOR_MAX of A-Z a-z 0-9 . _ - (#201) */
+int netw_selector_valid(const char *s, size_t len);
 
 /* A name is 1..CAMEX_NET_NAME_MAX bytes without control characters */
 int netw_name_valid(const char *name);

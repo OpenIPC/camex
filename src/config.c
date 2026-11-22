@@ -540,7 +540,20 @@ static camex_net_conf_t *config_db_add_network(const char *name)
  * secret: the messages give the label */
 static int config_db_check_names(void)
 {
-    size_t i;
+    size_t i, j;
+
+    /* A selector names one network (#201) */
+    for (i = 0U; i < server_db.net_count; ++i) {
+        for (j = i + 1U; j < server_db.net_count; ++j) {
+            if (server_db.nets[i].selector[0] != '\0' &&
+                strcmp(server_db.nets[i].selector,
+                       server_db.nets[j].selector) == 0) {
+                log_message(LOG_ERR, "selector=%s is given to two networks",
+                            server_db.nets[i].selector);
+                return -1;
+            }
+        }
+    }
 
     for (i = 0U; i < server_db.net_count; ++i) {
         const camex_net_conf_t *n = &server_db.nets[i];
@@ -979,6 +992,16 @@ static int config_db_parse_file(const char *path, char *line,
                     rc = -1;
                 } else {
                     network->weak_name = (uint8_t)yn;
+                }
+            } else if (strcmp(content, "selector") == 0) {
+                if (!netw_selector_valid(val, strlen(val))) {
+                    log_message(LOG_ERR, "Invalid selector=: 1 to %u of "
+                                "A-Z a-z 0-9 . _ -",
+                                (unsigned)CAMEX_NET_SELECTOR_MAX);
+                    rc = -1;
+                } else {
+                    snprintf(network->selector, sizeof(network->selector),
+                             "%s", val);
                 }
             } else if (strcmp(content, "label") == 0) {
                 if (strlen(val) > CAMEX_NET_LABEL_MAX ||
