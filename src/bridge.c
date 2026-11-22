@@ -55,6 +55,7 @@ typedef struct {
 
 #define BRIDGE_REMOTES 256U
 #define BRIDGE_REMOTE_AGE 600      /* seconds a remote MAC stays known */
+#define BRIDGE_CLAIM_RECHECK 10    /* a refused address claim, asked again */
 #define BRIDGE_PROBE_EVERY 5
 #define BRIDGE_PEER_HOLD 15        /* a peer bridge counts this long */
 #define BRIDGE_FRAME_MAX 65600U    /* a TSO/GRO frame and its vnet header */
@@ -63,6 +64,9 @@ typedef struct {
     uint8_t mac[6];
     uint32_t ip_be;          /* its IPv4 address, 0 = not seen yet */
     uint32_t neigh_ip_be;    /* the neighbour entry made for it */
+    uint32_t refused_ip_be;  /* a LAN device's address it claimed (#206) */
+    time_t refused_at;       /* when; asked again BRIDGE_CLAIM_RECHECK on */
+    uint8_t probed;          /* a stale entry for it was probed by ARP */
     time_t seen;
     uint8_t used;
 } bridge_remote_t;
@@ -412,6 +416,159 @@ static void neigh_set(uint32_t ip_be, const uint8_t mac[6], int add)
                  (struct sockaddr *)&to, sizeof(to));
 }
 
+/* The host's neighbour entry for ip_be on the interface: 1 and its state
+ * and MAC when there is one with a MAC, 0 when the whole table was read
+ * and there is none, -1 when it could not be read (#212).
+ * A dump, filtered here: RTM_GETNEIGH of one address needs Linux 4.20. */
+static int neigh_get(uint32_t ip_be, uint16_t *state, uint8_t mac[6])
+{
+    struct {
+        struct nlmsghdr nh;
+        struct ndmsg nd;
+    } req;
+    struct sockaddr_nl to;
+    struct timeval tv;
+    static uint8_t buf[16384];
+    int fd, found = 0, done = 0, failed = 0, rounds = 0;
+
+    fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+    if (fd < 0) {
+        return -1;
+    }
+    tv.tv_sec = 0;
+    tv.tv_usec = 200000;
+    (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    memset(&req, 0, sizeof(req));
+    req.nh.nlmsg_len = NLMSG_LENGTH(sizeof(struct ndmsg));
+    req.nh.nlmsg_type = RTM_GETNEIGH;
+    req.nh.nlmsg_flags = (uint16_t)(NLM_F_REQUEST | NLM_F_DUMP);
+    req.nh.nlmsg_seq = ++br.nl_seq;
+    req.nd.ndm_family = AF_INET;
+    req.nd.ndm_ifindex = br.ifindex;
+    memset(&to, 0, sizeof(to));
+    to.nl_family = AF_NETLINK;
+    if (sendto(fd, &req, req.nh.nlmsg_len, 0, (struct sockaddr *)&to,
+               sizeof(to)) < 0) {
+        close(fd);
+        return -1;
+    }
+    while (!done && rounds++ < 64) {
+        ssize_t n = recv(fd, buf, sizeof(buf), 0);
+        struct nlmsghdr *nh;
+        size_t left;
+
+        if (n <= 0) {
+            break;
+        }
+        left = (size_t)n;
+        for (nh = (struct nlmsghdr *)buf; NLMSG_OK(nh, left);
+             nh = NLMSG_NEXT(nh, left)) {
+            struct ndmsg *nd;
+            struct rtattr *ra;
+            size_t alen;
+            const uint8_t *dst = NULL, *ll = NULL;
+
+            if (nh->nlmsg_seq != req.nh.nlmsg_seq) {
+                continue;
+            }
+            if (nh->nlmsg_type == NLMSG_DONE) {
+                done = 1;
+                break;
+            }
+            if (nh->nlmsg_type == NLMSG_ERROR) {
+                done = failed = 1;
+                break;
+            }
+            if (nh->nlmsg_type != RTM_NEWNEIGH ||
+                nh->nlmsg_len < NLMSG_LENGTH(sizeof(*nd))) {
+                continue;
+            }
+            nd = (struct ndmsg *)NLMSG_DATA(nh);
+            if (nd->ndm_family != AF_INET || nd->ndm_ifindex != br.ifindex) {
+                continue;
+            }
+            alen = nh->nlmsg_len - NLMSG_LENGTH(sizeof(*nd));
+            for (ra = (struct rtattr *)((char *)nd + NLMSG_ALIGN(sizeof(*nd)));
+                 RTA_OK(ra, alen); ra = RTA_NEXT(ra, alen)) {
+                if (ra->rta_type == NDA_DST && RTA_PAYLOAD(ra) == 4U) {
+                    dst = (const uint8_t *)RTA_DATA(ra);
+                } else if (ra->rta_type == NDA_LLADDR &&
+                           RTA_PAYLOAD(ra) == 6U) {
+                    ll = (const uint8_t *)RTA_DATA(ra);
+                }
+            }
+            if (dst != NULL && ll != NULL && memcmp(dst, &ip_be, 4) == 0) {
+                *state = nd->ndm_state;
+                memcpy(mac, ll, 6);
+                found = 1;
+            }
+        }
+    }
+    close(fd);
+    return failed || !done ? -1 : found;
+}
+
+/* May a remote's claim of ip_be become the host's neighbour entry (#206)?
+ * 1 yes, 0 no (a LAN device's), -1 not yet (a stale entry to probe first),
+ * -2 not now (the host's table could not be read: asked again later).
+ * Not when the host has an entry for it with another MAC that it learned
+ * itself from the LAN, or that someone else made: that address is a LAN
+ * device's, and the tunnel's claim would take its traffic. One of camex's
+ * own (a remote's MAC) or one that never resolved may be replaced. */
+static int neigh_may_take(uint32_t ip_be, const uint8_t mac[6], int probed)
+{
+    uint16_t state = 0U;
+    uint8_t had[6];
+    size_t i;
+    int got = neigh_get(ip_be, &state, had);
+
+    if (got < 0) {
+        return -2;
+    }
+    if (got == 0 || memcmp(had, mac, 6) == 0) {
+        return 1;
+    }
+    for (i = 0U; i < BRIDGE_REMOTES; ++i) {
+        if (br.remotes[i].used && br.remotes[i].neigh_ip_be == ip_be &&
+            memcmp(br.remotes[i].mac, had, 6) == 0) {
+            return 1;
+        }
+    }
+    if ((state & (NUD_REACHABLE | NUD_DELAY | NUD_PROBE | NUD_PERMANENT |
+                  NUD_NOARP)) != 0U) {
+        return 0;
+    }
+    /* Stale: maybe a device gone (its address handed out again by DHCP),
+     * maybe one just quiet. Asked once by ARP (claim_probe); still stale at
+     * the next check, nobody answered and the claim stands. */
+    return (state & NUD_STALE) == 0U || probed ? 1 : -1;
+}
+
+static int wire_send(const uint8_t *frame, size_t len);
+
+/* An ARP request from the host for ip_be on the LAN: a device that has
+ * the address answers the host, whose entry then turns reachable.
+ * 0 when it went out. */
+static int claim_probe(uint32_t ip_be)
+{
+    uint8_t f[60];
+
+    memset(f, 0, sizeof(f));
+    memcpy(f, mac_bcast, 6);
+    memcpy(f + 6, br.host_mac, 6);
+    f[12] = 0x08U;
+    f[13] = 0x06U;
+    f[15] = 1U;                      /* Ethernet */
+    f[16] = 0x08U;                   /* IPv4 */
+    f[18] = 6U;
+    f[19] = 4U;
+    f[21] = 1U;                      /* request */
+    memcpy(f + 22, br.host_mac, 6);
+    memcpy(f + 28, &br.host_ip_be, 4);
+    memcpy(f + 38, &ip_be, 4);
+    return wire_send(f, sizeof(f)) < 0 ? -1 : 0;
+}
+
 /* Is ip_be on the host's LAN (its interface's subnet)? */
 static int on_lan(uint32_t ip_be)
 {
@@ -460,7 +617,33 @@ static bridge_remote_t *remote_learn(const uint8_t *frame, size_t len)
     } else if (l3 != 0U && type == 0x0806U && len >= l3 + 28U) {
         memcpy(&ip, frame + l3 + 14, 4);
     }
-    if (ip != 0U && on_lan(ip)) {
+    if (ip != 0U && on_lan(ip) && r->neigh_ip_be != ip &&
+        (r->refused_ip_be != ip ||
+         difftime(r->seen, r->refused_at) >= (double)BRIDGE_CLAIM_RECHECK)) {
+        int may = neigh_may_take(ip, r->mac,
+                                 r->refused_ip_be == ip && r->probed);
+
+        if (may == 1) {
+            r->refused_ip_be = 0U;
+            r->probed = 0U;
+        } else {
+            char a[INET_ADDRSTRLEN];
+
+            if (r->refused_ip_be != ip && may != -2) {   /* once */
+                (void)inet_ntop(AF_INET, &ip, a, sizeof(a));
+                log_message(LOG_WARNING, "Bridge %s: a tunnel device "
+                            "%02x:%02x:%02x:%02x:%02x:%02x claims %s, a LAN "
+                            "device's address: ignored", br.ifname,
+                            r->mac[0], r->mac[1], r->mac[2], r->mac[3],
+                            r->mac[4], r->mac[5], a);
+            }
+            r->refused_ip_be = ip;
+            r->refused_at = r->seen;
+            /* Probed only when the request went out (#212) */
+            r->probed = may == -1 && claim_probe(ip) == 0 ? 1U : 0U;
+        }
+    }
+    if (ip != 0U && on_lan(ip) && r->refused_ip_be != ip) {
         r->ip_be = ip;
         if (r->neigh_ip_be != ip) {
             if (r->neigh_ip_be != 0U) {

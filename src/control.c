@@ -353,7 +353,8 @@ static void control_bad_command(control_conn_t *c, size_t *len)
     static const char err[] = "ERROR unknown command (STATUS, "
                               "STATUS JSON, STATUS TOP, CLIENTS, CLIENTS WEB, "
                               "CLIENTS NAMES, "
-                              "CLIENTS INDEX, CLIENTS INDEX VIA, DOMAIN, "
+                              "CLIENTS INDEX, CLIENTS INDEX VIA, DEVICE PORT, "
+                              "DOMAIN, "
                               "WAIT <hash|-> <seconds>)\n";
 
     c->out = malloc(sizeof(err));
