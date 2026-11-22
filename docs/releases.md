@@ -43,7 +43,11 @@ replaced by CI after every push to `master`, once all build and test jobs pass.
 1. **In a PR**: bump `CAMEX_VERSION` and add the version's section to `CHANGELOG.md`.
 2. **Merge into `master`**. CI deletes the old `latest` release and its tag and creates
    it again on the built commit: title `Camex X.Y.Z`, the files from
-   [Permanent links](../README.md#permanent-links).
+   [Permanent links](../README.md#permanent-links). The Linux files and their build
+   profiles ([build.md](build.md#profiles-and-flags)):
+   - `camex-<arch>` (aarch64, arm, mipsel, x86_64): `full`, everything;
+   - `camex-<arch>-full`: the same file under its name of 5.0.0 and before, until 6.0.0;
+   - `camex-arm-client`, `camex-mipsel-client`: `client`, without the server and the start page.
 3. **Telegram**: when the version differs from the title of the previous `latest`, CI
    posts the APK to the OpenIPC Telegram channel. A push without a version bump only
    replaces the files.

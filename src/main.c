@@ -821,7 +821,10 @@ void print_usage(const char *progname)
            " --port <port> [options]\n", progname);
     printf("  %s --mode client --auto --server-host <addr>"
            " --port <port> [options]\n", progname);
-    printf("  %s --mode server --port <port> [options]\n\n", progname);
+#ifndef CAMEX_NO_SERVER
+    printf("  %s --mode server --port <port> [options]\n", progname);
+#endif
+    printf("\n");
 
     printf("Mode selection:\n");
     printf("  -M, --mode <mode>    "
@@ -830,8 +833,13 @@ void print_usage(const char *progname)
     printf("Modes:\n");
     printf("  client    Creates a TUN device and connects outbound"
            " to the server\n");
+#ifndef CAMEX_NO_SERVER
     printf("  server    Listens on UDP/TCP and relays packets"
-           " between clients\n\n");
+           " between clients\n");
+#else
+    printf("  server    Not in this build (CAMEX_SERVER=0): a client only\n");
+#endif
+    printf("\n");
 
     printf("Client options:\n");
     printf("  -a, --auto              "
@@ -941,8 +949,10 @@ void print_usage(const char *progname)
            " print its\n"
            "                       web_password= line for [server] and exit\n");
 #endif
+#ifndef CAMEX_NO_SERVER
     printf("      --server-key-file <path> Server: file with its private key\n"
            "                       (or server_key= in [server])\n");
+#endif
     printf("      --server-pubkey <key> Client: the server's public key"
            " (without it the key\n"
            "                       the server gives on first contact is"
@@ -962,6 +972,7 @@ void print_usage(const char *progname)
     printf("  -h, --help           Show this help message and exit\n\n");
 
     printf("Examples:\n");
+#ifndef CAMEX_NO_SERVER
     printf("  # Server key pair (once): keep server_key secret, give\n"
            "  # public_key to the clients\n");
     printf("  (umask 077; %s --genkey > /etc/camex/server.key)\n\n", progname);
@@ -975,6 +986,7 @@ void print_usage(const char *progname)
            " --config /etc/camex/camex.conf"
            " --server-key-file /etc/camex/server.key --psk secret\n\n",
            progname);
+#endif
     printf("  # Client joining a network: the server, the network's name;"
            " the ID is the MAC\n");
     printf("  %s --server-host cloud.openipc.org --network my-cams\n\n",

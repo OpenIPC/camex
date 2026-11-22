@@ -37,6 +37,13 @@ sync script, no reloads of nginx.
   `nginx-index`; the old nginx file is `examples/nginx-camex-map.conf`.
 - `CAMEX_WEB` (#204): in the full profile, not in the client one; `features:` of `--version` says
   `web`. ~12 KB on ARM.
+- From the review of 5.1.0 ([#209](https://github.com/OpenIPC/camex/pull/209)): a client build's
+  `--help` names no server keys, usage or examples; `make help` lists the profiles; `noserver.c`
+  stops a build that takes it without `CAMEX_NO_SERVER` (an app with its own CMake and
+  `camex-sources.cmake` but not `CAMEX_DEFINITIONS`), and `CAMEX_NO_SERVER` implies
+  `CAMEX_NO_WEB`; CI builds the client profile, the server without web and the core with
+  warnings as errors; `docs/build.md` has Keenetic, `docs/releases.md` which file is which
+  profile; the e2e scripts take `CAMEX_BINARY` as the full camex only when it has the server.
 - Tests: `docker/test-e2e-web.sh` (nginx with `auth_request`, two servers on one host, the LAN
   page and its password, refused requests); `test-e2e-install.sh` installs the new way and keeps
   a server of 5.1.0; unit tests of `/resolve`, the page's links and the password hash.

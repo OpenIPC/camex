@@ -52,7 +52,7 @@ check() {   # check <condition-exit-code> <message>
 [ -x "$CAMEX_BINARY" ] || { echo "camex binary not found: $CAMEX_BINARY"; exit 1; }
 # Since #204 the default build is the full one: --version says what it has
 if [ -z "$CAMEX_FULL_BINARY" ] &&
-   "$CAMEX_BINARY" --version 2>/dev/null | grep -q '^features:.* l2'; then
+   "$CAMEX_BINARY" --version 2>/dev/null | grep -q '^features:.* server.* l2'; then
     CAMEX_FULL_BINARY=$CAMEX_BINARY
 fi
 if [ -z "$CAMEX_FULL_BINARY" ]; then

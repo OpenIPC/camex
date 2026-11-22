@@ -65,9 +65,19 @@ A firmware (OpenIPC, OpenWrt, Keenetic) that runs camex as a client builds the
 client profile with its own toolchain, and turns off what it does not use:
 
 ```sh
+# OpenIPC (arm)
 make CROSS_COMPILE=arm-openipc-linux-musleabi- LDLIBS=-static PROFILE=client
+# OpenWrt (mipsel), with its SDK's toolchain
 make CROSS_COMPILE=mipsel-openwrt-linux-musl- PROFILE=client CAMEX_L2=0
+# Keenetic: Entware's toolchain (mipsel-3.4, aarch64-3.10), as an Entware package
+# (glibc, which Entware puts on the router: not static, a static glibc binary
+# cannot resolve the server's name)
+make CROSS_COMPILE=mipsel-openwrt-linux-gnu- PROFILE=client
 ```
+
+A static binary needs no libc on the device. Without a toolchain at hand,
+`camex-arm-client` and `camex-mipsel-client` of the release are the client
+profile, static (musl): `camex-mipsel-client` runs on Keenetic's MIPS models.
 
 The Android library builds the client profile without L2 (VpnService has no
 TAP) and, for now, without mesh (`android/camex-sources.cmake`).
