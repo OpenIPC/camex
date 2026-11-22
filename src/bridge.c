@@ -417,7 +417,8 @@ static void neigh_set(uint32_t ip_be, const uint8_t mac[6], int add)
 }
 
 /* The host's neighbour entry for ip_be on the interface: 1 and its state
- * and MAC when there is one with a MAC, 0 when none (or it cannot be read).
+ * and MAC when there is one with a MAC, 0 when the whole table was read
+ * and there is none, -1 when it could not be read (#212).
  * A dump, filtered here: RTM_GETNEIGH of one address needs Linux 4.20. */
 static int neigh_get(uint32_t ip_be, uint16_t *state, uint8_t mac[6])
 {
@@ -428,11 +429,11 @@ static int neigh_get(uint32_t ip_be, uint16_t *state, uint8_t mac[6])
     struct sockaddr_nl to;
     struct timeval tv;
     static uint8_t buf[16384];
-    int fd, found = 0, done = 0, rounds = 0;
+    int fd, found = 0, done = 0, failed = 0, rounds = 0;
 
     fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
     if (fd < 0) {
-        return 0;
+        return -1;
     }
     tv.tv_sec = 0;
     tv.tv_usec = 200000;
@@ -449,7 +450,7 @@ static int neigh_get(uint32_t ip_be, uint16_t *state, uint8_t mac[6])
     if (sendto(fd, &req, req.nh.nlmsg_len, 0, (struct sockaddr *)&to,
                sizeof(to)) < 0) {
         close(fd);
-        return 0;
+        return -1;
     }
     while (!done && rounds++ < 64) {
         ssize_t n = recv(fd, buf, sizeof(buf), 0);
@@ -467,8 +468,15 @@ static int neigh_get(uint32_t ip_be, uint16_t *state, uint8_t mac[6])
             size_t alen;
             const uint8_t *dst = NULL, *ll = NULL;
 
-            if (nh->nlmsg_type == NLMSG_DONE || nh->nlmsg_type == NLMSG_ERROR) {
+            if (nh->nlmsg_seq != req.nh.nlmsg_seq) {
+                continue;
+            }
+            if (nh->nlmsg_type == NLMSG_DONE) {
                 done = 1;
+                break;
+            }
+            if (nh->nlmsg_type == NLMSG_ERROR) {
+                done = failed = 1;
                 break;
             }
             if (nh->nlmsg_type != RTM_NEWNEIGH ||
@@ -497,10 +505,12 @@ static int neigh_get(uint32_t ip_be, uint16_t *state, uint8_t mac[6])
         }
     }
     close(fd);
-    return found;
+    return failed || !done ? -1 : found;
 }
 
 /* May a remote's claim of ip_be become the host's neighbour entry (#206)?
+ * 1 yes, 0 no (a LAN device's), -1 not yet (a stale entry to probe first),
+ * -2 not now (the host's table could not be read: asked again later).
  * Not when the host has an entry for it with another MAC that it learned
  * itself from the LAN, or that someone else made: that address is a LAN
  * device's, and the tunnel's claim would take its traffic. One of camex's
@@ -510,8 +520,12 @@ static int neigh_may_take(uint32_t ip_be, const uint8_t mac[6], int probed)
     uint16_t state = 0U;
     uint8_t had[6];
     size_t i;
+    int got = neigh_get(ip_be, &state, had);
 
-    if (!neigh_get(ip_be, &state, had) || memcmp(had, mac, 6) == 0) {
+    if (got < 0) {
+        return -2;
+    }
+    if (got == 0 || memcmp(had, mac, 6) == 0) {
         return 1;
     }
     for (i = 0U; i < BRIDGE_REMOTES; ++i) {
@@ -533,8 +547,9 @@ static int neigh_may_take(uint32_t ip_be, const uint8_t mac[6], int probed)
 static int wire_send(const uint8_t *frame, size_t len);
 
 /* An ARP request from the host for ip_be on the LAN: a device that has
- * the address answers the host, whose entry then turns reachable */
-static void claim_probe(uint32_t ip_be)
+ * the address answers the host, whose entry then turns reachable.
+ * 0 when it went out. */
+static int claim_probe(uint32_t ip_be)
 {
     uint8_t f[60];
 
@@ -551,7 +566,7 @@ static void claim_probe(uint32_t ip_be)
     memcpy(f + 22, br.host_mac, 6);
     memcpy(f + 28, &br.host_ip_be, 4);
     memcpy(f + 38, &ip_be, 4);
-    (void)wire_send(f, sizeof(f));
+    return wire_send(f, sizeof(f)) < 0 ? -1 : 0;
 }
 
 /* Is ip_be on the host's LAN (its interface's subnet)? */
@@ -614,7 +629,7 @@ static bridge_remote_t *remote_learn(const uint8_t *frame, size_t len)
         } else {
             char a[INET_ADDRSTRLEN];
 
-            if (r->refused_ip_be != ip) {   /* logged once per address */
+            if (r->refused_ip_be != ip && may != -2) {   /* once */
                 (void)inet_ntop(AF_INET, &ip, a, sizeof(a));
                 log_message(LOG_WARNING, "Bridge %s: a tunnel device "
                             "%02x:%02x:%02x:%02x:%02x:%02x claims %s, a LAN "
@@ -624,10 +639,8 @@ static bridge_remote_t *remote_learn(const uint8_t *frame, size_t len)
             }
             r->refused_ip_be = ip;
             r->refused_at = r->seen;
-            r->probed = may == -1 ? 1U : 0U;
-            if (may == -1) {
-                claim_probe(ip);
-            }
+            /* Probed only when the request went out (#212) */
+            r->probed = may == -1 && claim_probe(ip) == 0 ? 1U : 0U;
         }
     }
     if (ip != 0U && on_lan(ip) && r->refused_ip_be != ip) {
