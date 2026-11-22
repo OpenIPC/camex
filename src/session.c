@@ -77,6 +77,8 @@ uint8_t v2_packet_type(const uint8_t *pkt, size_t len)
                    ? V2_TYPE_PAKE2 : 0U;
     case V2_TYPE_PAKE3:
         return len == V2_PAKE3_LEN ? V2_TYPE_PAKE3 : 0U;
+    case V2_TYPE_COOKIE:
+        return len == V2_COOKIE_LEN ? V2_TYPE_COOKIE : 0U;
     case V2_TYPE_ENDPOINT:
         return len >= V2_OVERHEAD ? V2_TYPE_ENDPOINT : 0U;
     case V2_TYPE_P2P:

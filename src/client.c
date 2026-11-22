@@ -322,6 +322,7 @@ static struct {
     uint8_t sent;          /* PAKE1 out, no answer yet */
     unsigned int unanswered;
     uint8_t fallback;      /* the old way for this connection */
+    uint8_t cookie[16];    /* the server's last cookie (#207), or zeros */
     uint8_t marked;        /* the known servers file says "pake" */
 } cpace;
 
@@ -413,9 +414,34 @@ static int client_send_pake1(void)
     pkt[4] = V2_TYPE_PAKE1;
     memcpy(pkt + 5, cpace.sid, PAKE_SID_LEN);
     memcpy(pkt + 5 + PAKE_SID_LEN, cpace.ya, 32U);
+    memcpy(pkt + V2_PAKE1_COOKIE, cpace.cookie, sizeof(cpace.cookie));
     cpace.sent = 1U;
     client_state.hs_pending = 1U;
     client_state.hs_sent = g_now;
+    return net_client_send(pkt, sizeof(pkt)) < 0 ? -1 : 0;
+}
+
+/* A server under load wants its cookie back (#207): the same PAKE1 again
+ * with it. Its sid must be the one asked, so a forged COOKIE does no more
+ * than delay a retry. */
+static int client_handle_cookie(const uint8_t *buf, size_t len)
+{
+    uint8_t pkt[V2_PAKE1_LEN];
+
+    if (!current_config.pake || !cpace.sent || current_config.pake_ok ||
+        len != V2_COOKIE_LEN ||
+        memcmp(buf + 5, cpace.sid, PAKE_SID_LEN) != 0) {
+        return -1;
+    }
+    memcpy(cpace.cookie, buf + 5 + PAKE_SID_LEN, sizeof(cpace.cookie));
+    memset(pkt, 0, sizeof(pkt));
+    memcpy(pkt, CAMEX_MAGIC, 4);
+    pkt[4] = V2_TYPE_PAKE1;
+    memcpy(pkt + 5, cpace.sid, PAKE_SID_LEN);
+    memcpy(pkt + 5 + PAKE_SID_LEN, cpace.ya, 32U);
+    memcpy(pkt + V2_PAKE1_COOKIE, cpace.cookie, sizeof(cpace.cookie));
+    log_message(LOG_INFO, "Server %s:%d is under load: CPace again with its "
+                "cookie", current_config.server_host, current_config.port);
     return net_client_send(pkt, sizeof(pkt)) < 0 ? -1 : 0;
 }
 
@@ -487,6 +513,16 @@ static int client_handle_pake2(const uint8_t *buf, size_t len)
         }
     }
     crypto_wipe(k, sizeof(k));
+    if ((flags & PAKE_FLAG_OPEN) != 0U && !current_config.pinned &&
+        !current_config.create_network && !cpace.marked) {
+        /* Creating a network is asked for, never assumed: a fake server
+         * would say just this to get the network's ID (#199) */
+        log_message(LOG_ERR, "Server %s:%d does not know this network; it "
+                    "takes new ones, so --create-network would create it "
+                    "there (or it is not the real server)",
+                    current_config.server_host, current_config.port);
+        return -1;
+    }
     if ((flags & PAKE_FLAG_OPEN) != 0U) {
         if (client_pake_fall_back("does not know the network but takes new "
                                   "ones") == 0) {
@@ -516,8 +552,20 @@ static int client_send_init(void)
         }
         if (cpace.sent && ++cpace.unanswered >= 3U) {
             cpace.sent = 0U;
-            if (client_pake_fall_back("does not answer CPace (an older "
-                                      "camex?)") != 0) {
+            /* Every camex that knows --network answers CPace: a server
+             * that does not is down, or not the real one. Only a pinned
+             * key may still get the ID; the others keep asking (#199). */
+            if (!current_config.pinned) {
+                if (cpace.unanswered == 3U) {
+                    log_message(LOG_WARNING, "Server %s:%d does not answer "
+                                "CPace (down, or not a camex 5 server?): "
+                                "trying again",
+                                current_config.server_host,
+                                current_config.port);
+                }
+                return client_send_pake1();
+            }
+            if (client_pake_fall_back("does not answer CPace") != 0) {
                 return 0;
             }
         } else {
@@ -718,6 +766,8 @@ int client_handle_net_packet(const uint8_t *buffer, size_t len)
         return client_handle_key(buffer, len);
     case V2_TYPE_PAKE2:
         return client_handle_pake2(buffer, len);
+    case V2_TYPE_COOKIE:
+        return client_handle_cookie(buffer, len);
     case V2_TYPE_RESP:
         return client_handle_resp(buffer, len);
     case V2_TYPE_DATA:

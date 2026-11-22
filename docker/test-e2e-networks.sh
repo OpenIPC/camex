@@ -19,7 +19,8 @@
 #     address back, never +1
 #  8. The file is read again when it changes: a new network works without
 #     a signal; a broken file keeps the old configuration
-#  9. allow_new_networks=yes: any name makes a new network
+#  9. allow_new_networks=yes: any name makes a new network, but only for a
+#     client that asks for it (--create-network) or has a pinned key
 # 10. camex --top shows the clients and their rates
 # 11. A server with a new key: the client says how to forget the old one
 #
@@ -276,7 +277,13 @@ echo "== 9. allow_new_networks=yes"
 printf '[server]\nlocal_cidr = 10.200.0.1/24\nallow_new_networks = yes\n' > "$BUILD_CTX/open.conf"
 server open "$BUILD_CTX/open.conf"
 sleep 1
-client f open "anything-$$" --name ANY-F
+client e2 open "nocreate-$$" --name ANY-E
+wait_log "$P-e2" "takes new ones, so --create-network would create it there" 10
+check $? "without --create-network the client refuses to create a network (#199)"
+docker logs "$P-open" 2>&1 | grep -q "created by client ANY-E"
+r=$?; [ $r != 0 ]; check $? "and the server learned no network from it"
+docker rm -f "$P-e2" >/dev/null
+client f open "anything-$$" --name ANY-F --create-network
 F=$(addr_of "$P-f")
 check $? "a client of a name the server never heard of gets an address ($F)"
 wait_log "$P-open" "New network net-[0-9a-f]{8} \\(pool 10\\.[0-9]+\\.0\\.0/16\\), created by client ANY-F" 2
@@ -345,7 +352,9 @@ docker logs "$P-srv" 2>&1 | grep -q "New network"
 r=$?; [ $r != 0 ]; check $? "the impostor learned no network"
 
 echo "== 12. CPace limits: a guesser over UDP is limited, not banned; a real client is not held"
-docker rm -f "$P-srv" "$P-a" >/dev/null 2>&1
+# Every container of the sections above goes: their clients would come back
+# to the new server and spend its attempts
+docker ps -a --format '{{.Names}}' | grep "^$P-" | xargs -r docker rm -f >/dev/null 2>&1
 GUARD_NET="guard network of 24 chars"
 printf '[server]\nlocal_cidr = 10.200.0.1/24\ncpace_per_ip = 5\ncpace_ban_after = 8\ncpace_ban_time = 60\n\n[network %s]\nlabel = guarded\n' \
     "$GUARD_NET" > "$BUILD_CTX/guard.conf"
@@ -383,6 +392,42 @@ check $? "--status --json counts the attempts and the refusals, no ban"
 client a srv "$GUARD_NET" --name CAM-G
 addr_of "$P-a" >/dev/null
 check $? "a real client from another address joins all the same"
+docker rm -f "$P-guess" >/dev/null 2>&1
+
+echo "== 12a. under load a UDP source brings its cookie back first (#207)"
+docker ps -a --format '{{.Names}}' | grep "^$P-" | xargs -r docker rm -f >/dev/null 2>&1
+printf '[server]\nlocal_cidr = 10.200.0.1/24\ncpace_per_ip = 100\ncpace_total = 4\n\n[network %s]\nlabel = guarded\n' \
+    "$GUARD_NET" > "$BUILD_CTX/busy.conf"
+server srv "$BUILD_CTX/busy.conf"
+sleep 1
+# 10 PAKE1 without a cookie: PAKE2 (9) until half the total is spent,
+# then COOKIE (11)
+cat > "$BUILD_CTX/guess2.py" <<'PY'
+import os, socket, sys, time
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.settimeout(0.25)
+pake2 = cookies = 0
+for _ in range(10):
+    pkt = b"CXv2" + bytes([8]) + os.urandom(16) + os.urandom(32)
+    s.sendto(pkt + bytes(1200 - len(pkt)), (sys.argv[1], 5800))
+    try:
+        t = s.recv(4096)[4]
+        pake2 += t == 9
+        cookies += t == 11
+    except socket.timeout:
+        pass
+    time.sleep(0.2)
+print(pake2, cookies)
+PY
+docker create --name "$P-guess" --network "$NET_NAME" --entrypoint python3 "$IMAGE" /guess2.py "$P-srv" >/dev/null
+docker cp "$BUILD_CTX/guess2.py" "$P-guess:/guess2.py" >/dev/null
+got=$(docker start -a "$P-guess" 2>/dev/null | tail -1)
+case "$got" in "3 7"|"2 8") r=0 ;; *) r=1 ;; esac
+check $r "PAKE2 until half of cpace_total = 4 is spent, then COOKIE (PAKE2 and COOKIE: ${got:-none})"
+client a srv "$GUARD_NET" --name CAM-G
+addr_of "$P-a" >/dev/null &&
+    docker logs "$P-a" 2>&1 | grep -q "is under load: CPace again with its cookie"
+check $? "a real client gets the cookie, brings it back and joins"
 docker rm -f "$P-guess" >/dev/null 2>&1
 
 echo

@@ -6,8 +6,7 @@
 # PROFILE=client, without the server
 #
 #  1. --version names what it has: client, l2, mesh, and no server
-#  2. It refuses --mode server and --format nginx-map / nginx-index, and
-#     --help shows no server options
+#  2. It refuses --mode server, and --help shows no server options
 #  3. It connects to a server of the default (full) build over UDP and
 #     over TCP: pings go both ways
 #
@@ -67,11 +66,6 @@ echo "== 2. what it refuses"
 out=$("$CB" --mode server --port 5800 --psk x 2>&1); rc=$?
 [ "$rc" != 0 ] && printf '%s\n' "$out" | grep -q "built without the server"
 check $? "--mode server: refused, says why (exit $rc)"
-for f in nginx-map nginx-index; do
-    out=$("$CB" --status --format "$f" 2>&1); rc=$?
-    [ "$rc" != 0 ] && printf '%s\n' "$out" | grep -q "built without the server"
-    check $? "--status --format $f: refused, says why (exit $rc)"
-done
 ! "$CB" --help 2>&1 | grep -qE '^Server options|--format nginx'
 check $? "--help: no server options"
 

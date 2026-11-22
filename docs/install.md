@@ -43,8 +43,9 @@ The steps, printed before it starts and numbered as it goes:
    `camex`, kept in `/etc/camex/nginx-password`, for nginx in
    `/etc/nginx/camex.htpasswd`); then `nginx -t`, a reload, and the start page
    opened through nginx. An nginx of camex 5.1.0 and before (the map and
-   `camex-nginx-sync`) is kept as it is, its script updated
-   ([nginx.md](nginx.md#moving-to-web_listen)).
+   `camex-nginx-sync`, gone in 6.0.0) is moved over: nginx's file made anew
+   (the old one kept in `/var/backups/camex/`), the sync stopped, its files
+   named for removal ([nginx.md](nginx.md#moving-from-the-map)).
 8. Print what the clients need: the short command line with the network's
    name (`camex --server-host <host> --network '<name>'`), and the server's
    public key, the psk, a client command line with them and a link for the
@@ -89,14 +90,16 @@ with `--password` (or without, for a random one).
 
 ### Running it again
 
-A rerun is how camex is updated. It always replaces the binary, the sync
-script and the systemd units (a changed file is copied to `/var/backups/camex/`
+A rerun is how camex is updated. It always replaces the binary and the
+systemd unit (a changed file is copied to `/var/backups/camex/`
 first) and restarts camex when its binary or unit changed. The settings made
 once are kept as they are, edits included: `camex.conf`, `server.key`,
 `/etc/default/camex`, nginx's file and the password. Two exceptions:
 
-- nginx added later (`--domain` on a host installed without it): `domain=` is
-  added to `[server]` of `camex.conf`.
+- nginx added later (`--domain` on a host installed without it): `domain=`
+  and `web_listen=yes` are added to `[server]` of `camex.conf`.
+- An nginx of the map (camex 5.1.0 and before): its file is made anew, see
+  [nginx.md](nginx.md#moving-from-the-map).
 - The domain is never changed: another `--domain` is refused. Change it by
   hand in `camex.conf` and nginx's file.
 
@@ -106,9 +109,9 @@ other users there stay.
 
 A setup made by `camex-nginx-setup.sh` (camex 3.9 and before) moves to the new
 names on the first run: `/etc/nginx/conf.d/camex.conf` becomes
-`camex-nginx.conf` with its edits, `/usr/local/bin/camex-nginx-sync.sh` becomes
-`camex-nginx-sync`, and the arguments of a `camex.service` that had them in
-its `Environment=` line move to `/etc/default/camex`.
+`camex-nginx.conf` (then moved over from the map as above), and the
+arguments of a `camex.service` that had them in its `Environment=` line move
+to `/etc/default/camex`.
 
 ## By hand
 
@@ -214,11 +217,6 @@ removes nothing itself.
 /etc/nginx/conf.d/camex-nginx.conf            from examples/nginx-camex.conf
 /etc/camex/nginx-password                     the start page's password, mode 0600
 /etc/nginx/camex.htpasswd                     the same password for nginx
-
-# Kept up to date on a server set up by camex 5.1.0 and before (deprecated)
-/usr/local/bin/camex-nginx-sync               from examples/camex-nginx-sync.sh
-/etc/systemd/system/camex-nginx-sync.service  from examples/camex-nginx-sync.service
-/etc/nginx/camex-map.conf                     the map
 ```
 
 The packages it installs with apt-get: `curl`, `ca-certificates`; with
@@ -227,26 +225,25 @@ The packages it installs with apt-get: `curl`, `ca-certificates`; with
 ### Created at run time
 
 ```
-/etc/nginx/camex-map.conf.applied             the sync script (5.1.0 and before): the map nginx took
-/etc/nginx/camex-map.conf.lock                the sync script: one run at a time
-/etc/nginx/camex-map.conf.warnings            the sync script: warnings logged last
-/etc/nginx/camex-map.conf.warnings-index
-/var/lib/camex-nginx/index.html               the start page, by the sync script
 /run/camex/camex-<transport>-<port>.sock      the control socket (gone when camex stops)
 /var/backups/camex/                           copies of files install.sh replaced
 ```
 
-### Left by camex 3.10 and before
+### Left by camex 5.1.0 and before
 
-`camex-nginx-setup.sh` (3.9 and before) used other names, and camex 3.10 ran
-the sync from a timer; `install.sh` moves them to the new ones on its first
-run:
+The sync script and its map (camex 6.0.0 removed them): `install.sh` stops
+the sync and leaves these for you to remove
+([nginx.md](nginx.md#moving-from-the-map)):
 
 ```
-/usr/local/bin/camex-nginx-sync.sh            now /usr/local/bin/camex-nginx-sync
-/etc/nginx/conf.d/camex.conf                  now /etc/nginx/conf.d/camex-nginx.conf
+/usr/local/bin/camex-nginx-sync               the sync script
+/usr/local/bin/camex-nginx-sync.sh            its name in camex 3.9 and before
+/etc/systemd/system/camex-nginx-sync.service  its service
+/etc/systemd/system/camex-nginx-sync.timer    its timer (camex 3.10)
+/etc/nginx/camex-map.conf                     the map, and .applied, .lock, .warnings, .warnings-index
+/var/lib/camex-nginx/                         the start page the sync wrote
+/etc/nginx/conf.d/camex.conf                  nginx's file in camex 3.9 and before, now camex-nginx.conf
 /etc/camex/camex.conf.bak                     a copy of camex.conf before domain= was set
-/etc/systemd/system/camex-nginx-sync.timer    stopped and removed (3.10)
 ```
 
 It could also put nginx's file and the start page elsewhere (`--nginx-conf`,

@@ -6,6 +6,39 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 6.0.0 — 2026-11-22
+
+Incompatible: what a client does when it first meets a server, the nginx map and its sync script.
+
+- **Clients no longer fall back to trust on first use unasked**
+  ([#199](https://github.com/OpenIPC/camex/issues/199)). A fake server at the first contact could
+  force that fallback and get the network's ID to guess its name offline.
+  - A server that does not answer CPace is not given the network's ID any more: every camex that
+    knows `--network` answers CPace, so the client says it once and keeps asking (`does not answer
+    CPace (down, or not a camex 5 server?): trying again`). A client with `--server-pubkey` still
+    falls back, as only that key can read the ID.
+  - Creating a network on an open server (`allow_new_networks = yes`) needs the new client option
+    `--create-network`. Without it, a server that does not know the network but takes new ones is
+    refused: `it takes new ones, so --create-network would create it there`. Clients that join a
+    network the server lists, the `install.sh` setup, need no change.
+- **A cookie before CPace over UDP under load** ([#207](https://github.com/OpenIPC/camex/issues/207)).
+  Once more than half of `cpace_total` is spent, a UDP `PAKE1` from an address with no confirmed
+  client gets a 37-byte `COOKIE` answer (message type 11): a keyed hash of its address and port under
+  a secret made anew every 2 minutes. Only a `PAKE1` that brings it back in its padding is counted and
+  answered, so forged sources no longer use up the total. Clients before 6.0.0 send zeros there
+  (no cookie) and wait while the load lasts; servers before 6.0.0 ignore the cookie.
+- **The nginx map and `camex-nginx-sync` are gone** (deprecated in 5.2.0): `camex --status --format
+  nginx-map` / `nginx-index` with `--domain`, `--upstream-port`, `--http-port` and `--default`,
+  `examples/camex-nginx-sync.sh`, `examples/camex-nginx-sync.service` and
+  `examples/nginx-camex-map.conf`. camex answers nginx itself (`web_listen=`, since 5.2.0).
+  `install.sh` moves a server set up by camex 5.1.0 and before over: nginx's file made anew from
+  `examples/nginx-camex.conf` (the old one kept in `/var/backups/camex/`), `web_listen=yes` (and
+  `device_port=` from the sync's `UPSTREAM_PORT=`) added to `camex.conf`, the sync service and timer
+  stopped and disabled. It removes none of their files and names them. A file with TLS or an
+  address in its `listen` lines, or a `camex.conf` with another `web_listen=`, is not written anew:
+  `install.sh` stops before it changes anything;
+  [docs/nginx.md](docs/nginx.md#moving-from-the-map) has the list and the steps by hand.
+
 ## 5.2.4 — 2026-11-22
 
 - Uploads above 1 MB through nginx to a device's web UI (a firmware image) work again with camex's
@@ -82,7 +115,7 @@ sync script, no reloads of nginx.
 - `install.sh --domain`: `web_listen=yes` (and `device_port=` with `--upstream-port`) in
   `camex.conf`, the new nginx file, no sync script, the start page opened through nginx as the
   check. A server set up by camex 5.1.0 or before (the map, `camex-nginx-sync`) is kept as it is,
-  with a word on [moving over](docs/nginx.md#moving-to-web_listen), which lists the files to remove.
+  with a word on [moving over](docs/nginx.md#moving-from-the-map), which lists the files to remove.
 - Deprecated until 6.0.0: `examples/camex-nginx-sync.sh` and `.service`, `--format nginx-map` /
   `nginx-index`; the old nginx file is `examples/nginx-camex-map.conf`.
 - `CAMEX_WEB` (#204): in the full profile, not in the client one; `features:` of `--version` says

@@ -9,7 +9,7 @@
 #    camex-both-<port>.sock.
 # 2. A client over UDP and one over TCP at once: both get an address from
 #    the one pool, reach the server and each other; the status and the
-#    start page show each one's transport.
+#    control socket's records show each one's transport.
 # 3. A client that comes back over the other transport with the same ID
 #    keeps its address: UDP -> TCP -> UDP after a restart, and a TCP client
 #    cut off without its connection closing that comes back over UDP (the
@@ -155,11 +155,6 @@ docker exec "$P-U" ping -c 2 -W 2 "$t_ip" >/dev/null 2>&1 &&
 check $? "they reach each other (UDP to TCP and back)"
 status | grep -Eq "^CAM-U .* udp " && status | grep -Eq "^CAM-T .* tcp "
 check $? "the table shows each one's transport"
-status --format nginx-index > "$BUILD_CTX/page.html" 2>/dev/null
-grep -q '<th class="via">Proto</th>' "$BUILD_CTX/page.html" &&
-    grep -q '<td class="via">UDP</td>' "$BUILD_CTX/page.html" &&
-    grep -q '<td class="via">TCP</td>' "$BUILD_CTX/page.html"
-check $? "the start page has the transport column with UDP and TCP"
 ctl() {  # ctl <command>: the server's raw answer on its control socket
     docker exec "$P-srv" python3 -c "import socket,sys
 s=socket.socket(socket.AF_UNIX); s.connect('/run/camex/camex-both-5800.sock')
@@ -173,6 +168,7 @@ print(d.decode(), end='')" "$1"
 ctl "CLIENTS INDEX" | grep -q "^L	CAM-T	" && ! ctl "CLIENTS INDEX" | grep -q "^L:" &&
     ctl "CLIENTS INDEX VIA" | grep -q "^L:tcp	CAM-T	" && ctl "CLIENTS INDEX VIA" | grep -q "^L:udp	CAM-U	"
 check $? "CLIENTS INDEX keeps its old records for older readers, CLIENTS INDEX VIA has the transport"
+# (the start page's Proto column from those records: tests/test_nginxmap.c)
 
 echo "== 3. a client that changes transport keeps its address"
 client S1 CAM-S udp

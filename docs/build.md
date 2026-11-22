@@ -40,14 +40,14 @@ make CAMEX_WEB=0                              # a server without the start page
 
 | Flag             | Default (`full`) | What it adds                                                                                                                     |
 |------------------|------------------|----------------------------------------------------------------------------------------------------------------------------------|
-| `CAMEX_SERVER=1` | 1                | the server (`--mode server`), its control socket answers for `--status` and `--top`, `--format nginx-map` and `nginx-index`      |
+| `CAMEX_SERVER=1` | 1                | the server (`--mode server`), its control socket answers for `--status` and `--top`                                              |
 | `CAMEX_WEB=1`    | 1                | the start page and nginx's lookup of the server (`web_listen=`, [nginx.md](nginx.md)), `--hash-password`; needs `CAMEX_SERVER=1` |
 | `CAMEX_L2=1`     | 1 (Linux)        | TAP networks (`mode = tap`) and bridging a LAN (`--bridge`), Linux ([networks.md](networks.md#tap-networks-mode--tap))           |
 | `CAMEX_MESH=1`   | 1                | mesh networks (`mesh = yes`): peers direct through NATs, relay otherwise ([networks.md](networks.md#mesh-networks-mesh--yes))    |
 | `CAMEX_NEON=0`   | 1 (32-bit ARM)   | leaves out ChaCha20 and Poly1305 with NEON (below)                                                                               |
 
 A camex built without a part refuses it and says why: without the server,
-`--mode server` and `--format nginx-map` / `nginx-index` end with an error, and
+`--mode server` ends with an error, and
 `--help` shows no server options; without the web part, `web_listen=` is
 ignored with a warning. `camex --version` names what the build has:
 

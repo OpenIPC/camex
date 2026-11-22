@@ -72,17 +72,6 @@ int control_status(const char *path, int json);
  * every interval seconds, busiest first, until q or Ctrl+C */
 int control_top(const char *path, int interval);
 
-/* camex --status --format nginx-map (#84): the clients of one server, or
- * of every server in CAMEX_CONTROL_DIR, as an nginx map (nginxmap.h).
- * Exit code 1, and no map, when a server does not answer. */
-int control_nginx_map(const char *path, const char *domain, int port,
-                      const char *dflt);
-
-/* camex --status --format nginx-index (#105): the same clients, with
- * their name= from the server's file, as a start page (nginxmap.h).
- * Exit code 1, and no page, when a server does not answer. */
-int control_nginx_index(const char *path, const char *domain, int http_port);
-
 /* camex --status --wait <token> (#130): wait until the state of the
  * clients changes on any server (or the one at path), at most timeout
  * seconds, then print the token of the state now. The token is opaque

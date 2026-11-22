@@ -2198,6 +2198,24 @@ static int server_handle_pake1(const uint8_t *buf, size_t len,
     if (server_handshake_budget(&src) < 0) {
         return -1;
     }
+    /* Under load, a UDP source proves it gets answers before its attempt
+     * counts: the cookie of its address, in the padding (#207). The
+     * answer is 37 bytes for 1200: no amplification. */
+    if (fd < 0 && cpace_guard_busy(g_now) &&
+        !cpace_guard_good(src.a, g_now) &&
+        (len < V2_PAKE1_COOKIE + 16U ||
+         !cpace_cookie_check(src.a, ntohs(from->sin_port), g_now,
+                             buf + V2_PAKE1_COOKIE))) {
+        uint8_t c[V2_COOKIE_LEN];
+
+        memcpy(c, CAMEX_MAGIC, 4);
+        c[4] = V2_TYPE_COOKIE;
+        memcpy(c + 5, buf + 5, PAKE_SID_LEN);
+        cpace_cookie_make(src.a, ntohs(from->sin_port), g_now,
+                          c + 5 + PAKE_SID_LEN);
+        (void)server_pake_send(fd, from, c, sizeof(c));
+        return 0;   /* answered: not a packet to log as dropped */
+    }
     /* A guess of the network's name costs one attempt; a confirmed PAKE3
      * gives it back (cpaceguard.h) */
     {

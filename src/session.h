@@ -51,6 +51,12 @@
 #define V2_TYPE_PAKE1 8U
 #define V2_TYPE_PAKE2 9U
 #define V2_TYPE_PAKE3 10U
+/* A server under load answers a UDP PAKE1 without a good cookie with one
+ * (#207): magic, type, sid 16, cookie 16; a PAKE1 then carries it in its
+ * padding, at V2_PAKE1_COOKIE */
+#define V2_TYPE_COOKIE 11U
+#define V2_COOKIE_LEN (5U + 16U + 16U)
+#define V2_PAKE1_COOKIE (5U + 16U + 32U)
 #define V2_PAKE1_LEN 1200U
 #define V2_PAKE3_LEN (5U + 16U + 1U + 16U)
 #define V2_KEYREQ_LEN 64U

@@ -89,6 +89,9 @@ typedef struct {
                                 * (pake.h) */
     uint8_t pinned;            /* client: --server-pubkey: the server's key
                                 * is known, no trust on first use */
+    uint8_t create_network;    /* client: --create-network: a server that
+                                * does not know the network may create it,
+                                * trusted on first use (#199) */
     uint8_t mtu_given;         /* --mtu: no default by the transport (#198) */
     uint8_t pake_ok;           /* this connection's CPace succeeded */
     uint8_t send_net_name;     /* the server asked for the network's name
@@ -103,12 +106,6 @@ typedef struct {
     uint8_t status_query;      /* --status: ask the server(s), then exit */
     uint8_t status_json;       /* --json */
     uint8_t client_isolation;  /* --client-isolation (#83) */
-    uint8_t status_nginx_map;  /* --format nginx-map (#84) */
-    uint8_t status_nginx_index;   /* --format nginx-index (#105) */
-    char map_domain[254];      /* --domain */
-    int map_port;              /* --upstream-port (default 80) */
-    int map_http_port;         /* --http-port: nginx's, in the page's links (#141) */
-    char map_default[130];     /* --default */
     const char *status_wait;   /* --wait <token> (#130), NULL = none */
     int status_wait_timeout;   /* --wait-timeout, seconds (default 60) */
 } camex_config_t;

@@ -6,7 +6,9 @@
  *          server to the client, that both know the network's name,
  *          without anything an attacker could test offline (networks.md)
  *
- *   PAKE1 client -> server | sid 16 | Ya 32 | zeros to V2_PAKE1_LEN
+ *   PAKE1 client -> server | sid 16 | Ya 32 | cookie 16 | zeros to
+ *                            V2_PAKE1_LEN (the cookie: zeros without one)
+ *   COOKIE server -> client | sid 16 | cookie 16 (UDP under load, #207)
  *   PAKE2 server -> client | sid 16 | flags 1 | count 1 | count x (Yb 32,
  *                            tag 16)
  *   PAKE3 client -> server | sid 16 | index 1 | tag 16

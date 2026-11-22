@@ -71,6 +71,22 @@ void cpace_guard_config(unsigned int per_ip, unsigned int total,
  * *banned_now is 1 when this attempt made the ban (for the log) */
 int cpace_guard_attempt(uint32_t ip, time_t now, int *banned_now, int proven);
 
+/* Under load (#207): more than half of total's attempts of the last
+ * minute spent. A UDP PAKE1 from an address with no confirmed client then
+ * has to bring back a cookie first, which a forged source never gets. */
+int cpace_guard_busy(time_t now);
+
+/* ip has a client that confirmed within the hour */
+int cpace_guard_good(uint32_t ip, time_t now);
+
+/* The cookie of ip:port (both host order) for now: a keyed BLAKE2b under a
+ * secret made anew every 2 minutes. A check takes this one's and the last
+ * one's: 1 when it is good. */
+void cpace_cookie_make(uint32_t ip, uint16_t port, time_t now,
+                       uint8_t out[16]);
+int cpace_cookie_check(uint32_t ip, uint16_t port, time_t now,
+                       const uint8_t cookie[16]);
+
 /* A PAKE3 from ip confirmed: its attempt is given back, its row of
  * attempts and any ban of it end */
 void cpace_guard_confirm(uint32_t ip, time_t now);

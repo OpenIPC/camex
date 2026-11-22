@@ -19,7 +19,8 @@
 #    web_password=; with it 401 without the password, 200 with it, links
 #    to the tunnel addresses; 5 wrong passwords: 429.
 # 8. Requests it refuses: POST 405, a head too large 431, another path 404.
-# 9. A 2 MB upload through nginx to a device; /resolve answers any method.
+# 9. A 2 MB upload through nginx to a device; /resolve answers any method;
+#    the page's script refreshes it in place (jsdom).
 #
 # Usage: ./test-e2e-web.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
@@ -350,7 +351,7 @@ check $? "not HTTP: 400"
 docker exec "$P-srv" camex --status 2>/dev/null | grep -q CAM-A
 check $? "the server still runs and serves its clients"
 
-echo "== 9. uploads above 1 MB through nginx (5.2.4)"
+echo "== 9. uploads above 1 MB; the page refreshes itself in place (#142)"
 client CAM-U 5800 8080
 wait_registered "$P-srv" CAM-U
 # 2 MB through nginx to a device: nginx passes all of it on (the device
@@ -365,6 +366,36 @@ st=$(docker exec "$P-srv" curl -s -o /dev/null -w '%{http_code}' -m 5 -X POST \
      -H "X-Camex-Host: cam-u.$DOMAIN" http://127.0.0.1:5801/resolve)
 [ "$st" = 204 ]
 check $? "/resolve answers a POST as a GET (an nginx file without proxy_method GET), got ${st:-nothing}"
+# The page as camex serves it, a next one (other counts, a marked list) and
+# one of another camex version; its script runs in jsdom with fetch
+# answering those
+JS_DIR="$BUILD_CTX/start-page"
+mkdir -p "$JS_DIR"
+cp "$REPO_DIR/tests/start-page/refresh-test.js" "$JS_DIR/"
+get "$DOMAIN" > "$JS_DIR/a.html"
+grep -q '<noscript><meta http-equiv="refresh" content="30"></noscript>' "$JS_DIR/a.html" &&
+    grep -q '<meta name="camex-version" content="' "$JS_DIR/a.html"
+check $? "the page has its version, and the 30-second reload only without JS"
+sed -e 's|<div class="tabs">|<div class="tabs" data-t="new">|' \
+    -e 's|<div class="list list-conf">|<div class="list list-conf" data-l="new">|' \
+    -e 's|<div class="list list-auto">|<div class="list list-auto" data-l="new">|' \
+    -e 's|<div class="sub">[0-9]* online|<div class="sub">99 online|' \
+    -e 's|<title>[0-9]* online|<title>98 online|' \
+    -e '/^<link rel="icon"/s|fill=%27%23[0-9a-f]*%27|fill=%27%23123456%27|' \
+    "$JS_DIR/a.html" > "$JS_DIR/b.html"
+sed 's|<meta name="camex-version" content="[^"]*"|<meta name="camex-version" content="0.0.0"|' \
+    "$JS_DIR/b.html" > "$JS_DIR/c.html"
+# (the files go in through stdin: a temporary directory need not be one
+# the Docker daemon sees; a failure, npm unreachable too, is the check's)
+rc=0
+out=$(tar -C "$JS_DIR" -cf - . | docker run --rm -i -e HOME=/tmp -e npm_config_cache=/tmp/npm \
+    node:24-slim sh -c 'mkdir -p /t && cd /t && tar -xf - &&
+        { npm install --silent --no-audit --no-fund jsdom@24 >/dev/null 2>&1 ||
+          { echo "FAIL: npm install jsdom@24"; exit 1; }; } &&
+        node refresh-test.js' 2>&1) || rc=$?
+echo "$out" | sed 's/^/      /'
+[ $rc -eq 0 ] && ! echo "$out" | grep -q "^FAIL"
+check $? "the page's script: swaps the lists in place, keeps the tab, marks no connection, reloads for a new version"
 
 echo
 if [ "$FAILS" != 0 ]; then
