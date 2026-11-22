@@ -277,7 +277,6 @@ int config_parse_cidr_key(const char *value, const char *what,
     return 0;
 }
 
-/* client_timeout= (#143): seconds of silence before a client expires */
 /* web_listen= (#203): yes (127.0.0.1:5801), no, <port> (on 127.0.0.1) or
  * <IPv4>:<port>; out gets "<IPv4>:<port>", or "" for no */
 static int parse_web_listen(const char *value, char *out, size_t size)
@@ -322,6 +321,7 @@ bad:
     return -1;
 }
 
+/* client_timeout= (#143): seconds of silence before a client expires */
 static int parse_client_timeout(const char *value, unsigned int *out)
 {
     char *end = NULL;

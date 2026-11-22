@@ -490,6 +490,17 @@ static void control_answer(control_conn_t *c)
         /* With each client's transport (#178): L:udp / L:tcp records,
          * which an older camex does not read */
         c->out = server_clients_index(1, &len);
+    } else if (strcmp(c->cmd, "DEVICE PORT") == 0) {
+        /* device_port= of [server] (#203): the web port of this server's
+         * devices that give none, for the page of another server on the
+         * host (#211); an empty line without one */
+        c->out = malloc(8U);
+        if (c->out != NULL) {
+            len = server_db.globals.device_port > 0
+                      ? (size_t)snprintf(c->out, 8U, "%d\n",
+                                         server_db.globals.device_port)
+                      : (size_t)snprintf(c->out, 8U, "\n");
+        }
     } else if (strcmp(c->cmd, "DOMAIN") == 0) {
         /* domain= of [server] (#106), an empty line without one; in lower
          * case, as the map writes it (and never "ERROR...") */

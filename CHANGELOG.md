@@ -6,6 +6,26 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 5.2.1 — 2026-11-22
+
+Fixes from the review of 5.2.0 ([#210](https://github.com/OpenIPC/camex/pull/210)), mostly for a
+start page on a LAN (`web_listen=` beyond 127.0.0.1).
+
+- Idle connections cannot hold the page's 16 slots: a request head has 3 s to come, and with every
+  slot taken the oldest one still sending its head makes room (one from the network never pushes
+  out nginx on 127.0.0.1; a socket that cannot be used never pushes out any).
+- Wrong passwords: the table of addresses no longer reuses a slot another address is counting in,
+  so two addresses taking turns are shut out like one; and at most 2 password checks (argon2) a
+  second for all addresses together, so guesses cannot stall the tunnel's loop: the rest get 429,
+  counted as wrong only for an address that has wrong ones already (never for one that may have
+  the right password).
+- A reload that drops `web_password=` from a LAN page closes it, as a start would refuse it.
+- Another server on the host that is busy keeps its part of the page (until 15 s old) instead of
+  dropping out; only one that is gone does.
+- The page and `/resolve` of another server on the host take each server's own `device_port=`
+  for its devices (a new control command, `DEVICE PORT`), not their own; `--status` and the nginx
+  map are as before.
+
 ## 5.2.0 — 2026-11-22
 
 The start page and nginx's lookup served by camex itself
