@@ -6,6 +6,16 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 6.2.1 — 2026-11-23
+
+- The start page in brand's brass 1.5.0 fonts (variant F): the heading in Brass Serif (IBM Plex
+  Serif Bold), the rest in Brass Mono (IBM Plex Mono Regular and Bold), through the tokens `--serif`
+  and `--mono`; no Georgia or Courier New outside them. camex serves the fonts itself at
+  `/fonts/<file>.woff2` (`font/woff2`, cached for a year; the page asks with `?v=<version>`), so the
+  page looks the same on every system. The `.woff2` files and `OFL.txt` are in `src/fonts/`; the
+  arrays for the code are made at build time (`src/webfonts.sh`) and never committed. Only a build
+  with the start page (`CAMEX_WEB=1`) has them, about 44 KB.
+
 ## 6.2.0 — 2026-11-23
 
 - The network selector (6.1.0, [#201](https://github.com/OpenIPC/camex/issues/201)) in the Android

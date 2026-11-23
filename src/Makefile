@@ -94,6 +94,9 @@ ifeq ($(CAMEX_SERVER)$(CAMEX_WEB),01)
 endif
 ifeq ($(CAMEX_WEB),1)
   SRCS += web.c
+  # The start page's fonts (brand's brass 1.5.0): fonts/*.woff2 as arrays,
+  # made here and never committed (webfonts.sh)
+  GEN_OBJS += $(objdir)/webfonts.o
 else
   CPPFLAGS += -DCAMEX_NO_WEB
 endif
@@ -127,7 +130,7 @@ ifeq ($(filter aarch64% arm64%,$(TARGET_MACHINE)),)
 endif
 endif
 endif
-OBJS = $(addprefix $(objdir)/, $(SRCS:.c=.o))
+OBJS = $(addprefix $(objdir)/, $(SRCS:.c=.o)) $(GEN_OBJS)
 
 # Ensure object directory exists
 $(shell mkdir -p $(objdir))
@@ -162,6 +165,16 @@ $(BUILD_DIR)/$(TARGET): $(OBJS)
 $(objdir)/%.o: %.c $(FLAGS_STAMP)
 	mkdir -p $(objdir)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
+
+# fonts/ itself too: a removed font changes the directory, not a file left
+# in the list; written aside and moved, so a failed run leaves no target
+$(objdir)/webfonts.c: webfonts.sh fonts $(sort $(wildcard fonts/*.woff2))
+	mkdir -p $(objdir)
+	sh webfonts.sh $(sort $(wildcard fonts/*.woff2)) > $@.tmp
+	mv -f $@.tmp $@
+
+$(objdir)/webfonts.o: $(objdir)/webfonts.c webfonts.h $(FLAGS_STAMP)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I. -c $< -o $@
 
 $(objdir)/chacha_neon.o: chacha_neon.c $(FLAGS_STAMP)
 	mkdir -p $(objdir)

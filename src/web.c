@@ -24,6 +24,7 @@
 #include "nginxmap.h"
 #include "server.h"
 #include "util.h"
+#include "webfonts.h"
 
 #include <arpa/inet.h>
 #include <ctype.h>
@@ -572,9 +573,12 @@ static void respond(web_conn_t *c, int code, const char *reason,
 
     snprintf(line, sizeof(line), "HTTP/1.0 %d %s\r\n", code, reason);
     wb_str(&b, line);
-    wb_str(&b, "Server: camex\r\nConnection: close\r\n"
-               "Cache-Control: no-cache\r\n"
-               "X-Content-Type-Options: nosniff\r\n"
+    wb_str(&b, "Server: camex\r\nConnection: close\r\n");
+    /* no-cache, unless extra says otherwise (the fonts: for a year) */
+    if (extra == NULL || strstr(extra, "Cache-Control:") == NULL) {
+        wb_str(&b, "Cache-Control: no-cache\r\n");
+    }
+    wb_str(&b, "X-Content-Type-Options: nosniff\r\n"
                "Referrer-Policy: same-origin\r\n");
     if (type != NULL) {
         snprintf(line, sizeof(line), "Content-Type: %s\r\n", type);
@@ -865,6 +869,23 @@ static void request(web_conn_t *c)
         respond_text(c, 405, "Method Not Allowed", "Allow: GET, HEAD\r\n",
                      "Only GET and HEAD\n", 0);
         return;
+    }
+    /* The page's fonts (brand's brass 1.5.0, OFL): camex asks no password
+     * for them (on a LAN page too); behind nginx the domain's auth_basic
+     * covers them, which the browser of the page has already given. They
+     * never change within a version. */
+    if (strncmp(path, "/fonts/", 7U) == 0) {
+        size_t f;
+
+        for (f = 0U; f < web_fonts_count; ++f) {
+            if (strcmp(path + 7, web_fonts[f].name) == 0) {
+                respond(c, 200, "OK", "font/woff2",
+                        "Cache-Control: max-age=31536000, immutable\r\n",
+                        (const char *)web_fonts[f].data, web_fonts[f].len,
+                        head_only);
+                return;
+            }
+        }
     }
     if (strcmp(path, "/") != 0 && strcmp(path, "/index.html") != 0 &&
         strcmp(path, "/status.json") != 0) {

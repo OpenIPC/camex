@@ -531,7 +531,10 @@ The start page's password (`/etc/camex/nginx-password`,
   (the external IP it connects from, linked to `http://<IP>:<peer_port>/`;
   `peer_port=`, 8080 by default, `none` for plain text; #119), how long it has
   been connected, its last packet, its last handshake and their number, and
-  RX / TX in KiB.
+  RX / TX in KiB. Its fonts, Brass Serif for the heading and Brass Mono for
+  the rest (IBM Plex, OFL, `src/fonts/`), come from camex itself at
+  `/fonts/<file>.woff2`, cached for a year: the page looks the same on every
+  system and loads nothing from elsewhere.
 - camex 6.0.0 removed `camex --status --format nginx-map` / `nginx-index`,
   `examples/camex-nginx-sync.sh` and `examples/nginx-camex-map.conf` (see
   [Moving from the map](#moving-from-the-map)).

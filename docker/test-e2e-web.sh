@@ -202,6 +202,23 @@ docker exec "$P-srv" curl -s -m 10 -u "camex:$PAGE_PW" -H "Host: $DOMAIN" \
         -H "X-Forwarded-Proto: https" http://127.0.0.1/ |
     grep -qF "<a href=\"//cam-a.$DOMAIN/\">"
 check $? "over HTTPS the links have no scheme or port"
+# The page's fonts (brand's brass 1.5.0): served by camex through nginx,
+# the same bytes as src/fonts, cached for a year; the page uses them
+for f in BrassSerif-Bold BrassMono-Regular BrassMono-Bold; do
+    docker exec "$P-srv" curl -s -D /tmp/h -o /tmp/f -m 10 -u "camex:$PAGE_PW" -H "Host: $DOMAIN" \
+        "http://127.0.0.1/fonts/$f.woff2?v=1"
+    [ "$(docker exec "$P-srv" sha256sum /tmp/f | cut -d' ' -f1)" = "$(sha256sum "$REPO_DIR/src/fonts/$f.woff2" | cut -d' ' -f1)" ] &&
+        docker exec "$P-srv" grep -qi "^Content-Type: font/woff2" /tmp/h &&
+        docker exec "$P-srv" grep -qi "^Cache-Control: max-age=31536000, immutable" /tmp/h &&
+        ! docker exec "$P-srv" grep -qi "no-cache" /tmp/h
+    check $? "fonts/$f.woff2: its bytes, font/woff2, cached for a year"
+done
+[ "$(code "$DOMAIN" /fonts/nothing.woff2 -u "camex:$PAGE_PW")" = 404 ]
+check $? "an unknown font: 404"
+echo "$home" | grep -q "@font-face{font-family:'Brass Serif';src:url(fonts/BrassSerif-Bold.woff2?v=" &&
+    echo "$home" | grep -q "body{.*font-family:var(--mono)" &&
+    ! echo "$home" | sed "s/--serif:[^;]*;//; s/--mono:[^;]*;//" | grep -q "Georgia\|Courier New"
+check $? "the page takes Brass Serif and Brass Mono, no font named outside the tokens"
 [ "$(code "$DOMAIN" /resolve -u "camex:$PAGE_PW")" = 404 ]
 check $? "/resolve is not reachable through the start page"
 st=$(docker exec "$P-srv" curl -s -o /dev/null -w '%{http_code}' -m 5 -H "X-Camex-Host: cam-a.$DOMAIN" \
