@@ -260,6 +260,8 @@ public class ValuesTest {
         assertEquals("selector", Values.check(v)[0]);
         v.remove(Values.SELECTOR);
         assertFalse(Arrays.asList(Values.argv(v)).contains("--network-selector"));
+        // The public key of the values map (the review of #219)
+        assertEquals(Values.SELECTOR, CamexTunnel.SELECTOR);
         // From a link: e=
         ConnectLink l = ConnectLink.parse(
                 "https://openipc.github.io/camex/connect/#h=vpn.example.org&w=field%20cameras&e=north");

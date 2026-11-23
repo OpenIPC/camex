@@ -49,6 +49,8 @@ public final class CamexTunnel {
     public static final String TRANSPORT = Values.TRANSPORT;
     public static final String PUBKEY = Values.PUBKEY;
     public static final String NETWORK = Values.NETWORK;
+    /** The network's public selector (camex 6.1, #201): with {@link #NETWORK}, without a psk. */
+    public static final String SELECTOR = Values.SELECTOR;
     public static final String PSK = Values.PSK;
     public static final String MTU = Values.MTU;
     public static final String KEEPALIVE = Values.KEEPALIVE;

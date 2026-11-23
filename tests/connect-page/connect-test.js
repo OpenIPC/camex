@@ -77,11 +77,20 @@ check(d.getElementById('ok').hidden && !d.getElementById('bad').hidden, 'no key 
 d = open('#h=x&k=' + KEY + '&s=%E0%A4');
 check(d.getElementById('ok').hidden && /malformed: Pre-shared key/.test(d.getElementById('malformed').textContent),
       'a malformed escape: that field named as malformed');
-d = open('#h=x&k=' + KEY + '&s=y&w=cams&e=north');
+d = open('#h=vpn.example.org&w=field%20cameras&e=north');
 check(!d.getElementById('ok').hidden && /Network selectornorth/.test(d.getElementById('fields').textContent) &&
-      /e=north/.test(d.getElementById('open').getAttribute('href')),
-      'a selector (e=, 6.1): shown, and passed on to the app');
-d = open('#h=x&k=' + KEY + '&s=y&e=a%20b');
+      !/field cameras/.test(d.getElementById('fields').textContent) &&
+      /w=field%20cameras&e=north/.test(d.getElementById('open').getAttribute('href')),
+      'a network and its selector (w=, e=): ready, the selector shown, the name not, both passed on to the app');
+check(d.getElementById('cli').textContent === "camex --mode client --auto --server-host 'vpn.example.org' " +
+      "--port '5800' --network '<network>' --network-selector 'north'" &&
+      d.getElementById('cli-psk').textContent === "camex --mode client --auto --server-host 'vpn.example.org' " +
+      "--port '5800' --network 'field cameras' --network-selector 'north'",
+      'the commands with --network and --network-selector, the name only in the one behind "details"');
+d = open('#h=x&k=' + KEY + '&s=y&w=cams&e=north');
+check(d.getElementById('ok').hidden && /Network selector \(only with a network name and without a psk\)/.test(d.getElementById('malformed').textContent),
+      'a selector with a psk: refused, as the app refuses it');
+d = open('#h=x&w=cams&e=a%20b');
 check(d.getElementById('ok').hidden && /malformed: Network selector/.test(d.getElementById('malformed').textContent),
       'a selector with a space: named as malformed');
 check(!/<script[^>]+src=|<link[^>]+href=|<img|fetch\(|XMLHttpRequest/.test(page),

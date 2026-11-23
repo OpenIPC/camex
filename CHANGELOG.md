@@ -11,8 +11,13 @@ release, rebuilt from every push to `master`; this file is the change history.
 - The network selector (6.1.0, [#201](https://github.com/OpenIPC/camex/issues/201)) in the Android
   library and in links: a field **Network selector** in `CamexTunnel.fields()` (it goes to
   `--network-selector`, only with a network name and without a psk), and `e=` in a camex link,
-  read by the library and shown by the link's page. The apps that build their settings from
-  `fields()` get the field by themselves.
+  read by the library and shown by the link's page; `CamexTunnel.SELECTOR` is its key. The apps
+  that build their settings from `fields()` get the field by themselves.
+- camex's own app keeps the network's name and its selector: before, it showed the network's field
+  but did not save it, so a network typed in or opened from a link never reached the tunnel. A link
+  opened in the app fills both fields.
+- The link's page takes a link with a network's name and no key or psk (camex 4.6), refuses a
+  selector with a psk, and its desktop command has `--network` and `--network-selector`.
 
 ## 6.1.0 — 2026-11-22
 

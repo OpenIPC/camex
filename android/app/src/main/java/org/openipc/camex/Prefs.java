@@ -44,6 +44,10 @@ final class Prefs {
         v.put(CamexTunnel.TRANSPORT, "tcp".equals(p.getString("transport", "udp")) ? "TCP" : "UDP");
         v.put(CamexTunnel.PUBKEY, p.getString("server_pubkey", ""));
         v.put(CamexTunnel.PSK, p.getString("psk", ""));
+        // The network's name and its selector (camex 4.6, 6.1): kept and given back, so a
+        // network set up here (or by a link) reaches the tunnel (the review of #219)
+        v.put(CamexTunnel.NETWORK, p.getString("network", ""));
+        v.put(CamexTunnel.SELECTOR, p.getString("network_selector", ""));
         v.put(CamexTunnel.MTU, number(p, "mtu"));
         v.put(CamexTunnel.KEEPALIVE, number(p, "keepalive"));
         v.put(CamexTunnel.SERVER_TIMEOUT, number(p, "server_timeout"));
@@ -61,11 +65,17 @@ final class Prefs {
             .putString("transport", "TCP".equals(v.get(CamexTunnel.TRANSPORT)) ? "tcp" : "udp")
             .remove("full_tunnel")   // no full tunnel any more (#172)
             .putString("server_pubkey", v.get(CamexTunnel.PUBKEY).trim())
-            .putString("psk", v.get(CamexTunnel.PSK));
+            .putString("psk", v.get(CamexTunnel.PSK))
+            .putString("network", text(v.get(CamexTunnel.NETWORK)))
+            .putString("network_selector", text(v.get(CamexTunnel.SELECTOR)).trim());
         number(e, "mtu", v.get(CamexTunnel.MTU));
         number(e, "keepalive", v.get(CamexTunnel.KEEPALIVE));
         number(e, "server_timeout", v.get(CamexTunnel.SERVER_TIMEOUT));
         e.apply();
+    }
+
+    private static String text(String s) {
+        return s == null ? "" : s;
     }
 
     private static String number(SharedPreferences p, String key) {
