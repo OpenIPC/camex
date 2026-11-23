@@ -46,16 +46,21 @@ Extra protection on top of the name, all optional:
 
 ```ini
 [server]
-local_cidr = 10.200.0.1/24       # needed: the networks' gateways go on this tunnel
-# allow_new_networks = yes       # any name makes a new network (off by default)
-# network_supernet = 10.0.0.0/8  # where derived pools come from (the default)
-# network_prefix = 16            # their size (the default)
+# Needed: the networks' gateways go on this tunnel
+local_cidr = 10.200.0.1/24
+# Any name makes a new network (off by default)
+# allow_new_networks = yes
+# Where derived pools come from, and their size (the defaults)
+# network_supernet = 10.0.0.0/8
+# network_prefix = 16
 
 [network field cameras of the north site]
-label = cams                     # shown instead of the name in logs and status (optional)
+# Shown instead of the name in logs and status (optional)
+label = cams
 
 [network 7kq2m9x4p1lab8vz3t0c]
-pool = 10.77.0.0/24              # this pool instead of a derived one
+# This pool instead of a derived one
+pool = 10.77.0.0/24
 client_isolation = yes
 ```
 
@@ -65,12 +70,13 @@ spaces around it. It is 1 to 63 bytes and case-sensitive. A name shorter than
 a name could be guessed one CPace attempt at a time (see
 [Guessing a name](#guessing-a-name)), and the client warns about it too.
 
-| Key                | Meaning                                                                                            |
-|--------------------|----------------------------------------------------------------------------------------------------|
-| `pool`             | the network's IPv4 pool; without it a `/16` of `network_supernet` picked by the network's ID       |
-| `client_isolation` | `yes` or `no`: drop packets between clients of this network; without it the server's setting       |
-| `label`            | shown instead of the network's name in logs, `--status` and `--top`; up to 31 bytes without spaces |
-| `weak_name`        | `yes`: take a name shorter than 16 characters (a lab, a test); it could be guessed                 |
+| Key                | Meaning                                                                                                                                                                                         |
+|--------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `pool`             | the network's IPv4 pool; without it a `/16` of `network_supernet` picked by the network's ID                                                                                                    |
+| `client_isolation` | `yes` or `no`: drop packets between clients of this network; without it the server's setting                                                                                                    |
+| `label`            | shown instead of the network's name in logs, `--status` and `--top`; up to 31 bytes without spaces                                                                                              |
+| `selector`         | a public word (1 to 31 of `A-Z a-z 0-9 . _ -`): only a client with `--network-selector` that word gets CPace answers for this network (6.1.0, [below](#a-selector-one-network-per-attempt-610)) |
+| `weak_name`        | `yes`: take a name shorter than 16 characters (a lab, a test); it could be guessed                                                                                                              |
 
 `[server]`:
 
@@ -308,9 +314,36 @@ keys above):
 With the defaults, one address tests at most 20 names a minute and all
 addresses together at most 300. A random name of 20 characters
 (`install.sh`) is beyond reach either way. These limits are what keeps a
-short name from falling within days. A public selector that would make one
-attempt test one network only is tracked in
-[#201](https://github.com/OpenIPC/camex/issues/201).
+short name from falling within days.
+
+### A selector: one network per attempt (6.1.0)
+
+Without more, a client gives the server nothing but the name, inside CPace,
+so `PAKE2` has an answer for every network the server lists (up to 24): one
+guessed name is tested against all of them at once. A server with many
+networks can give each a **selector**, a public word like a user name:
+
+```ini
+[network 7kq2m9x4p1lab8vz3t0c]
+# Public, like a user name: typed on the device
+selector = north
+```
+
+```sh
+camex --server-host cams.example.org --network 7kq2m9x4p1lab8vz3t0c --network-selector north
+```
+
+A `PAKE1` with a selector is answered for that one network (`camex --status`
+shows each network's selector); a network with
+a selector is answered only to a `PAKE1` that names it, so a guess tests one
+network at a time. A `PAKE1` without a selector is answered for the networks
+without one, as before. An unknown selector gets one answer of random bytes,
+so the reply does not tell which selectors exist. The selector is 1 to 31 of
+`A-Z a-z 0-9 . _ -`, one network to a selector, and must not come from the
+name (anything derived from the name could be tested offline). It travels in
+`PAKE1`'s padding: a server before 6.1.0 ignores it and answers for all its
+networks, so a client with a selector still joins an older server
+([#201](https://github.com/OpenIPC/camex/issues/201)).
 
 ## Status
 

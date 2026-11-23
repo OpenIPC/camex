@@ -793,6 +793,15 @@ int camex_init(camex_config_t *config)
                     "characters: it could be guessed",
                     (unsigned)CAMEX_NET_NAME_MIN);
     }
+    /* The selector goes in CPace's PAKE1: without CPace it would be
+     * ignored, so it is refused (the review of #218) */
+    if (current_config.network_selector[0] != '\0' &&
+        (!client_mode || current_config.network[0] == '\0' ||
+         current_config.psk[0] != '\0')) {
+        log_message(LOG_ERR, "--network-selector is for a client with "
+                    "--network and without --psk (it goes in CPace)");
+        return -1;
+    }
     if (client_mode && current_config.network[0] != '\0' &&
         current_config.psk[0] == '\0') {
         uint8_t k[32];

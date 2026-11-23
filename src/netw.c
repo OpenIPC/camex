@@ -59,6 +59,24 @@ void netw_id_from_name(const char *name, uint8_t id[CAMEX_NET_ID_LEN])
     crypto_blake2b_final(&ctx, id);
 }
 
+int netw_selector_valid(const char *s, size_t len)
+{
+    size_t i;
+
+    if (s == NULL || len == 0U || len > CAMEX_NET_SELECTOR_MAX) {
+        return 0;
+    }
+    for (i = 0U; i < len; ++i) {
+        char c = s[i];
+
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-')) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 int netw_name_valid(const char *name)
 {
     size_t len;
@@ -495,6 +513,8 @@ int netw_sync(const camex_net_conf_t *conf, size_t count, int allow_new,
                         "(mode = tap)");
             return -1;
         }
+        snprintf(next[s].selector, sizeof(next[s].selector), "%s",
+                 conf[j].selector);
         if (conf[j].label[0] != '\0') {
             snprintf(next[s].label, sizeof(next[s].label), "%s",
                      conf[j].label);

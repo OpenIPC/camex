@@ -6,6 +6,15 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 6.1.0 — 2026-11-22
+
+- A network selector ([#201](https://github.com/OpenIPC/camex/issues/201)): `selector = <word>` in
+  a `[network NAME]` block, a public word, and `--network-selector <word>` on the client. A `PAKE1`
+  with a selector is answered for that network only, and a network with one only to a `PAKE1` that
+  names it, so one guessed name is tested against one network, not against every network the
+  server lists. An unknown selector gets one answer of random bytes. The selector travels in
+  `PAKE1`'s padding after the cookie: a server before 6.1.0 ignores it.
+
 ## 6.0.1 — 2026-11-22
 
 - `install.sh` gives the network it makes `label = main`: camex logs a network by its name unless

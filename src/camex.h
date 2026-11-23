@@ -82,6 +82,7 @@ typedef struct {
     char server_key_file[256]; /* server: file with its base64 private key */
     char server_pubkey[64];    /* client: the server's base64 public key */
     char network[64];          /* client: --network, the network's name */
+    char network_selector[32]; /* client: --network-selector (#201), "" none */
     char known_servers[256];   /* client: --known-servers, where the keys of
                                 * servers first met are kept; "none" = off */
     uint8_t top;               /* --top: a live view of the server(s) */

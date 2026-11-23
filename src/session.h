@@ -57,6 +57,8 @@
 #define V2_TYPE_COOKIE 11U
 #define V2_COOKIE_LEN (5U + 16U + 16U)
 #define V2_PAKE1_COOKIE (5U + 16U + 32U)
+/* The network's selector (#201): a length byte, then the selector; 0: none */
+#define V2_PAKE1_SELECTOR (V2_PAKE1_COOKIE + 16U)
 #define V2_PAKE1_LEN 1200U
 #define V2_PAKE3_LEN (5U + 16U + 1U + 16U)
 #define V2_KEYREQ_LEN 64U

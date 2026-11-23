@@ -328,6 +328,33 @@ static void test_config(void)
     CHECK(config_db_load_file(path) != 0, "a bad weak_name value");
     config_db_free(&server_db);
 
+    /* selector= (#201): its characters, one network to a selector */
+    fp = fopen(path, "w");
+    fputs("[network a network of 20 c]\nselector = north-1.cam_s\n"
+          "[network another of 20 chs]\n", fp);
+    fclose(fp);
+    CHECK(config_db_load_file(path) == 0 &&
+              strcmp(server_db.nets[0].selector, "north-1.cam_s") == 0 &&
+              server_db.nets[1].selector[0] == '\0',
+          "selector= read wrong");
+    config_db_free(&server_db);
+    fp = fopen(path, "w");
+    fputs("[network a network of 20 c]\nselector = no spaces\n", fp);
+    fclose(fp);
+    CHECK(config_db_load_file(path) != 0, "a selector with a space");
+    config_db_free(&server_db);
+    fp = fopen(path, "w");
+    fputs("[network a network of 20 c]\nselector = north\n"
+          "[network another of 20 chs]\nselector = north\n", fp);
+    fclose(fp);
+    CHECK(config_db_load_file(path) != 0, "one selector for two networks");
+    config_db_free(&server_db);
+    CHECK(!netw_selector_valid("", 0U) &&
+              !netw_selector_valid("0123456789abcdef0123456789abcdef", 32U) &&
+              netw_selector_valid("0123456789abcdef0123456789abcde", 31U) &&
+              !netw_selector_valid("a/b", 3U),
+          "netw_selector_valid");
+
     fp = fopen(path, "w");
     fputs("[server]\ncpace_per_ip = many\n", fp);
     fclose(fp);

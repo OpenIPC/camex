@@ -393,6 +393,15 @@ static int client_pake_fall_back(const char *why)
     return 0;
 }
 
+/* --network-selector into a PAKE1's padding (#201) */
+static void client_pake1_selector(uint8_t *pkt)
+{
+    size_t l = strlen(current_config.network_selector);
+
+    pkt[V2_PAKE1_SELECTOR] = (uint8_t)l;
+    memcpy(pkt + V2_PAKE1_SELECTOR + 1U, current_config.network_selector, l);
+}
+
 static int client_send_pake1(void)
 {
     uint8_t pkt[V2_PAKE1_LEN];
@@ -415,6 +424,7 @@ static int client_send_pake1(void)
     memcpy(pkt + 5, cpace.sid, PAKE_SID_LEN);
     memcpy(pkt + 5 + PAKE_SID_LEN, cpace.ya, 32U);
     memcpy(pkt + V2_PAKE1_COOKIE, cpace.cookie, sizeof(cpace.cookie));
+    client_pake1_selector(pkt);
     cpace.sent = 1U;
     client_state.hs_pending = 1U;
     client_state.hs_sent = g_now;
@@ -440,6 +450,7 @@ static int client_handle_cookie(const uint8_t *buf, size_t len)
     memcpy(pkt + 5, cpace.sid, PAKE_SID_LEN);
     memcpy(pkt + 5 + PAKE_SID_LEN, cpace.ya, 32U);
     memcpy(pkt + V2_PAKE1_COOKIE, cpace.cookie, sizeof(cpace.cookie));
+    client_pake1_selector(pkt);
     log_message(LOG_INFO, "Server %s:%d is under load: CPace again with its "
                 "cookie", current_config.server_host, current_config.port);
     return net_client_send(pkt, sizeof(pkt)) < 0 ? -1 : 0;

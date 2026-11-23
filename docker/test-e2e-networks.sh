@@ -23,6 +23,8 @@
 #     client that asks for it (--create-network) or has a pinned key
 # 10. camex --top shows the clients and their rates
 # 11. A server with a new key: the client says how to forget the old one
+# 12. CPace limits, 12a the cookie under load (#207)
+# 13. A selector (#201): one network answers a PAKE1 that names it
 #
 # Usage: ./test-e2e-networks.sh
 #   CAMEX_BINARY=path/to/camex  binary to test (default: ../camex)
@@ -429,6 +431,74 @@ addr_of "$P-a" >/dev/null &&
     docker logs "$P-a" 2>&1 | grep -q "is under load: CPace again with its cookie"
 check $? "a real client gets the cookie, brings it back and joins"
 docker rm -f "$P-guess" >/dev/null 2>&1
+
+echo "== 13. a selector: one network per CPace attempt (#201)"
+docker ps -a --format '{{.Names}}' | grep "^$P-" | xargs -r docker rm -f >/dev/null 2>&1
+SEL_NET="selected network of 24 c"
+OTHER_NET="another network of 24 ch"
+printf '[server]\nlocal_cidr = 10.200.0.1/24\n\n[network %s]\nlabel = sel\nselector = north\n\n[network %s]\nlabel = other\n' \
+    "$SEL_NET" "$OTHER_NET" > "$BUILD_CTX/sel.conf"
+server srv "$BUILD_CTX/sel.conf"
+sleep 1
+# PAKE1 with a selector (or none): how many answers PAKE2 has
+cat > "$BUILD_CTX/sel.py" <<'PY'
+import os, socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.settimeout(2)
+out = []
+for sel in sys.argv[2:]:
+    sel = b"" if sel == "-" else sel.encode()
+    pkt = b"CXv2" + bytes([8]) + os.urandom(16) + os.urandom(32) + bytes(16) + bytes([len(sel)]) + sel
+    s.sendto(pkt + bytes(1200 - len(pkt)), (sys.argv[1], 5800))
+    try:
+        d = s.recv(4096)
+        out.append(str(d[22]) if d[4] == 9 else "t%d" % d[4])
+    except socket.timeout:
+        out.append("none")
+print(" ".join(out))
+PY
+docker create --name "$P-sel" --network "$NET_NAME" --entrypoint python3 "$IMAGE" /sel.py "$P-srv" - north nosuch >/dev/null
+docker cp "$BUILD_CTX/sel.py" "$P-sel:/sel.py" >/dev/null
+got=$(docker start -a "$P-sel" 2>/dev/null | tail -1)
+[ "$got" = "1 1 1" ]
+check $? "PAKE2 has one answer each: without a selector (the other network), north, an unknown one (got ${got:-none})"
+client a srv "$SEL_NET" --name CAM-S --network-selector north
+addr_of "$P-a" >/dev/null
+check $? "a client with the selector joins its network"
+client b srv "$SEL_NET" --name CAM-N
+wait_log "$P-b" "does not know this network" 10
+check $? "without the selector the same name is not answered"
+client c srv "$OTHER_NET" --name CAM-O
+addr_of "$P-c" >/dev/null
+check $? "a network without a selector is joined as before"
+docker exec "$P-srv" camex --status 2>/dev/null | grep -q "sel selector north" &&
+    docker exec "$P-srv" camex --status --json 2>/dev/null | grep -q '"label":"sel","selector":"north"'
+check $? "--status and --json show the selector"
+docker run --rm --network "$NET_NAME" --cap-add NET_ADMIN --cap-add MKNOD "$IMAGE" \
+    --server-host "$P-srv" --network "$SEL_NET" --psk x --network-selector north > "$BUILD_CTX/selpsk.log" 2>&1
+r=$?
+[ $r != 0 ] && grep -q "network-selector is for a client with --network and without --psk" "$BUILD_CTX/selpsk.log"
+check $? "--network-selector with --psk (no CPace) is refused"
+# The answer to an unknown selector looks like a real one: Yb a canonical
+# point (top bit clear) every time
+cat > "$BUILD_CTX/decoy.py" <<'PY'
+import os, socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.settimeout(2)
+top = 0
+for _ in range(16):
+    sel = b"nosuch"
+    pkt = b"CXv2" + bytes([8]) + os.urandom(16) + os.urandom(32) + bytes(16) + bytes([len(sel)]) + sel
+    s.sendto(pkt + bytes(1200 - len(pkt)), (sys.argv[1], 5800))
+    d = s.recv(4096)
+    top += d[23 + 31] >> 7
+print(top)
+PY
+docker create --name "$P-decoy" --network "$NET_NAME" --entrypoint python3 "$IMAGE" /decoy.py "$P-srv" >/dev/null
+docker cp "$BUILD_CTX/decoy.py" "$P-decoy:/decoy.py" >/dev/null
+got=$(docker start -a "$P-decoy" 2>/dev/null | tail -1)
+[ "$got" = 0 ]
+check $? "the answer to an unknown selector is a canonical point every time (top bits set: ${got:-?} of 16)"
 
 echo
 if [ "$FAILS" = 0 ]; then
