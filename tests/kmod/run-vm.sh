@@ -18,7 +18,20 @@ export DEBIAN_FRONTEND=noninteractive
 . /etc/os-release
 FLAVOUR=generic
 [ "$ID" = debian ] && FLAVOUR=amd64
+# A slow mirror must fail in minutes, not stall the job until its timeout
+# (archive.ubuntu.com once held CI for 30 minutes without a line): timeouts
+# and retries, APT_MIRROR in place of Ubuntu's archive when given (CI: the
+# runners' own), and a line before each step
+printf 'Acquire::http::Timeout "30";\nAcquire::Retries "3";\n' > /etc/apt/apt.conf.d/99camex-test
+if [ -n "${APT_MIRROR:-}" ] && [ "$ID" = ubuntu ]; then
+    for f in /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list; do
+        [ -f "$f" ] && sed -i "s|http://archive.ubuntu.com/ubuntu/\{0,1\}|$APT_MIRROR/|g; s|http://security.ubuntu.com/ubuntu/\{0,1\}|$APT_MIRROR/|g" "$f"
+    done
+    echo "apt: $APT_MIRROR"
+fi
+echo "apt: update"
 apt-get update -qq >/dev/null
+echo "apt: install"
 apt-get install -y -qq "linux-headers-$FLAVOUR" qemu-system-x86 busybox-static \
     gcc make cpio iproute2 iputils-ping zstd xz-utils >/dev/null 2>&1
 K=$(ls -d /usr/src/linux-headers-*-"$FLAVOUR" | head -1)
