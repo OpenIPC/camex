@@ -17,7 +17,9 @@ n=0
 for f in "$@"; do
     printf 'static const unsigned char font%d[] = {\n' "$n"
     bytes=$(od -An -v -tu1 "$f") || { echo "webfonts.sh: cannot read $f" >&2; exit 1; }
-    printf '%s\n' "$bytes" | sed 's/[[:space:]][[:space:]]*/,/g; s/^,//; s/$/,/'
+    # awk splits on any run of blanks: BSD od pads its last line with them
+    printf '%s\n' "$bytes" | awk '{ for (i = 1; i <= NF; i++) { printf "%s,", $i
+        if (++n % 16 == 0) printf "\n" } } END { if (n % 16) printf "\n" }'
     echo '};'
     n=$((n + 1))
 done
