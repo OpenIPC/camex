@@ -40,7 +40,7 @@ public class ValuesTest {
 
     @Test
     public void fields() {
-        assertEquals(Arrays.asList("server", "name", "transport", "network", "pubkey", "psk", "mtu", "keepalive",
+        assertEquals(Arrays.asList("server", "name", "transport", "network", "selector", "pubkey", "psk", "mtu", "keepalive",
                         "server_timeout", "web_port"),
                 Arrays.asList(Values.FIELDS.stream().map(f -> f.key).toArray()));
         Field t = Values.FIELDS.get(2);
@@ -50,18 +50,22 @@ public class ValuesTest {
         // the network's name and the psk: secrets, both may stay empty (check() says when)
         assertEquals(Field.Kind.SECRET, Values.FIELDS.get(3).kind);
         assertFalse(Values.FIELDS.get(3).required);
-        assertEquals(Field.Kind.SECRET, Values.FIELDS.get(5).kind);
-        assertFalse(Values.FIELDS.get(5).required);
-        assertFalse(Values.FIELDS.get(4).required);
+        assertEquals(Field.Kind.SECRET, Values.FIELDS.get(6).kind);
         assertFalse(Values.FIELDS.get(6).required);
+        // the selector (public) and the key: text, optional
+        assertEquals(Field.Kind.TEXT, Values.FIELDS.get(4).kind);
+        assertFalse(Values.FIELDS.get(4).required);
+        assertFalse(Values.FIELDS.get(5).required);
+        assertFalse(Values.FIELDS.get(7).required);
         assertTrue(Values.FIELDS.get(0).required);
         // short labels, defaults as hints (2026-11-18)
         assertEquals("Client name", Values.FIELDS.get(1).label);
         assertEquals("Proto", t.label);
         assertEquals("Network name", Values.FIELDS.get(3).label);
-        assertEquals("empty: the server's", Values.FIELDS.get(6).hint);
-        assertEquals("empty: 10", Values.FIELDS.get(7).hint);
-        assertEquals("empty: 20", Values.FIELDS.get(8).hint);
+        assertEquals("Network selector", Values.FIELDS.get(4).label);
+        assertEquals("empty: the server's", Values.FIELDS.get(7).hint);
+        assertEquals("empty: 10", Values.FIELDS.get(8).hint);
+        assertEquals("empty: 20", Values.FIELDS.get(9).hint);
         assertEquals("", Values.FIELDS.get(1).hint);
         assertEquals("Show the key", Field.SHOW_SECRET);
     }
@@ -229,5 +233,40 @@ public class ValuesTest {
         assertNull(Values.check(v));
         l = ConnectLink.parse("camex://connect?h=vpn.example.org&w=");
         assertTrue(l.errors.containsKey("w"));
+    }
+
+    @Test
+    public void selector() {
+        // camex 6.1 (#201): with a network, without a psk; it goes to --network-selector
+        Map<String, String> v = good();
+        v.remove(Values.PUBKEY);
+        v.remove(Values.PSK);
+        v.put(Values.NETWORK, "field cameras");
+        v.put(Values.SELECTOR, "north-1");
+        assertNull(Values.check(v));
+        String[] a = Values.argv(v);
+        assertEquals("north-1", a[Arrays.asList(a).indexOf("--network-selector") + 1]);
+        v.put(Values.SELECTOR, "no spaces");
+        assertEquals("selector", Values.check(v)[0]);
+        v.put(Values.SELECTOR, "0123456789abcdef0123456789abcdef");
+        assertEquals("selector", Values.check(v)[0]);
+        v.put(Values.SELECTOR, "north");
+        v.put(Values.PSK, "own psk");
+        assertEquals("selector", Values.check(v)[0]);
+        v.remove(Values.PSK);
+        v.remove(Values.NETWORK);
+        v.put(Values.PUBKEY, KEY);
+        v.put(Values.PSK, "x");
+        assertEquals("selector", Values.check(v)[0]);
+        v.remove(Values.SELECTOR);
+        assertFalse(Arrays.asList(Values.argv(v)).contains("--network-selector"));
+        // From a link: e=
+        ConnectLink l = ConnectLink.parse(
+                "https://openipc.github.io/camex/connect/#h=vpn.example.org&w=field%20cameras&e=north");
+        assertEquals("north", l.values.get(Values.SELECTOR));
+        assertTrue(l.errors.isEmpty());
+        l = ConnectLink.parse("camex://connect?h=vpn.example.org&w=x&e=a%20b");
+        assertTrue(l.errors.containsKey("e"));
+        assertFalse(l.values.containsKey(Values.SELECTOR));
     }
 }

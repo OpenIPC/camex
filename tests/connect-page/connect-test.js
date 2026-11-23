@@ -77,6 +77,13 @@ check(d.getElementById('ok').hidden && !d.getElementById('bad').hidden, 'no key 
 d = open('#h=x&k=' + KEY + '&s=%E0%A4');
 check(d.getElementById('ok').hidden && /malformed: Pre-shared key/.test(d.getElementById('malformed').textContent),
       'a malformed escape: that field named as malformed');
+d = open('#h=x&k=' + KEY + '&s=y&w=cams&e=north');
+check(!d.getElementById('ok').hidden && /Network selectornorth/.test(d.getElementById('fields').textContent) &&
+      /e=north/.test(d.getElementById('open').getAttribute('href')),
+      'a selector (e=, 6.1): shown, and passed on to the app');
+d = open('#h=x&k=' + KEY + '&s=y&e=a%20b');
+check(d.getElementById('ok').hidden && /malformed: Network selector/.test(d.getElementById('malformed').textContent),
+      'a selector with a space: named as malformed');
 check(!/<script[^>]+src=|<link[^>]+href=|<img|fetch\(|XMLHttpRequest/.test(page),
       'the page loads nothing from anywhere');
 process.exit(fails ? 1 : 0);

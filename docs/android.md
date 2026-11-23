@@ -46,6 +46,11 @@ defaults shown in an empty field are the same in every app on camex.
   the name (CPace), and the two fields below may stay empty. It is hidden like
   the key. The app keeps no file of known servers, so CPace runs at every
   start.
+- **Network selector** — `--network-selector` (camex 6.1,
+  [networks.md](networks.md#a-selector-one-network-per-attempt-610)): a public
+  word, needed only when the server's block for the network has
+  `selector=`; empty otherwise. Only with a network name and without a psk
+  (it goes in CPace).
 - **Server public key** and **Pre-shared key** — `--server-pubkey --psk`; the
   key must match the client's `psk=` (or the global key); it is hidden, **Show
   the key** under it shows it.
@@ -72,6 +77,9 @@ Android: open this link on the phone (Telegram, mail, anything):
 
 `w` is the network's name; `install.sh` adds it when `camex.conf` has a
 `[network NAME]` block. A link with `h` and `w` alone is enough for camex 4.6.
+`e` is the network's selector (camex 6.1), for a network whose block has
+`selector=`; `install.sh` does not add it (its link has the psk, and a psk
+means no CPace): write such a link by hand, `#h=…&w=…&e=…`.
 
 Tapped on the phone, it opens the app's settings with the link's values filled
 in and their fields marked; nothing is saved or connected until **Save**. A
@@ -91,6 +99,8 @@ the device's owner. A per-device `psk=` in the device's `[client ID]` block
 | `t`   | transport                                      | `udp` or `tcp`                                                                                                                               |
 | `k`   | server public key                              | 44 characters (`camex --genkey`), not all zero                                                                                               |
 | `s`   | pre-shared key                                 | as camex takes it (`hex:`, `base64:` or a passphrase), below 128 bytes, `%XX`-encoded as UTF-8; no control characters, nothing beyond U+FFFF |
+| `w`   | the network's name (optional)                  | 1 to 63 bytes of UTF-8, no control characters, no blank at the ends                                                                          |
+| `e`   | the network's selector (optional, 6.1)         | 1 to 31 of `A-Z a-z 0-9 . _ -`; only with `w` and without `s`                                                                                |
 | `n`   | client name (optional)                         | up to 31 bytes of UTF-8, no control characters                                                                                               |
 | `m`   | MTU (optional)                                 | 576–9000                                                                                                                                     |
 | `a`   | keepalive, s (optional)                        | 0–3600                                                                                                                                       |

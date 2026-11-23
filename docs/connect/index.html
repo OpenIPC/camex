@@ -49,11 +49,12 @@ pre{padding:10px;white-space:pre-wrap;word-break:break-all}
 </main>
 <script>
 // The fields of the link (see ConnectLink.java): h host, p port, t
-// transport, k server public key, s psk; n client ID, m MTU, a keepalive,
+// transport, k server public key, s psk; w network, e its selector (6.1);
+// n client ID, m MTU, a keepalive,
 // r route all traffic (read and ignored since 3.19.0: no full tunnel, #172)
 var CAMEX = {
     names: {h: 'Server host', p: 'Port', t: 'Transport', k: 'Server public key',
-            n: 'Client name', m: 'MTU', a: 'Keepalive, s'},
+            e: 'Network selector', n: 'Client name', m: 'MTU', a: 'Keepalive, s'},
     // The link's fields in its order; null when the escapes are malformed
     fields: function (hash) {
         var out = [], s = hash.replace(/^#/, '');
@@ -97,6 +98,7 @@ var CAMEX = {
             case 'm': return n >= 576 && n <= 9000;
             case 'a': return n >= 0 && n <= 3600;
             case 'r': return v === '0' || v === '1';
+            case 'e': return /^[A-Za-z0-9._-]{1,31}$/.test(v);
             default: return true;
         }
     },
