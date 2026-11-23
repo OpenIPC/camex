@@ -652,6 +652,9 @@ jobs:
       - name: Run the VM test
         env:
           CAMEX_BINARY: build-musl/camex-x86_64
+          # The runners' own mirror: archive.ubuntu.com once stalled this job
+          # for its whole 30 minutes
+          APT_MIRROR: http://azure.archive.ubuntu.com/ubuntu
         run: |
           chmod +x build-musl/camex-x86_64
           docker/test-kmod-vm.sh ubuntu:24.04

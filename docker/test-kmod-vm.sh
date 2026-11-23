@@ -12,6 +12,8 @@
 #   ubuntu:24.04 -> kernel 6.8   (netif_rx() path)
 #   ubuntu:18.04 -> kernel 4.15  (netif_rx_ni() path)
 #   SMP=<n>      number of guest vCPUs (default 2)
+#   APT_MIRROR=<url>  an Ubuntu mirror in place of archive.ubuntu.com and
+#                security.ubuntu.com (CI: the runners' own Azure mirror)
 #   CAMEX_BINARY=<static camex>  also run the camex client in the guest over
 #                /dev/camex against a server in the container (e.g.
 #                build-musl/camex-x86_64 from ci/build-musl.sh x86_64)
@@ -26,7 +28,8 @@ IMAGE="${1:-ubuntu:24.04}"
 KVM_DEV=
 [ -w /dev/kvm ] && KVM_DEV="--device /dev/kvm"
 # NET_ADMIN and MKNOD: the camex server's tun device in the container
-c=$(docker create -e SMP="${SMP:-2}" --cap-add NET_ADMIN --cap-add MKNOD $KVM_DEV \
+c=$(docker create -e SMP="${SMP:-2}" -e APT_MIRROR="${APT_MIRROR:-}" \
+    --cap-add NET_ADMIN --cap-add MKNOD $KVM_DEV \
     "$IMAGE" sleep 3600)
 trap 'docker rm -f "$c" >/dev/null 2>&1 || true' EXIT
 # Ctrl+C or a cancelled job ends the script; EXIT then cleans up once (#127)
