@@ -7,12 +7,17 @@
 # committed (src/Makefile): web.c serves them at /fonts/<file>
 #
 set -eu
+[ $# -gt 0 ] || { echo "webfonts.sh: no fonts" >&2; exit 1; }
+for f in "$@"; do   # od's own failure would not stop the pipe below
+    [ -s "$f" ] && [ -r "$f" ] || { echo "webfonts.sh: cannot read $f" >&2; exit 1; }
+done
 echo '/* Made by webfonts.sh from the fonts in src/fonts at build time: do not edit */'
 echo '#include "webfonts.h"'
 n=0
 for f in "$@"; do
     printf 'static const unsigned char font%d[] = {\n' "$n"
-    od -An -v -tu1 "$f" | sed 's/[[:space:]][[:space:]]*/,/g; s/^,//; s/$/,/'
+    bytes=$(od -An -v -tu1 "$f") || { echo "webfonts.sh: cannot read $f" >&2; exit 1; }
+    printf '%s\n' "$bytes" | sed 's/[[:space:]][[:space:]]*/,/g; s/^,//; s/$/,/'
     echo '};'
     n=$((n + 1))
 done

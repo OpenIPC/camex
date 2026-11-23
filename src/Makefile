@@ -166,9 +166,12 @@ $(objdir)/%.o: %.c $(FLAGS_STAMP)
 	mkdir -p $(objdir)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 
-$(objdir)/webfonts.c: webfonts.sh $(sort $(wildcard fonts/*.woff2))
+# fonts/ itself too: a removed font changes the directory, not a file left
+# in the list; written aside and moved, so a failed run leaves no target
+$(objdir)/webfonts.c: webfonts.sh fonts $(sort $(wildcard fonts/*.woff2))
 	mkdir -p $(objdir)
-	sh webfonts.sh $(sort $(wildcard fonts/*.woff2)) > $@
+	sh webfonts.sh $(sort $(wildcard fonts/*.woff2)) > $@.tmp
+	mv -f $@.tmp $@
 
 $(objdir)/webfonts.o: $(objdir)/webfonts.c webfonts.h $(FLAGS_STAMP)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I. -c $< -o $@

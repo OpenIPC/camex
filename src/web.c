@@ -870,8 +870,10 @@ static void request(web_conn_t *c)
                      "Only GET and HEAD\n", 0);
         return;
     }
-    /* The page's fonts (brand's brass 1.5.0, OFL): public, so without the
-     * password; they never change within a version */
+    /* The page's fonts (brand's brass 1.5.0, OFL): camex asks no password
+     * for them (on a LAN page too); behind nginx the domain's auth_basic
+     * covers them, which the browser of the page has already given. They
+     * never change within a version. */
     if (strncmp(path, "/fonts/", 7U) == 0) {
         size_t f;
 
