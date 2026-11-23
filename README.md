@@ -148,7 +148,9 @@ The change history is in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-[MIT](LICENSE). See [LICENSE](LICENSE) for the full terms.
+[MIT](LICENSE). See [LICENSE](LICENSE) for the full terms. The start page's fonts in
+`src/fonts/` (Brass Serif and Brass Mono, cut from IBM Plex) are under the SIL Open Font
+License, [src/fonts/OFL.txt](src/fonts/OFL.txt).
 
 ## Support
 

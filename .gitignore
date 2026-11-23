@@ -50,3 +50,5 @@ tests/test_cpaceguard
 
 # The server key and settings of deploy/compose.yaml
 /deploy/data/
+# Made at build time: the start page fonts as arrays (src/webfonts.sh)
+webfonts.c
