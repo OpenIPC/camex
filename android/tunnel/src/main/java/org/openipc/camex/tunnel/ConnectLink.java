@@ -16,7 +16,8 @@ import java.util.Map;
  * {@code https://openipc.github.io/camex/connect/#h=&p=&t=&k=&s=} (the fields after {@code #},
  * never sent to a server) or {@code camex://connect?h=&p=&t=&k=&s=}. Fields: {@code h} host,
  * {@code p} port, {@code t} transport, {@code k} server public key, {@code s} psk, {@code w}
- * the network's name (camex 4.6: with it {@code k} and {@code s} may be left out), optional
+ * the network's name (camex 4.6: with it {@code k} and {@code s} may be left out),
+ * {@code e} the network's public selector (camex 6.1, #201), optional
  * {@code n} client name, {@code m} MTU, {@code a} keepalive, {@code r} route all traffic.
  *
  * <p>{@link #values} holds what came through, under the keys of {@link CamexTunnel#fields()}:
@@ -86,7 +87,7 @@ public final class ConnectLink {
         Map<String, String> got = new LinkedHashMap<>();
         for (Map.Entry<String, String> f : raw.entrySet()) {
             String key = f.getKey();
-            if (key.length() != 1 || "hptkswnmar".indexOf(key.charAt(0)) < 0) continue;
+            if (key.length() != 1 || "hptkswenmar".indexOf(key.charAt(0)) < 0) continue;
             String v = f.getValue();
             String why = v == null ? "not URL-encoded UTF-8" : reason(key, v);
             if (why == null) got.put(key, v);
@@ -104,6 +105,7 @@ public final class ConnectLink {
         if (got.containsKey("n")) values.put(Values.NAME, got.get("n"));
         if (got.containsKey("t")) values.put(Values.TRANSPORT, got.get("t").toUpperCase(java.util.Locale.ROOT));
         if (got.containsKey("w")) values.put(Values.NETWORK, got.get("w"));
+        if (got.containsKey("e")) values.put(Values.SELECTOR, got.get("e"));
         if (got.containsKey("k")) values.put(Values.PUBKEY, got.get("k"));
         if (got.containsKey("s")) values.put(Values.PSK, got.get("s"));
         if (got.containsKey("m")) values.put(Values.MTU, String.valueOf(Integer.parseInt(got.get("m"))));
@@ -129,6 +131,8 @@ public final class ConnectLink {
                 return Values.isName(v) ? null : "1 to 31 bytes, no control character";
             case "w":
                 return Values.isNetwork(v) ? null : "a network name: 1 to 63 bytes, no control character";
+            case "e":
+                return Values.isSelector(v) ? null : "a selector: 1 to 31 of A-Z a-z 0-9 . _ -";
             case "m":
                 return Values.range(v, 576, 9000) != null ? null : "576 to 9000";
             case "a":

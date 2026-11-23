@@ -25,6 +25,7 @@ final class Values {
     static final String PUBKEY = "pubkey";
     static final String PSK = "psk";
     static final String NETWORK = "network";
+    static final String SELECTOR = "selector";
     static final String MTU = "mtu";
     static final String KEEPALIVE = "keepalive";
     static final String SERVER_TIMEOUT = "server_timeout";
@@ -41,6 +42,8 @@ final class Values {
             // camex 4.6: the server's address and the network's name are enough; the key
             // and psk only without a network (or as extra protection)
             Field.secret(NETWORK, "Network name", "empty: server key and psk below"),
+            // camex 6.1: public, only when the server's network block has selector= (#201)
+            Field.text(SELECTOR, "Network selector", "empty: none (the server says if needed)"),
             Field.text(PUBKEY, "Server public key", "empty with a network: checked by its name"),
             Field.secret(PSK, "Pre-shared key", "empty with a network"),
             Field.text(MTU, "MTU (576\u20139000)", "empty: the server's"),
@@ -100,6 +103,14 @@ final class Values {
         if (!network.isEmpty() && !isNetwork(network)) {
             return new String[]{NETWORK, "1 to 63 bytes, no control character, no blank at the ends"};
         }
+        // The selector goes in CPace: with a network, without a psk (camex refuses it else)
+        String selector = get(v, SELECTOR).trim();
+        if (!selector.isEmpty() && !isSelector(selector)) {
+            return new String[]{SELECTOR, "1 to 31 of A-Z a-z 0-9 . _ -, or empty"};
+        }
+        if (!selector.isEmpty() && (network.isEmpty() || !get(v, PSK).isEmpty())) {
+            return new String[]{SELECTOR, "only with a network name and without a psk, or empty"};
+        }
         // With a network both are optional: the name is the key, the server is checked by it
         String key = get(v, PUBKEY).trim();
         if ((network.isEmpty() || !key.isEmpty()) && !isKey(key)) {
@@ -153,6 +164,11 @@ final class Values {
             // No file of known servers here: CPace checks the server at every start
             a.add("--known-servers");
             a.add("none");
+            String selector = get(v, SELECTOR).trim();
+            if (!selector.isEmpty()) {
+                a.add("--network-selector");
+                a.add(selector);
+            }
         }
         if (!get(v, PUBKEY).trim().isEmpty()) {
             a.add("--server-pubkey");
@@ -192,6 +208,11 @@ final class Values {
     static boolean isNetwork(String n) {
         return !n.isEmpty() && n.equals(n.trim())
                 && n.getBytes(StandardCharsets.UTF_8).length <= 63 && plain(n);
+    }
+
+    /** As camex takes --network-selector (#201): 1 to 31 of A-Z a-z 0-9 . _ - */
+    static boolean isSelector(String s) {
+        return s.matches("[A-Za-z0-9._-]{1,31}");
     }
 
     static boolean isName(String n) {

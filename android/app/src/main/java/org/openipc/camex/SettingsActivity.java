@@ -301,8 +301,9 @@ public class SettingsActivity extends Activity {
             // a port alone with no host yet: shown as ":port", the host to be typed before it
             take(CamexTunnel.SERVER, host + ":" + port, changed);
         }
-        for (String key : new String[]{CamexTunnel.NAME, CamexTunnel.TRANSPORT, CamexTunnel.PUBKEY,
-                CamexTunnel.PSK, CamexTunnel.MTU, CamexTunnel.KEEPALIVE}) {
+        for (String key : new String[]{CamexTunnel.NAME, CamexTunnel.TRANSPORT, CamexTunnel.NETWORK,
+                CamexTunnel.SELECTOR, CamexTunnel.PUBKEY, CamexTunnel.PSK, CamexTunnel.MTU,
+                CamexTunnel.KEEPALIVE}) {
             String value = c.values.get(key);
             if (value != null) take(key, value, changed);
         }
@@ -335,6 +336,8 @@ public class SettingsActivity extends Activity {
             case "t": key = CamexTunnel.TRANSPORT; break;
             case "k": key = CamexTunnel.PUBKEY; break;
             case "s": key = CamexTunnel.PSK; break;
+            case "w": key = CamexTunnel.NETWORK; break;
+            case "e": key = CamexTunnel.SELECTOR; break;
             case "n": key = CamexTunnel.NAME; break;
             case "m": key = CamexTunnel.MTU; break;
             case "a": key = CamexTunnel.KEEPALIVE; break;

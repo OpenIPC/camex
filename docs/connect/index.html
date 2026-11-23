@@ -49,11 +49,12 @@ pre{padding:10px;white-space:pre-wrap;word-break:break-all}
 </main>
 <script>
 // The fields of the link (see ConnectLink.java): h host, p port, t
-// transport, k server public key, s psk; n client ID, m MTU, a keepalive,
+// transport, k server public key, s psk; w network, e its selector (6.1);
+// n client ID, m MTU, a keepalive,
 // r route all traffic (read and ignored since 3.19.0: no full tunnel, #172)
 var CAMEX = {
     names: {h: 'Server host', p: 'Port', t: 'Transport', k: 'Server public key',
-            n: 'Client name', m: 'MTU', a: 'Keepalive, s'},
+            e: 'Network selector', n: 'Client name', m: 'MTU', a: 'Keepalive, s'},
     // The link's fields in its order; null when the escapes are malformed
     fields: function (hash) {
         var out = [], s = hash.replace(/^#/, '');
@@ -97,6 +98,9 @@ var CAMEX = {
             case 'm': return n >= 576 && n <= 9000;
             case 'a': return n >= 0 && n <= 3600;
             case 'r': return v === '0' || v === '1';
+            case 'e': return /^[A-Za-z0-9._-]{1,31}$/.test(v);
+            case 'w': return !!v && v === v.replace(/^[\t\n\v\f\r ]+|[\t\n\v\f\r ]+$/g, '') &&
+                unescape(encodeURIComponent(v)).length <= 63 && !/[\u0000-\u001f\u007f\ud800-\udfff]/.test(v);
             default: return true;
         }
     },
@@ -116,19 +120,24 @@ var CAMEX = {
     cli: function (f, psk) {
         var m = {}, q = function (v) { return "'" + v.replace(/'/g, "'\\''") + "'"; };
         for (var i = 0; i < f.length; i++) m[f[i][0]] = f[i][1];
-        if (!m.h || !m.k || !m.s) return '';
+        if (!m.h || !((m.k && m.s) || m.w)) return '';
+        // the network's name is a key too: shown only in the command "with the psk"
         return 'camex --mode client --auto' + (m.n && CAMEX.valid('n', m.n) ? ' --name ' + q(m.n) : '') +
             ' --server-host ' + q(m.h) + ' --port ' + q(m.p || '5800') +
             (m.t === 'tcp' ? ' --transport tcp' : '') +
             (m.m && CAMEX.valid('m', m.m) ? ' --mtu ' + m.m : '') +
             (m.a && CAMEX.valid('a', m.a) ? ' --keepalive ' + m.a : '') +
-            ' --server-pubkey ' + q(m.k) + ' --psk ' + (psk ? q(m.s) : "'<psk>'");
+            (m.w ? ' --network ' + (psk ? q(m.w) : "'<network>'") : '') +
+            (m.w && m.e ? ' --network-selector ' + q(m.e) : '') +
+            (m.k ? ' --server-pubkey ' + q(m.k) : '') +
+            (m.s ? ' --psk ' + (psk ? q(m.s) : "'<psk>'") : '');
     }
 };
 (function () {
     var f = CAMEX.fields(location.hash), has = {};
     if (f) for (var i = 0; i < f.length; i++) has[f[i][0]] = 1;
-    if (!f || !has.h || !has.k || !has.s) {
+    // A server key and psk, or a network's name (camex 4.6; the key and psk optional then)
+    if (!f || !has.h || !((has.k && has.s) || has.w)) {
         document.getElementById('bad').hidden = false;
         return;
     }
@@ -138,10 +147,13 @@ var CAMEX = {
     for (var i2 = 0; i2 < f.length; i2++) {
         var k2 = f[i2][0];
         // (a field of a later version is ignored, as the app ignores it)
-        if ((CAMEX.names[k2] || k2 === 's') && !CAMEX.valid(k2, f[i2][1])) {
-            bad.push(CAMEX.names[k2] || 'Pre-shared key');
+        if ((CAMEX.names[k2] || k2 === 's' || k2 === 'w') && !CAMEX.valid(k2, f[i2][1])) {
+            bad.push(CAMEX.names[k2] || (k2 === 's' ? 'Pre-shared key' : 'Network name'));
         }
     }
+    // A selector goes in CPace: only with a network's name and without a psk, as the app
+    // takes it (the review of #219)
+    if (has.e && (!has.w || has.s)) bad.push('Network selector (only with a network name and without a psk)');
     if (bad.length) {
         var e = document.getElementById('malformed');
         e.textContent = 'These fields of the link are malformed: ' + bad.join(', ') +
@@ -152,7 +164,7 @@ var CAMEX = {
     var table = document.getElementById('fields');
     for (var j = 0; j < f.length; j++) {
         var name = CAMEX.names[f[j][0]];
-        // the psk is not shown (it is the password), nor r (ignored, #172)
+        // the psk and the network's name are not shown (keys), nor r (ignored, #172)
         if (!name) continue;
         var tr = table.insertRow(), th = tr.insertCell(), td = tr.insertCell();
         th.textContent = name;
