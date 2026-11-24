@@ -34,6 +34,11 @@ check() {
 	done
 	[ -z "$camex_server" ] || { matches "$camex_server" '[A-Za-z0-9][A-Za-z0-9._-]*' && [ ${#camex_server} -le 63 ]; } ||
 		{ error="Server: a host name or an IPv4 address"; return 1; }
+	case "$camex_server" in
+		*[!0-9.]*|"") ;;
+		*) matches "$camex_server" '((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\.|$)){4}' && [ "${camex_server%.}" = "$camex_server" ] ||
+			{ error="Server: not an IPv4 address"; return 1; } ;;
+	esac
 	matches "$camex_port" '[0-9]{1,5}' && [ "$camex_port" -ge 1 ] && [ "$camex_port" -le 65535 ] ||
 		{ error="Port: 1 to 65535"; return 1; }
 	case "$camex_transport" in udp|tcp) ;; *) error="Transport: udp or tcp"; return 1 ;; esac
@@ -73,6 +78,12 @@ ready() {
 	[ -n "$camex_server" ] && { [ -n "$camex_network" ] || { [ -n "$camex_psk" ] && [ -n "$camex_pubkey" ]; }; }
 }
 
+# The client's process in $pid, empty when it is not running
+camex_pid() {
+	pid=$(cat /var/run/camex.pid 2>/dev/null)
+	[ "$(cat "/proc/$pid/comm" 2>/dev/null)" = camex ] || pid=""
+}
+
 error=""
 env_all=$(fw_printenv 2>/dev/null | grep '^camex_')
 def_name=$(default_name)
@@ -94,6 +105,8 @@ elif [ "$REQUEST_METHOD" = "POST" ]; then
 		$init restart </dev/null >/dev/null 2>&1
 		sleep 2
 		ready || redirect_to "$SCRIPT_NAME" "warning" "Saved. Camex starts with a server and a network name, or a server, its public key and a pre-shared key"
+		camex_pid
+		[ -n "$pid" ] || redirect_to "$SCRIPT_NAME" "danger" "Saved, but Camex is not running: see the log in Advanced"
 		redirect_to "$SCRIPT_NAME" "success" "Saved, Camex is restarted"
 	fi
 else
@@ -101,8 +114,7 @@ else
 fi
 : "${camex_port:=5800}" "${camex_transport:=udp}" "${camex_name:=$def_name}"
 
-pid=$(cat /var/run/camex.pid 2>/dev/null)
-[ "$(cat "/proc/$pid/comm" 2>/dev/null)" = camex ] || pid=""
+camex_pid
 dev=""
 [ -n "$pid" ] && dev=$(sed -n 's/^iff:[[:space:]]*//p' /proc/$pid/fdinfo/* 2>/dev/null | head -n 1)
 addr=""

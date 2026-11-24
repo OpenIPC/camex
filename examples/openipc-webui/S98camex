@@ -59,7 +59,7 @@ stop() {
 	camex_pid || { rm -f "$pidfile"; return 0; }
 	kill "$pid" 2>/dev/null
 	# camex takes its routes and interface away before it exits
-	for i in 1 2 3 4 5; do
+	for _ in 1 2 3 4 5; do
 		camex_pid || break
 		sleep 1
 	done
