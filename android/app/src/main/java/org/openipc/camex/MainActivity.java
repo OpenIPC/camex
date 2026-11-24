@@ -118,6 +118,8 @@ public class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         scroll.addView(page);
         setContentView(scroll);
+        // the brass faces on what is made here without one: the subtitle, the check boxes
+        Brass.fonts(scroll);
 
         startButton.setOnClickListener(v -> startVpn());
         stopButton.setOnClickListener(v -> {

@@ -6,6 +6,18 @@ The version lives in `CAMEX_VERSION` in `src/version.h`. From 3.0.2 on, binaries
 published only as the [`latest`](https://github.com/OpenIPC/camex/releases/tag/latest)
 release, rebuilt from every push to `master`; this file is the change history.
 
+## 6.3.0 — 2026-11-24
+
+- The Android app in brand's brass 1.5.1 fonts, as microsnander 1.55.1: headings, section bands and
+  buttons in Brass Serif, the board, the subtitle, field labels and inputs, check boxes, radio
+  buttons and the log in Brass Mono; no system face left on its screens. The three `.ttf` files and
+  `OFL.txt` are in `android/app/src/main/assets/fonts/` (the APK grows by about 60 KB), read once per
+  process with `Typeface.createFromAsset` (API 21 on); an asset that does not open leaves the
+  system's serif or monospace. A number field kept the system face before: `setInputType` reset it.
+  Buttons are 13sp with 0.1 letter spacing (were 14sp, 0.15): SETTINGS in the wider Brass Serif
+  keeps to one line on a 360dp phone.
+  A unit test checks the fonts of the app and of the start page against brand's SHA-256 sums.
+
 ## 6.2.1 — 2026-11-23
 
 - The start page in brand's brass 1.5.0 fonts (variant F): the heading in Brass Serif (IBM Plex

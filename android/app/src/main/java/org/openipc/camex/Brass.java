@@ -4,7 +4,9 @@
  * Brass.java — the brass look of camex's screens (brand brass 1.3.0, the
  * interface review of 2026-11-18): heading with the version, panel, display,
  * board rows with lamps, section bands and brass buttons, built in code like
- * the screens themselves. Colours come from res/values/colors.xml.
+ * the screens themselves. Colours come from res/values/colors.xml, the faces
+ * from assets/fonts (brass 1.5.1): Brass Serif for headings and buttons, Brass
+ * Mono for the rest, no system face left on the screen.
  */
 package org.openipc.camex;
 
@@ -29,6 +31,77 @@ final class Brass {
         return Build.VERSION.SDK_INT >= 23 ? c.getColor(id) : c.getResources().getColor(id);
     }
 
+    // The brass faces, read from the assets once per process; null until then
+    private static Typeface serif, mono, monoBold;
+
+    /**
+     * Read the three faces once; a face whose asset does not open stays the
+     * system's (serif, monospace).
+     */
+    private static synchronized void loadFonts(Context c) {
+        if (serif != null)
+            return;
+        android.content.res.AssetManager a = c.getApplicationContext().getAssets();
+        mono = font(a, "BrassMono-Regular.ttf", Typeface.MONOSPACE);
+        monoBold = font(a, "BrassMono-Bold.ttf", Typeface.create(Typeface.MONOSPACE, Typeface.BOLD));
+        serif = font(a, "BrassSerif-Bold.ttf", Typeface.create(Typeface.SERIF, Typeface.BOLD));
+    }
+
+    private static Typeface font(android.content.res.AssetManager a, String name, Typeface system) {
+        try {
+            return Typeface.createFromAsset(a, "fonts/" + name);
+        } catch (RuntimeException e) {     // "native typeface cannot be made": no such asset
+            return system;
+        }
+    }
+
+    /** Brass Serif (bold): headings, section bands, buttons. */
+    static synchronized Typeface serif(Context c) {
+        loadFonts(c);
+        return serif;
+    }
+
+    /** Brass Mono: the board, labels, fields, the log. */
+    static synchronized Typeface mono(Context c) {
+        loadFonts(c);
+        return mono;
+    }
+
+    /**
+     * The brass faces over a tree of views made in code without a face of their
+     * own (the subtitle, check boxes, radio buttons, field labels): a button gets
+     * Brass Serif, all other text Brass Mono, bold Brass Mono Bold; faces set
+     * already stay. Called once a screen is built (after setContentView).
+     */
+    static void fonts(View v) {
+        if (v instanceof TextView) {
+            TextView t = (TextView) v;
+            Typeface f = t.getTypeface();
+            Context c = v.getContext();
+            Typeface s, m, mb;
+            synchronized (Brass.class) {
+                loadFonts(c);
+                s = serif;
+                m = mono;
+                mb = monoBold;
+            }
+            if (f != s && f != m && f != mb) {
+                int style = f == null ? Typeface.NORMAL : f.getStyle();
+                // a Button is a TextView too; a CheckBox or a RadioButton is a Button,
+                // but its text is a label: mono
+                if (t instanceof Button && !(t instanceof android.widget.CompoundButton))
+                    t.setTypeface(s);
+                else
+                    t.setTypeface((style & Typeface.BOLD) != 0 ? mb : m);
+            }
+        }
+        if (v instanceof android.view.ViewGroup) {
+            android.view.ViewGroup g = (android.view.ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++)
+                fonts(g.getChildAt(i));
+        }
+    }
+
     static int dp(Context c, float v) {
         return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v,
                 c.getResources().getDisplayMetrics());
@@ -40,7 +113,7 @@ final class Brass {
         t.setText(text);
         t.setAllCaps(true);
         t.setTextSize(26);
-        t.setTypeface(Typeface.SERIF);
+        t.setTypeface(serif(c));
         t.setLetterSpacing(0.2f);
         t.setTextColor(color(c, R.color.brass));
         t.setShadowLayer(dp(c, 8), 0, 0, 0x59c9a24d);
@@ -62,7 +135,7 @@ final class Brass {
     static TextView display(Context c) {
         TextView t = new TextView(c);
         t.setBackgroundResource(R.drawable.display);
-        t.setTypeface(Typeface.MONOSPACE);
+        t.setTypeface(mono(c));
         t.setTextColor(color(c, R.color.dim));
         int pad = dp(c, 12);
         t.setPadding(pad, pad, pad, pad);
@@ -90,7 +163,7 @@ final class Brass {
                 LinearLayout.LayoutParams.WRAP_CONTENT));
         TextView v = new TextView(c);
         v.setText(version);
-        v.setTypeface(Typeface.MONOSPACE);
+        v.setTypeface(mono(c));
         v.setTextSize(11);
         v.setTextColor(color(c, R.color.dim));
         v.setPadding(dp(c, 4), 0, 0, 0);
@@ -116,13 +189,13 @@ final class Brass {
             view.addView(lamp, lp);
             label = new TextView(c);
             label.setText(l);
-            label.setTypeface(Typeface.MONOSPACE);
+            label.setTypeface(mono(c));
             label.setTextSize(13);
             label.setLetterSpacing(0.08f);
             label.setTextColor(color(c, R.color.dim));
             view.addView(label, new LinearLayout.LayoutParams(dp(c, 84), LinearLayout.LayoutParams.WRAP_CONTENT));
             value = new TextView(c);
-            value.setTypeface(Typeface.MONOSPACE);
+            value.setTypeface(mono(c));
             value.setTextSize(13);
             value.setTextColor(color(c, R.color.ink));
             view.addView(value, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
@@ -153,7 +226,7 @@ final class Brass {
         TextView t = new TextView(c);
         t.setText(text);
         t.setAllCaps(true);
-        t.setTypeface(Typeface.SERIF, Typeface.BOLD);
+        t.setTypeface(serif(c));
         t.setLetterSpacing(0.25f);
         t.setTextSize(15);
         t.setTextColor(color(c, R.color.ink_dark));
@@ -170,6 +243,7 @@ final class Brass {
     static Button button(Context c, int text) {
         Button b = new Button(c, null, 0, R.style.Brass);
         b.setText(text);
+        b.setTypeface(serif(c));
         return b;
     }
 
@@ -194,7 +268,7 @@ final class Brass {
 
         LogWindow(Context c, int rows) {
             text = new TextView(c);
-            text.setTypeface(Typeface.MONOSPACE);
+            text.setTypeface(mono(c));
             text.setTextSize(11);
             text.setTextColor(color(c, R.color.dim));
             int pad = dp(c, 12);
