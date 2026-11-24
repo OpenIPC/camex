@@ -49,8 +49,10 @@
     <style name="Brass" parent="android:Widget.Material.Button">
         <item name="android:background">@drawable/brass_button</item>
         <item name="android:textColor">@color/ink_dark</item>
-        <item name="android:textSize">14sp</item>
-        <item name="android:letterSpacing">0.15</item>
+        <!-- 13sp, 0.1: SETTINGS in Brass Serif, wider than the system serif, keeps to one
+             line in a third of a 360dp phone (brass 1.5.1) -->
+        <item name="android:textSize">13sp</item>
+        <item name="android:letterSpacing">0.1</item>
         <item name="android:fontFamily">serif</item>
         <item name="android:minHeight">56dp</item>
         <item name="android:focusable">true</item>

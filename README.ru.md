@@ -152,8 +152,9 @@ curl -fL -O $URL/camex-arm
 ## Лицензия
 
 [MIT](LICENSE). Полный текст условий — в файле [LICENSE](LICENSE). Шрифты стартовой
-страницы в `src/fonts/` (Brass Serif и Brass Mono, урезанные IBM Plex) — под SIL Open Font
-License, [src/fonts/OFL.txt](src/fonts/OFL.txt).
+страницы в `src/fonts/` и приложения Android в `android/app/src/main/assets/fonts/` (Brass Serif
+и Brass Mono, урезанные IBM Plex) — под SIL Open Font License,
+[src/fonts/OFL.txt](src/fonts/OFL.txt).
 
 ## Поддержка
 

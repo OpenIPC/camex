@@ -140,7 +140,7 @@ curl -fL -O $URL/camex-arm
 
 ## 许可证
 
-[MIT](LICENSE)。完整条款请参见 [LICENSE](LICENSE)。起始页使用的字体位于 `src/fonts/`（Brass Serif 与 Brass Mono，裁剪自 IBM Plex），采用 SIL Open Font License，见 [src/fonts/OFL.txt](src/fonts/OFL.txt)。
+[MIT](LICENSE)。完整条款请参见 [LICENSE](LICENSE)。起始页使用的字体位于 `src/fonts/`，Android 应用使用的字体位于 `android/app/src/main/assets/fonts/`（Brass Serif 与 Brass Mono，裁剪自 IBM Plex），采用 SIL Open Font License，见 [src/fonts/OFL.txt](src/fonts/OFL.txt)。
 
 ## 支持
 

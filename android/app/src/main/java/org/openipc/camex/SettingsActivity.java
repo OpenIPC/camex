@@ -9,7 +9,6 @@ package org.openipc.camex;
 
 import android.app.Activity;
 import android.content.Intent;
-import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.LayerDrawable;
@@ -143,6 +142,8 @@ public class SettingsActivity extends Activity {
         page.setPadding(pad, pad, pad, pad);
         page.addView(frame, new LinearLayout.LayoutParams(-1, -1));
         setContentView(page);
+        // the brass faces on what is made here without one: labels, radio buttons, check boxes
+        Brass.fonts(page);
     }
 
     /** A field as the library describes it: its label, then its input. */
@@ -173,7 +174,6 @@ public class SettingsActivity extends Activity {
         }
         EditText e = new EditText(this);
         e.setSingleLine(true);
-        e.setTypeface(Typeface.MONOSPACE);
         e.setSaveEnabled(false);
         // no autofill service sees the settings, the psk least of all (as the old layout)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
@@ -185,12 +185,14 @@ public class SettingsActivity extends Activity {
         } else if (f.kind == Field.Kind.HOST_PORT) {
             e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         }
+        // after setInputType, which puts the system face back
+        e.setTypeface(Brass.mono(this));
         inputs.put(f.key, e);
         col.addView(e);
         if (f.kind == Field.Kind.SECRET) {
             // hidden, with "Show the key" under it, the same in every app on camex
             e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-            e.setTypeface(Typeface.MONOSPACE);
+            e.setTypeface(Brass.mono(this));
             CheckBox show = new CheckBox(this);
             show.setText(Field.SHOW_SECRET);
             show.setSaveEnabled(false);
@@ -199,7 +201,7 @@ public class SettingsActivity extends Activity {
                 e.setInputType(InputType.TYPE_CLASS_TEXT | (on
                     ? InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
                     : InputType.TYPE_TEXT_VARIATION_PASSWORD));
-                e.setTypeface(Typeface.MONOSPACE);
+                e.setTypeface(Brass.mono(this));
                 e.setSelection(Math.max(sel, 0));
             });
             col.addView(show, new LinearLayout.LayoutParams(-2, -2));
