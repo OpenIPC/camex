@@ -1,0 +1,88 @@
+#!/bin/sh
+#
+# Copyright (c) OpenIPC  https://openipc.org  MIT License
+#
+# S98camex — the camex client on an OpenIPC camera, set up by the U-Boot
+# environment (fw_printenv). Starts with camex_server and either camex_network
+# or camex_psk with camex_pubkey; without them it does nothing.
+
+daemon=/usr/sbin/camex
+pidfile=/var/run/camex.pid
+
+env_get() {
+	printf '%s\n' "$env" | sed -n "s/^$1=//p" | head -n 1
+}
+
+camex_pid() {
+	pid=$(cat "$pidfile" 2>/dev/null)
+	[ -n "$pid" ] && [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = camex ]
+}
+
+start() {
+	[ -x "$daemon" ] || return 0
+	camex_pid && return 0
+
+	env=$(fw_printenv 2>/dev/null | grep '^camex_')
+	server=$(env_get camex_server)
+	port=$(env_get camex_port)
+	pubkey=$(env_get camex_pubkey)
+	psk=$(env_get camex_psk)
+	name=$(env_get camex_name)
+	transport=$(env_get camex_transport)
+	network=$(env_get camex_network)
+
+	[ -n "$server" ] || return 0
+	[ -n "$network" ] || { [ -n "$psk" ] && [ -n "$pubkey" ]; } || return 0
+
+	[ -e /dev/net/tun ] || modprobe tun 2>/dev/null
+
+	set -- --mode client --auto "--server-host=$server" "--port=${port:-5800}" \
+		"--transport=${transport:-udp}"
+	[ -n "$network" ] && set -- "$@" "--network=$network"
+	[ -n "$pubkey" ] && set -- "$@" "--server-pubkey=$pubkey"
+	[ -n "$psk" ] && set -- "$@" "--psk=$psk"
+	[ -n "$name" ] && set -- "$@" "--name=$name"
+
+	logger -p daemon.info -t camex "Starting, server $server"
+	# Started from the web page, it would keep majestic's devices and sockets
+	# open, and the form's body with the key. In a shell of its own: it has no
+	# script file or saved descriptors of its own to close
+	sh -c 'for fd in /proc/$$/fd/*; do
+		fd=${fd##*/}
+		[ "$fd" -le 2 ] || eval "exec $fd>&-"
+	done
+	exec start-stop-daemon "$@"' sh \
+		-S -q -b -m -p "$pidfile" -x "$daemon" -- "$@"
+}
+
+stop() {
+	camex_pid || { rm -f "$pidfile"; return 0; }
+	kill "$pid" 2>/dev/null
+	# camex takes its routes and interface away before it exits
+	for _ in 1 2 3 4 5; do
+		camex_pid || break
+		sleep 1
+	done
+	camex_pid && kill -9 "$pid" 2>/dev/null
+	rm -f "$pidfile"
+}
+
+case "$1" in
+	start)
+		start
+		;;
+
+	stop)
+		stop
+		;;
+
+	restart)
+		stop
+		start
+		;;
+
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 1
+		;;
+esac

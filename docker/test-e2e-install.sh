@@ -71,7 +71,7 @@ check() {   # check <condition-exit-code> <message>
 mkdir -p "$BUILD_CTX/release" "$BUILD_CTX/src/examples"
 cp "$CAMEX_BINARY" "$BUILD_CTX/release/camex-x86_64"
 cp "$REPO_DIR/install.sh" "$BUILD_CTX/src/"
-cp "$REPO_DIR"/examples/* "$BUILD_CTX/src/examples/"
+cp -r "$REPO_DIR"/examples/. "$BUILD_CTX/src/examples/"
 cat > "$BUILD_CTX/Dockerfile" <<'DOCKERFILE'
 ARG BASE_IMAGE
 FROM $BASE_IMAGE
